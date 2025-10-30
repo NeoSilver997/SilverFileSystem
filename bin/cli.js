@@ -532,8 +532,8 @@ program
         query += ' LIMIT ?';
         params.push(parseInt(options.limit));
       }
-      
-      const [files] = await db.connection.execute(query, params);
+
+      const [files] = await db.connection.query(query, params);
       
       if (files.length === 0) {
         spinner.succeed('No media files found to process');
