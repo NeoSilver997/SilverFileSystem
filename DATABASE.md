@@ -15,6 +15,49 @@ The database feature allows you to store all scanned file information in a MySQL
 - MySQL 5.7+ or MariaDB 10.2+
 - Node.js 16+ with mysql2 package (automatically installed)
 
+## Configuration
+
+SilverFileSystem supports multiple ways to configure database connection:
+
+### 1. Environment Variables (.env file) - Recommended
+
+Create a `.env` file in the project root:
+
+```bash
+# MySQL Database Configuration
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=sfs
+DB_PASSWORD=SilverFS_Secure2025!
+DB_NAME=silverfilesystem
+```
+
+### 2. Configuration File (config.json)
+
+Alternatively, use `config.json`:
+
+```json
+{
+  "database": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "sfs",
+    "password": "SilverFS_Secure2025!",
+    "database": "silverfilesystem"
+  }
+}
+```
+
+### 3. Command Line Options
+
+Override any setting with CLI options:
+
+```bash
+silverfs scan /path/to/scan --db --db-host localhost --db-user myuser
+```
+
+**Configuration Precedence**: Environment Variables > CLI Options > config.json > Built-in defaults
+
 ## Quick Start
 
 ### 1. Create Database
