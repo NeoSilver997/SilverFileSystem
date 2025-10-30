@@ -492,8 +492,25 @@ program
   .option('--skip-existing', 'Skip files that already have metadata', false)
   .option('--threads <number>', 'Number of worker threads to use', '4')
   .option('--batch-size <number>', 'Files per worker thread', '50')
+  .option('--log-file <path>', 'Save detailed logs to file')
+  .option('--verbose', 'Show detailed progress and skip/error information', false)
   .action(async (options) => {
     const spinner = ora('Connecting to database...').start();
+    
+    // Initialize logging
+    let logFile = null;
+    if (options.logFile) {
+      const fs = await import('fs/promises');
+      logFile = options.logFile;
+      await fs.writeFile(logFile, `Media Extraction Log - ${new Date().toISOString()}\n${'='.repeat(50)}\n`);
+    }
+    
+    const logToFile = async (message) => {
+      if (logFile) {
+        const fs = await import('fs/promises');
+        await fs.appendFile(logFile, `${new Date().toISOString()} - ${message}\n`);
+      }
+    };
     
     try {
       // Force database connection
@@ -628,19 +645,50 @@ program
           const results = await Promise.all(batchPromises);
           
           // Aggregate results
+          let batchErrors = 0;
+          let batchSkipped = 0;
+          
           for (const result of results) {
             totalProcessed += result.processed;
             totalExtracted += result.extracted;
             totalSkipped += result.skipped;
             totalErrors += result.errors;
             
-            // Log any errors
+            batchErrors += result.errors;
+            batchSkipped += result.skipped;
+            
+            // Log detailed error information
             for (const error of result.errorDetails) {
-              console.log(chalk.red(`\nError processing ${error.file}: ${error.error}`));
+              const errorMsg = `❌ Error processing ${error.file}: ${error.error}`;
+              if (options.verbose) {
+                console.log(chalk.red(`\n${errorMsg}`));
+                console.log(chalk.red(`   Path: ${error.path}`));
+                if (error.stack && process.env.NODE_ENV === 'development') {
+                  console.log(chalk.gray(`   Stack: ${error.stack.split('\n')[0]}`));
+                }
+              }
+              await logToFile(`ERROR: ${error.file} | Path: ${error.path} | Error: ${error.error}`);
+            }
+            
+            // Log detailed skip information
+            for (const skip of result.skippedDetails || []) {
+              const skipMsg = `⚠️  Skipped ${skip.file}: ${skip.reason}`;
+              if (options.verbose) {
+                console.log(chalk.yellow(`\n${skipMsg}`));
+                console.log(chalk.yellow(`   Path: ${skip.path}`));
+                if (skip.error) {
+                  console.log(chalk.yellow(`   Details: ${skip.error}`));
+                }
+              }
+              await logToFile(`SKIP: ${skip.file} | Path: ${skip.path} | Reason: ${skip.reason} | Details: ${skip.error || 'N/A'}`);
             }
           }
           
-          console.log(chalk.green(`\nCompleted batch group ${Math.floor(i/numThreads) + 1}/${Math.ceil(batches.length/numThreads)} - Extracted: ${totalExtracted}/${files.length}`));
+          // Summary for this batch group
+          const batchExtracted = results.reduce((sum, r) => sum + r.extracted, 0);
+          console.log(chalk.green(`\n✅ Completed batch group ${Math.floor(i/numThreads) + 1}/${Math.ceil(batches.length/numThreads)}`));
+          console.log(chalk.green(`   Extracted: ${batchExtracted} | Skipped: ${batchSkipped} | Errors: ${batchErrors}`));
+          console.log(chalk.cyan(`   Total Progress: ${totalExtracted}/${files.length} extracted`));
           
         } catch (err) {
           console.error(chalk.red(`\nBatch processing error: ${err.message}`));
@@ -650,14 +698,37 @@ program
       
       spinner.succeed('Multi-threaded media metadata extraction complete!');
       
-      console.log(chalk.yellow('\n=== Extraction Summary ===\n'));
-      console.log(chalk.white(`Total files processed: ${totalProcessed}`));
-      console.log(chalk.green(`Successfully extracted: ${totalExtracted}`));
-      console.log(chalk.gray(`Skipped: ${totalSkipped}`));
-      if (totalErrors > 0) {
-        console.log(chalk.red(`Errors: ${totalErrors}`));
+      console.log(chalk.yellow('\n📊 === Extraction Summary === 📊\n'));
+      console.log(chalk.white(`📁 Total files processed: ${chalk.bold(totalProcessed)}`));
+      console.log(chalk.green(`✅ Successfully extracted: ${chalk.bold(totalExtracted)} (${((totalExtracted/totalProcessed)*100).toFixed(1)}%)`));
+      
+      if (totalSkipped > 0) {
+        console.log(chalk.yellow(`⚠️  Skipped files: ${chalk.bold(totalSkipped)} (${((totalSkipped/totalProcessed)*100).toFixed(1)}%)`));
       }
-      console.log(chalk.cyan(`\nPerformance: Used ${numThreads} worker threads processing ${batches.length} batches`));
+      
+      if (totalErrors > 0) {
+        console.log(chalk.red(`❌ Error files: ${chalk.bold(totalErrors)} (${((totalErrors/totalProcessed)*100).toFixed(1)}%)`));
+      }
+      
+      console.log(chalk.cyan(`\n⚡ Performance: Used ${numThreads} worker threads processing ${batches.length} batches`));
+      console.log(chalk.cyan(`📈 Throughput: ${(totalProcessed/batches.length).toFixed(1)} files per batch`));
+      
+      // Final recommendations
+      if (totalSkipped > totalExtracted * 0.1) {
+        console.log(chalk.yellow(`\n💡 Notice: High skip rate (${((totalSkipped/totalProcessed)*100).toFixed(1)}%). Check file accessibility or format support.`));
+      }
+      
+      if (totalErrors > totalProcessed * 0.05) {
+        console.log(chalk.red(`\n⚠️  Warning: High error rate (${((totalErrors/totalProcessed)*100).toFixed(1)}%). Review error details above.`));
+      }
+      
+      // Log final summary to file
+      if (logFile) {
+        await logToFile(`\n${'='.repeat(50)}`);
+        await logToFile(`SUMMARY: Processed: ${totalProcessed} | Extracted: ${totalExtracted} | Skipped: ${totalSkipped} | Errors: ${totalErrors}`);
+        await logToFile(`SUCCESS_RATE: ${((totalExtracted/totalProcessed)*100).toFixed(1)}%`);
+        console.log(chalk.cyan(`\n📝 Detailed logs saved to: ${logFile}`));
+      }
       
       await db.close();
       

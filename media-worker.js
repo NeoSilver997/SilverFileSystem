@@ -11,7 +11,8 @@ async function processFiles() {
     extracted: 0,
     skipped: 0,
     errors: 0,
-    errorDetails: []
+    errorDetails: [],
+    skippedDetails: []
   };
   
   let db = null;
@@ -35,6 +36,12 @@ async function processFiles() {
           await fs.access(file.path);
         } catch (err) {
           results.skipped++;
+          results.skippedDetails.push({
+            file: file.name,
+            path: file.path,
+            reason: 'File not accessible',
+            error: err.code || err.message
+          });
           continue;
         }
         
@@ -54,6 +61,12 @@ async function processFiles() {
           results.extracted++;
         } else {
           results.skipped++;
+          results.skippedDetails.push({
+            file: file.name,
+            path: file.path,
+            reason: result ? 'No metadata extracted' : 'Metadata extraction failed',
+            error: result ? 'Unsupported file type or corrupt file' : 'Extraction returned null'
+          });
         }
         
         // Report progress periodically
@@ -72,7 +85,9 @@ async function processFiles() {
         results.errors++;
         results.errorDetails.push({
           file: file.name,
-          error: err.message
+          path: file.path,
+          error: err.message,
+          stack: err.stack
         });
       }
     }
