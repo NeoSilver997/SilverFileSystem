@@ -37,6 +37,7 @@ async function initDatabase(options) {
     dbManager = new DatabaseManager(dbConfig);
     await dbManager.connect();
     await dbManager.initializeTables();
+    await dbManager.updateSchema();
   }
   return dbManager;
 }
@@ -344,15 +345,35 @@ program
       }
       
       const scanner = new FileScanner();
-      const files = await scanner.scanDirectory(dirPath);
+      
+      // Progress callback for detailed logging
+      const progressCallback = (progress) => {
+        switch (progress.type) {
+          case 'progress':
+            spinner.text = `Scanning... ${progress.processedFiles} files, ${progress.processedDirs} dirs (queue: ${progress.queueSize})`;
+            break;
+          case 'warning':
+            console.warn(chalk.yellow(`\nWarning: ${progress.message}`));
+            break;
+          case 'complete':
+            spinner.text = `Scan complete: ${progress.totalFiles} files from ${progress.processedDirs} directories`;
+            break;
+        }
+      };
+
+      const files = await scanner.scanDirectory(dirPath, progressCallback);
       
       // Store files in database if enabled
       if (db && files.length > 0) {
         spinner.text = 'Storing files to database...';
         const batchSize = 100;
+        let storedCount = 0;
+        
         for (let i = 0; i < files.length; i += batchSize) {
           const batch = files.slice(i, i + batchSize);
           await db.storeFilesBatch(batch, scanId);
+          storedCount += batch.length;
+          spinner.text = `Storing files to database... ${storedCount}/${files.length}`;
         }
         
         // Extract and store media metadata if requested
