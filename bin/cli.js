@@ -471,4 +471,152 @@ program
     }
   });
 
+// Extract media metadata from database records
+program
+  .command('extract-media-from-db')
+  .description('Extract media metadata from files already in database')
+  .option('--db-host <host>', 'Database host', config.database.host)
+  .option('--db-port <port>', 'Database port', String(config.database.port))
+  .option('--db-user <user>', 'Database user', config.database.user)
+  .option('--db-password <password>', 'Database password', config.database.password)
+  .option('--db-name <name>', 'Database name', config.database.database)
+  .option('--scan-id <id>', 'Process only files from specific scan session')
+  .option('--limit <number>', 'Limit number of files to process', '0')
+  .option('--skip-existing', 'Skip files that already have metadata', false)
+  .action(async (options) => {
+    const spinner = ora('Connecting to database...').start();
+    let mediaExtractor = null;
+    
+    try {
+      // Force database connection
+      const db = new DatabaseManager({
+        host: options.dbHost,
+        port: parseInt(options.dbPort),
+        user: options.dbUser,
+        password: options.dbPassword,
+        database: options.dbName
+      });
+      
+      await db.connect();
+      await db.initializeTables();
+      
+      spinner.text = 'Loading files from database...';
+      
+      // Build query to get files without media metadata
+      let query = `
+        SELECT sf.id, sf.path, sf.name, sf.extension
+        FROM scanned_files sf
+        WHERE sf.extension IN (
+          'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp', 'heic', 'heif',
+          'mp3', 'flac', 'wav', 'aac', 'm4a', 'ogg', 'wma', 'opus',
+          'mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'mpeg', 'mpg'
+        )
+      `;
+      
+      const params = [];
+      
+      if (options.scanId) {
+        query += ' AND sf.scan_id = ?';
+        params.push(parseInt(options.scanId));
+      }
+      
+      if (options.skipExisting) {
+        query += ` AND sf.id NOT IN (
+          SELECT file_id FROM photo_metadata
+          UNION SELECT file_id FROM music_metadata
+          UNION SELECT file_id FROM video_metadata
+        )`;
+      }
+      
+      if (options.limit && parseInt(options.limit) > 0) {
+        query += ' LIMIT ?';
+        params.push(parseInt(options.limit));
+      }
+      
+      const [files] = await db.connection.execute(query, params);
+      
+      if (files.length === 0) {
+        spinner.succeed('No media files found to process');
+        await db.close();
+        return;
+      }
+      
+      spinner.text = `Found ${files.length} media files. Starting extraction...`;
+      
+      // Initialize media extractor
+      mediaExtractor = new MediaMetadataExtractor();
+      
+      let processed = 0;
+      let extracted = 0;
+      let skipped = 0;
+      let errors = 0;
+      
+      for (const file of files) {
+        processed++;
+        spinner.text = `Processing ${processed}/${files.length}: ${file.name}`;
+        
+        try {
+          // Check if file still exists
+          const fs = await import('fs/promises');
+          try {
+            await fs.access(file.path);
+          } catch (err) {
+            skipped++;
+            console.log(chalk.gray(`\nSkipped (file not found): ${file.path}`));
+            continue;
+          }
+          
+          // Extract metadata
+          const result = await mediaExtractor.extractMetadata(file.path);
+          
+          if (result && result.metadata) {
+            extracted++;
+            
+            // Store metadata based on type
+            if (result.type === 'photo') {
+              await db.storePhotoMetadata(file.id, result.metadata);
+            } else if (result.type === 'music') {
+              await db.storeMusicMetadata(file.id, result.metadata);
+            } else if (result.type === 'video') {
+              await db.storeVideoMetadata(file.id, result.metadata);
+            }
+            
+            if (extracted % 10 === 0) {
+              console.log(chalk.green(`\nExtracted: ${extracted}/${files.length}`));
+            }
+          } else {
+            skipped++;
+          }
+        } catch (err) {
+          errors++;
+          console.log(chalk.red(`\nError processing ${file.name}: ${err.message}`));
+        }
+      }
+      
+      spinner.succeed('Media metadata extraction complete!');
+      
+      console.log(chalk.yellow('\n=== Extraction Summary ===\n'));
+      console.log(chalk.white(`Total files processed: ${processed}`));
+      console.log(chalk.green(`Successfully extracted: ${extracted}`));
+      console.log(chalk.gray(`Skipped: ${skipped}`));
+      if (errors > 0) {
+        console.log(chalk.red(`Errors: ${errors}`));
+      }
+      
+      // Cleanup
+      if (mediaExtractor) {
+        await mediaExtractor.cleanup();
+      }
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Extraction failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      if (mediaExtractor) {
+        await mediaExtractor.cleanup();
+      }
+      process.exit(1);
+    }
+  });
+
 program.parse();

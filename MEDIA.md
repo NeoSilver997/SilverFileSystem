@@ -74,6 +74,37 @@ node bin/cli.js scan /home/user/Music --db --extract-media
 node bin/cli.js scan /mnt/nas/Videos --db --extract-media
 ```
 
+### Extract Metadata from Existing Database Records
+
+If you've already scanned files but want to add metadata extraction:
+
+```bash
+# Extract metadata from all media files in database
+node bin/cli.js extract-media-from-db
+
+# Extract from specific scan session
+node bin/cli.js extract-media-from-db --scan-id 5
+
+# Process limited files for testing
+node bin/cli.js extract-media-from-db --limit 50
+
+# Skip files with existing metadata
+node bin/cli.js extract-media-from-db --skip-existing
+```
+
+**Benefits:**
+- No need to rescan the file system
+- Works with existing database records
+- Can process specific scan sessions
+- Skips missing files automatically
+- Shows progress for large collections
+
+**Use Cases:**
+- Added metadata extraction after initial scan
+- Re-extract metadata after upgrading tools
+- Process specific subsets of files
+- Recover from interrupted extraction
+
 ## Extracted Metadata
 
 ### Photo Metadata (photo_metadata table)
