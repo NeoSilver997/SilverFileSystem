@@ -7,6 +7,8 @@ A powerful Node.js file management system inspired by [Czkawka](https://github.c
 - 🔍 **Duplicate File Finder** - Find duplicate files by comparing content hashes
 - 📁 **Empty Files & Directories** - Locate empty files and directories
 - 📊 **Large Files Finder** - Find and list large files consuming disk space
+- 🔗 **Broken Symlinks Detector** - Find broken symbolic links
+- ⚠️ **Invalid Names Finder** - Detect files with problematic names
 - 🌐 **Network Support** - Scan files across network paths and drives
 - ⚡ **Fast Scanning** - Optimized file scanning with quick hash support
 - 🎨 **Beautiful CLI** - Colorful and user-friendly command-line interface
@@ -110,6 +112,30 @@ node bin/cli.js large-files /path/to/folder
 
 # Find files larger than 500MB, show top 20
 node bin/cli.js large-files /path/to/folder -m 500 -l 20
+```
+
+#### Find Broken Symbolic Links
+Find broken symbolic links that point to non-existent targets:
+
+```bash
+node bin/cli.js broken-symlinks <path1> [path2...]
+```
+
+Example:
+```bash
+node bin/cli.js broken-symlinks /path/to/folder
+```
+
+#### Find Invalid File Names
+Find files with invalid or problematic names (special characters, trailing spaces, etc.):
+
+```bash
+node bin/cli.js invalid-names <path1> [path2...]
+```
+
+Example:
+```bash
+node bin/cli.js invalid-names /path/to/folder
 ```
 
 ## Network Usage

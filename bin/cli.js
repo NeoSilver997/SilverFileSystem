@@ -7,6 +7,7 @@ import { FileScanner } from '../lib/scanner.js';
 import { DuplicateFinder } from '../lib/duplicates.js';
 import { EmptyFinder } from '../lib/empty.js';
 import { LargeFilesFinder } from '../lib/large.js';
+import { BrokenFilesFinder } from '../lib/broken.js';
 import { formatBytes, truncatePath } from '../lib/utils.js';
 
 const program = new Command();
@@ -166,6 +167,80 @@ program
       
       const totalSize = finder.calculateTotalSize(largeFiles);
       console.log(chalk.gray(`\nTotal size: ${formatBytes(totalSize)}`));
+      
+    } catch (err) {
+      spinner.fail('Scan failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Broken symlinks command
+program
+  .command('broken-symlinks')
+  .description('Find broken symbolic links')
+  .argument('<paths...>', 'Directories to scan')
+  .action(async (paths) => {
+    const spinner = ora('Scanning for broken symbolic links...').start();
+    
+    try {
+      const finder = new BrokenFilesFinder();
+      const allBrokenLinks = [];
+      
+      for (const dirPath of paths) {
+        const brokenLinks = await finder.findBrokenSymlinks(dirPath);
+        allBrokenLinks.push(...brokenLinks);
+      }
+      
+      spinner.succeed('Scan complete!');
+      
+      if (allBrokenLinks.length === 0) {
+        console.log(chalk.green('\nNo broken symbolic links found!'));
+        return;
+      }
+      
+      console.log(chalk.yellow(`\nFound ${allBrokenLinks.length} broken symbolic links:\n`));
+      allBrokenLinks.forEach(link => {
+        console.log(chalk.red(`  ${truncatePath(link.path)}`));
+        console.log(chalk.gray(`    → ${link.target} (target not found)`));
+      });
+      
+    } catch (err) {
+      spinner.fail('Scan failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Invalid names command
+program
+  .command('invalid-names')
+  .description('Find files with invalid or problematic names')
+  .argument('<paths...>', 'Directories to scan')
+  .action(async (paths) => {
+    const spinner = ora('Scanning for files with invalid names...').start();
+    
+    try {
+      const finder = new BrokenFilesFinder();
+      const allInvalidFiles = [];
+      
+      for (const dirPath of paths) {
+        const invalidFiles = await finder.findInvalidNames(dirPath);
+        allInvalidFiles.push(...invalidFiles);
+      }
+      
+      spinner.succeed('Scan complete!');
+      
+      if (allInvalidFiles.length === 0) {
+        console.log(chalk.green('\nNo files with invalid names found!'));
+        return;
+      }
+      
+      console.log(chalk.yellow(`\nFound ${allInvalidFiles.length} files with invalid names:\n`));
+      allInvalidFiles.forEach(file => {
+        console.log(chalk.red(`  ${truncatePath(file.path)}`));
+        console.log(chalk.gray(`    Issue: ${file.issue}`));
+      });
       
     } catch (err) {
       spinner.fail('Scan failed');
