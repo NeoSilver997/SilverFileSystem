@@ -9,6 +9,7 @@ import { EmptyFinder } from '../lib/empty.js';
 import { LargeFilesFinder } from '../lib/large.js';
 import { BrokenFilesFinder } from '../lib/broken.js';
 import { DatabaseManager } from '../lib/database.js';
+import { MediaMetadataExtractor } from '../lib/media.js';
 import { formatBytes, truncatePath, loadConfig } from '../lib/utils.js';
 
 const program = new Command();
@@ -318,18 +319,24 @@ program
   .description('Quick overview scan of directory')
   .argument('<path>', 'Directory to scan')
   .option('--db', 'Store results in MySQL database')
-  .option('--db-host <host>', 'Database host', config.database.host)
-  .option('--db-port <port>', 'Database port', config.database.port.toString())
-  .option('--db-user <user>', 'Database user', config.database.user)
-  .option('--db-password <password>', 'Database password', config.database.password)
-  .option('--db-name <name>', 'Database name', config.database.database)
+  .option('--db-host <host>', 'Database host', 'localhost')
+  .option('--db-port <port>', 'Database port', '3306')
+  .option('--db-user <user>', 'Database user', 'root')
+  .option('--db-password <password>', 'Database password', '')
+  .option('--db-name <name>', 'Database name', 'silverfilesystem')
   .action(async (dirPath, options) => {
     const spinner = ora('Scanning directory...').start();
     let scanId = null;
+    let mediaExtractor = null;
     
     try {
       // Initialize database if requested
       const db = await initDatabase(options);
+      
+      // Initialize media extractor if requested
+      if (options.extractMedia) {
+        mediaExtractor = new MediaMetadataExtractor();
+      }
       
       if (db) {
         scanId = await db.createScanSession(dirPath);
@@ -346,6 +353,42 @@ program
         for (let i = 0; i < files.length; i += batchSize) {
           const batch = files.slice(i, i + batchSize);
           await db.storeFilesBatch(batch, scanId);
+        }
+        
+        // Extract and store media metadata if requested
+        if (options.extractMedia && mediaExtractor) {
+          spinner.text = 'Extracting media metadata...';
+          let mediaCount = 0;
+          
+          for (const file of files) {
+            const result = await mediaExtractor.extractMetadata(file.path);
+            if (result) {
+              mediaCount++;
+              spinner.text = `Extracting media metadata... (${mediaCount} files processed)`;
+              
+              // Get file ID from database
+              const [rows] = await db.connection.execute(
+                'SELECT id FROM scanned_files WHERE path = ? AND scan_id = ?',
+                [file.path, scanId]
+              );
+              
+              if (rows.length > 0) {
+                const fileId = rows[0].id;
+                
+                if (result.type === 'photo') {
+                  await db.storePhotoMetadata(fileId, result.metadata);
+                } else if (result.type === 'music') {
+                  await db.storeMusicMetadata(fileId, result.metadata);
+                } else if (result.type === 'video') {
+                  await db.storeVideoMetadata(fileId, result.metadata);
+                }
+              }
+            }
+          }
+          
+          if (mediaCount > 0) {
+            console.log(chalk.green(`\nExtracted metadata for ${mediaCount} media files`));
+          }
         }
         
         const totalSize = files.reduce((sum, file) => sum + file.size, 0);
@@ -392,11 +435,17 @@ program
       }
       
       await closeDatabase();
+      if (mediaExtractor) {
+        await mediaExtractor.cleanup();
+      }
       
     } catch (err) {
       spinner.fail('Scan failed');
       console.error(chalk.red(`Error: ${err.message}`));
       await closeDatabase();
+      if (mediaExtractor) {
+        await mediaExtractor.cleanup();
+      }
       process.exit(1);
     }
   });
