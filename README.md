@@ -9,6 +9,7 @@ A powerful Node.js file management system inspired by [Czkawka](https://github.c
 - 📊 **Large Files Finder** - Find and list large files consuming disk space
 - 🔗 **Broken Symlinks Detector** - Find broken symbolic links
 - ⚠️ **Invalid Names Finder** - Detect files with problematic names
+- 🗄️ **MySQL Database Storage** - Store scan results in MySQL for analysis and reporting
 - 🌐 **Network Support** - Scan files across network paths and drives
 - ⚡ **Fast Scanning** - Optimized file scanning with quick hash support
 - 🎨 **Beautiful CLI** - Colorful and user-friendly command-line interface
@@ -138,6 +139,77 @@ Example:
 node bin/cli.js invalid-names /path/to/folder
 ```
 
+## MySQL Database Storage
+
+SilverFileSystem can store all scanned file information in a MySQL database for persistent storage, analysis, and reporting.
+
+### Database Setup
+
+1. **Create MySQL Database:**
+```sql
+CREATE DATABASE silverfilesystem;
+```
+
+2. **Configure Database Connection:**
+
+You can use environment variables:
+```bash
+export DB_HOST=localhost
+export DB_PORT=3306
+export DB_USER=root
+export DB_PASSWORD=yourpassword
+export DB_NAME=silverfilesystem
+```
+
+Or use command-line options (see examples below).
+
+### Using Database Storage
+
+Add the `--db` flag to any scan or duplicate command to store results in MySQL:
+
+```bash
+# Scan directory and store to database
+node bin/cli.js scan /path/to/folder --db
+
+# With custom database settings
+node bin/cli.js scan /path/to/folder --db \
+  --db-host localhost \
+  --db-port 3306 \
+  --db-user myuser \
+  --db-password mypass \
+  --db-name silverfilesystem
+
+# Find duplicates and store to database
+node bin/cli.js duplicates /path/to/folder --db
+```
+
+### Database Schema
+
+The system creates three tables:
+
+- **scanned_files** - Stores all scanned file information (path, size, hash, timestamps)
+- **scan_sessions** - Tracks scan sessions with statistics
+- **duplicate_groups** - Stores duplicate file groups with wasted space calculations
+
+### Querying Database
+
+You can query the database directly to analyze your files:
+
+```sql
+-- Find all files larger than 100MB
+SELECT path, size FROM scanned_files WHERE size > 104857600 ORDER BY size DESC;
+
+-- Find duplicate files
+SELECT hash, COUNT(*) as count, size 
+FROM scanned_files 
+WHERE hash IS NOT NULL 
+GROUP BY hash, size 
+HAVING count > 1;
+
+-- Get scan session statistics
+SELECT * FROM scan_sessions ORDER BY start_time DESC;
+```
+
 ## Network Usage
 
 SilverFileSystem can scan files across network paths:
@@ -146,12 +218,18 @@ SilverFileSystem can scan files across network paths:
 ```bash
 node bin/cli.js scan "\\\\server\\share\\folder"
 node bin/cli.js duplicates "\\\\server\\share"
+
+# With database storage
+node bin/cli.js scan "\\\\server\\share\\folder" --db
 ```
 
 ### Linux/Mac (Mounted Network Drives)
 ```bash
 node bin/cli.js scan /mnt/network/folder
 node bin/cli.js duplicates /mnt/network1 /mnt/network2
+
+# With database storage
+node bin/cli.js scan /mnt/network/folder --db
 ```
 
 ## API Usage
@@ -163,6 +241,7 @@ import { FileScanner } from './lib/scanner.js';
 import { DuplicateFinder } from './lib/duplicates.js';
 import { EmptyFinder } from './lib/empty.js';
 import { LargeFilesFinder } from './lib/large.js';
+import { DatabaseManager } from './lib/database.js';
 
 // Scan a directory
 const scanner = new FileScanner();
@@ -181,6 +260,31 @@ const largeFinder = new LargeFilesFinder(scanner);
 const largeFiles = await largeFinder.findLargeFiles(['/path/to/folder'], { 
   minSize: 100 * 1024 * 1024 // 100 MB 
 });
+
+// Use database storage
+const db = new DatabaseManager({
+  host: 'localhost',
+  user: 'root',
+  password: 'password',
+  database: 'silverfilesystem'
+});
+
+await db.connect();
+await db.initializeTables();
+
+// Create scan session
+const scanId = await db.createScanSession('/path/to/folder');
+
+// Store files in batches
+await db.storeFilesBatch(files, scanId);
+
+// Complete session
+await db.completeScanSession(scanId, files.length, totalSize);
+
+// Query duplicates from database
+const duplicates = await db.getDuplicates(1024 * 1024); // Min 1MB
+
+await db.close();
 ```
 
 ## Performance Tips

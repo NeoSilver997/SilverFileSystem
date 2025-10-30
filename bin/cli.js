@@ -8,9 +8,37 @@ import { DuplicateFinder } from '../lib/duplicates.js';
 import { EmptyFinder } from '../lib/empty.js';
 import { LargeFilesFinder } from '../lib/large.js';
 import { BrokenFilesFinder } from '../lib/broken.js';
+import { DatabaseManager } from '../lib/database.js';
 import { formatBytes, truncatePath } from '../lib/utils.js';
 
 const program = new Command();
+
+// Global database manager instance
+let dbManager = null;
+
+// Helper function to initialize database if --db flag is set
+async function initDatabase(options) {
+  if (options.db) {
+    dbManager = new DatabaseManager({
+      host: options.dbHost,
+      port: options.dbPort,
+      user: options.dbUser,
+      password: options.dbPassword,
+      database: options.dbName
+    });
+    await dbManager.connect();
+    await dbManager.initializeTables();
+  }
+  return dbManager;
+}
+
+// Helper function to close database connection
+async function closeDatabase() {
+  if (dbManager) {
+    await dbManager.close();
+    dbManager = null;
+  }
+}
 
 program
   .name('silverfs')
@@ -24,10 +52,19 @@ program
   .argument('<paths...>', 'Directories to scan')
   .option('-m, --min-size <bytes>', 'Minimum file size to check (in bytes)', '0')
   .option('-q, --quick', 'Use quick hash (faster but less accurate)', false)
+  .option('--db', 'Store results in MySQL database')
+  .option('--db-host <host>', 'Database host', 'localhost')
+  .option('--db-port <port>', 'Database port', '3306')
+  .option('--db-user <user>', 'Database user', 'root')
+  .option('--db-password <password>', 'Database password', '')
+  .option('--db-name <name>', 'Database name', 'silverfilesystem')
   .action(async (paths, options) => {
     const spinner = ora('Scanning for duplicate files...').start();
     
     try {
+      // Initialize database if requested
+      const db = await initDatabase(options);
+      
       const scanner = new FileScanner();
       const finder = new DuplicateFinder(scanner);
       
@@ -37,15 +74,30 @@ program
       const duplicates = await finder.findDuplicates(paths, { minSize, useQuickHash });
       const wastedSpace = finder.calculateWastedSpace(duplicates);
       
+      // Store duplicates in database if enabled
+      if (db && duplicates.length > 0) {
+        spinner.text = 'Storing duplicate groups to database...';
+        for (const group of duplicates) {
+          if (group.length > 0 && group[0].hash) {
+            await db.storeDuplicateGroup(group[0].hash, group.length, group[0].size);
+          }
+        }
+      }
+      
       spinner.succeed('Scan complete!');
       
       if (duplicates.length === 0) {
         console.log(chalk.green('\nNo duplicate files found!'));
+        await closeDatabase();
         return;
       }
       
       console.log(chalk.yellow(`\nFound ${duplicates.length} groups of duplicate files:`));
       console.log(chalk.gray(`Wasted space: ${formatBytes(wastedSpace)}\n`));
+      
+      if (db) {
+        console.log(chalk.green(`Database: Stored ${duplicates.length} duplicate groups\n`));
+      }
       
       duplicates.forEach((group, index) => {
         console.log(chalk.cyan(`\nGroup ${index + 1} (${group.length} files, ${formatBytes(group[0].size)} each):`));
@@ -54,9 +106,12 @@ program
         });
       });
       
+      await closeDatabase();
+      
     } catch (err) {
       spinner.fail('Scan failed');
       console.error(chalk.red(`Error: ${err.message}`));
+      await closeDatabase();
       process.exit(1);
     }
   });
@@ -254,12 +309,40 @@ program
   .command('scan')
   .description('Quick overview scan of directory')
   .argument('<path>', 'Directory to scan')
-  .action(async (dirPath) => {
+  .option('--db', 'Store results in MySQL database')
+  .option('--db-host <host>', 'Database host', 'localhost')
+  .option('--db-port <port>', 'Database port', '3306')
+  .option('--db-user <user>', 'Database user', 'root')
+  .option('--db-password <password>', 'Database password', '')
+  .option('--db-name <name>', 'Database name', 'silverfilesystem')
+  .action(async (dirPath, options) => {
     const spinner = ora('Scanning directory...').start();
+    let scanId = null;
     
     try {
+      // Initialize database if requested
+      const db = await initDatabase(options);
+      
+      if (db) {
+        scanId = await db.createScanSession(dirPath);
+        spinner.text = 'Scanning directory and storing to database...';
+      }
+      
       const scanner = new FileScanner();
       const files = await scanner.scanDirectory(dirPath);
+      
+      // Store files in database if enabled
+      if (db && files.length > 0) {
+        spinner.text = 'Storing files to database...';
+        const batchSize = 100;
+        for (let i = 0; i < files.length; i += batchSize) {
+          const batch = files.slice(i, i + batchSize);
+          await db.storeFilesBatch(batch, scanId);
+        }
+        
+        const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+        await db.completeScanSession(scanId, files.length, totalSize);
+      }
       
       spinner.succeed('Scan complete!');
       
@@ -285,6 +368,10 @@ program
       console.log(chalk.white(`Total size: ${formatBytes(totalSize)}`));
       console.log(chalk.white(`Empty files: ${emptyFiles.length}`));
       
+      if (db) {
+        console.log(chalk.green(`Database: Stored in scan session #${scanId}`));
+      }
+      
       if (extensions.size > 0) {
         console.log(chalk.yellow('\n=== Top File Types ===\n'));
         const sorted = Array.from(extensions.entries())
@@ -296,9 +383,12 @@ program
         });
       }
       
+      await closeDatabase();
+      
     } catch (err) {
       spinner.fail('Scan failed');
       console.error(chalk.red(`Error: ${err.message}`));
+      await closeDatabase();
       process.exit(1);
     }
   });
