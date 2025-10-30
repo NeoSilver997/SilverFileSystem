@@ -8,4 +8,4 @@ export { EmptyFinder } from './lib/empty.js';
 export { LargeFilesFinder } from './lib/large.js';
 export { BrokenFilesFinder } from './lib/broken.js';
 export { DatabaseManager } from './lib/database.js';
-export { formatBytes, formatDate, truncatePath, getFileStats } from './lib/utils.js';
+export { formatBytes, formatDate, truncatePath, getFileStats, loadConfig } from './lib/utils.js';

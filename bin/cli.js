@@ -9,9 +9,12 @@ import { EmptyFinder } from '../lib/empty.js';
 import { LargeFilesFinder } from '../lib/large.js';
 import { BrokenFilesFinder } from '../lib/broken.js';
 import { DatabaseManager } from '../lib/database.js';
-import { formatBytes, truncatePath } from '../lib/utils.js';
+import { formatBytes, truncatePath, loadConfig } from '../lib/utils.js';
 
 const program = new Command();
+
+// Load configuration
+const config = loadConfig();
 
 // Global database manager instance
 let dbManager = null;
@@ -19,13 +22,18 @@ let dbManager = null;
 // Helper function to initialize database if --db flag is set
 async function initDatabase(options) {
   if (options.db) {
-    dbManager = new DatabaseManager({
-      host: options.dbHost,
-      port: options.dbPort,
-      user: options.dbUser,
-      password: options.dbPassword,
-      database: options.dbName
-    });
+    // Use config file values as defaults, allow CLI options to override
+    const dbConfig = {
+      host: options.dbHost || config.database.host,
+      port: parseInt(options.dbPort || config.database.port),
+      user: options.dbUser || config.database.user,
+      password: options.dbPassword || config.database.password,
+      database: options.dbName || config.database.database
+    };
+    
+    console.log(chalk.gray(`Connecting to database: ${dbConfig.user}@${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`));
+    
+    dbManager = new DatabaseManager(dbConfig);
     await dbManager.connect();
     await dbManager.initializeTables();
   }
@@ -50,14 +58,14 @@ program
   .command('duplicates')
   .description('Find duplicate files')
   .argument('<paths...>', 'Directories to scan')
-  .option('-m, --min-size <bytes>', 'Minimum file size to check (in bytes)', '0')
-  .option('-q, --quick', 'Use quick hash (faster but less accurate)', false)
+  .option('-m, --min-size <bytes>', 'Minimum file size to check (in bytes)', config.duplicates.minSize.toString())
+  .option('-q, --quick', 'Use quick hash (faster but less accurate)', config.duplicates.useQuickHash)
   .option('--db', 'Store results in MySQL database')
-  .option('--db-host <host>', 'Database host', 'localhost')
-  .option('--db-port <port>', 'Database port', '3306')
-  .option('--db-user <user>', 'Database user', 'root')
-  .option('--db-password <password>', 'Database password', '')
-  .option('--db-name <name>', 'Database name', 'silverfilesystem')
+  .option('--db-host <host>', 'Database host', config.database.host)
+  .option('--db-port <port>', 'Database port', config.database.port.toString())
+  .option('--db-user <user>', 'Database user', config.database.user)
+  .option('--db-password <password>', 'Database password', config.database.password)
+  .option('--db-name <name>', 'Database name', config.database.database)
   .action(async (paths, options) => {
     const spinner = ora('Scanning for duplicate files...').start();
     
@@ -193,8 +201,8 @@ program
   .command('large-files')
   .description('Find large files')
   .argument('<paths...>', 'Directories to scan')
-  .option('-m, --min-size <bytes>', 'Minimum file size in MB', '100')
-  .option('-l, --limit <number>', 'Maximum number of results', '50')
+  .option('-m, --min-size <bytes>', 'Minimum file size in MB', config.largeFiles.minSizeMB.toString())
+  .option('-l, --limit <number>', 'Maximum number of results', config.largeFiles.limit.toString())
   .action(async (paths, options) => {
     const spinner = ora('Scanning for large files...').start();
     
@@ -310,11 +318,11 @@ program
   .description('Quick overview scan of directory')
   .argument('<path>', 'Directory to scan')
   .option('--db', 'Store results in MySQL database')
-  .option('--db-host <host>', 'Database host', 'localhost')
-  .option('--db-port <port>', 'Database port', '3306')
-  .option('--db-user <user>', 'Database user', 'root')
-  .option('--db-password <password>', 'Database password', '')
-  .option('--db-name <name>', 'Database name', 'silverfilesystem')
+  .option('--db-host <host>', 'Database host', config.database.host)
+  .option('--db-port <port>', 'Database port', config.database.port.toString())
+  .option('--db-user <user>', 'Database user', config.database.user)
+  .option('--db-password <password>', 'Database password', config.database.password)
+  .option('--db-name <name>', 'Database name', config.database.database)
   .action(async (dirPath, options) => {
     const spinner = ora('Scanning directory...').start();
     let scanId = null;

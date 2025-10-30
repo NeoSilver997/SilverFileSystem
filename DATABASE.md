@@ -344,7 +344,7 @@ Solution:
 
 Solution:
 ```sql
-GRANT ALL PRIVILEGES ON silverfilesystem.* TO 'user'@'localhost';
+GRANT ALL PRIVILEGES ON silverfilesystem.* TO 'sfs'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
