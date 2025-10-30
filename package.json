@@ -22,8 +22,11 @@
   "dependencies": {
     "chalk": "^5.6.2",
     "commander": "^14.0.2",
+    "exiftool-vendored": "^31.2.0",
     "glob": "^11.0.3",
+    "music-metadata": "^11.9.0",
     "mysql2": "^3.15.3",
-    "ora": "^9.0.0"
+    "ora": "^9.0.0",
+    "sharp": "^0.34.4"
   }
 }

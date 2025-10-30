@@ -10,6 +10,7 @@ A powerful Node.js file management system inspired by [Czkawka](https://github.c
 - 🔗 **Broken Symlinks Detector** - Find broken symbolic links
 - ⚠️ **Invalid Names Finder** - Detect files with problematic names
 - 🗄️ **MySQL Database Storage** - Store scan results in MySQL for analysis and reporting
+- 📷 **Media Metadata Extraction** - Extract EXIF, ID3, and video metadata for photos, music, and movies
 - 🌐 **Network Support** - Scan files across network paths and drives
 - ⚡ **Fast Scanning** - Optimized file scanning with quick hash support
 - 🎨 **Beautiful CLI** - Colorful and user-friendly command-line interface
@@ -46,6 +47,9 @@ node bin/cli.js scan <directory>
 Example:
 ```bash
 node bin/cli.js scan /path/to/folder
+
+# With media metadata extraction
+node bin/cli.js scan /path/to/folder --extract-media --db
 ```
 
 #### Find Duplicate Files
@@ -137,6 +141,110 @@ node bin/cli.js invalid-names <path1> [path2...]
 Example:
 ```bash
 node bin/cli.js invalid-names /path/to/folder
+```
+
+## Media Metadata Extraction
+
+SilverFileSystem can extract detailed metadata from photos, music, and video files when used with database storage.
+
+### Supported Media Types
+
+#### Photos (Images)
+- **Formats:** JPG, PNG, GIF, BMP, TIFF, WebP, HEIC, HEIF
+- **Metadata Extracted:**
+  - Dimensions (width, height)
+  - Camera information (make, model, lens)
+  - Camera settings (ISO, aperture, shutter speed, focal length, flash)
+  - Date taken
+  - GPS location (latitude, longitude, altitude)
+  - Software, artist, copyright
+
+#### Music (Audio)
+- **Formats:** MP3, FLAC, WAV, AAC, M4A, OGG, WMA, Opus
+- **Metadata Extracted:**
+  - Track information (title, artist, album, album artist)
+  - Year, genre
+  - Track and disk numbers
+  - Duration, bitrate, sample rate, channels
+  - Codec, composer, ISRC
+  - Album art presence
+
+#### Movies (Video)
+- **Formats:** MP4, MKV, AVI, MOV, WMV, FLV, WebM, M4V, MPEG
+- **Metadata Extracted:**
+  - Video properties (duration, dimensions, frame rate, codec, bitrate)
+  - Audio properties (codec, sample rate, channels, bitrate)
+  - Title, description, genre, artist, year
+  - Creation date
+  - GPS location (if available)
+  - Software/encoder information
+
+### Usage
+
+To extract media metadata, use the `--extract-media` flag with the `--db` flag:
+
+```bash
+# Scan with media metadata extraction
+node bin/cli.js scan /path/to/media --db --extract-media
+
+# Example: Scan photo library
+node bin/cli.js scan /home/user/Photos --db --extract-media
+
+# Example: Scan music collection
+node bin/cli.js scan /home/user/Music --db --extract-media
+
+# Example: Scan video folder
+node bin/cli.js scan /home/user/Videos --db --extract-media
+```
+
+### Database Tables for Media
+
+Media metadata is stored in separate tables:
+
+- **photo_metadata** - Camera info, EXIF data, GPS coordinates
+- **music_metadata** - Track info, album data, audio format details
+- **video_metadata** - Video/audio codecs, dimensions, duration
+
+### Query Examples
+
+```sql
+-- Find photos taken with specific camera
+SELECT sf.path, pm.camera_make, pm.camera_model, pm.date_taken
+FROM scanned_files sf
+JOIN photo_metadata pm ON sf.id = pm.file_id
+WHERE pm.camera_make LIKE '%Canon%';
+
+-- Find high-resolution photos
+SELECT sf.path, pm.width, pm.height
+FROM scanned_files sf
+JOIN photo_metadata pm ON sf.id = pm.file_id
+WHERE pm.width > 4000 AND pm.height > 3000;
+
+-- Find photos with GPS coordinates
+SELECT sf.path, pm.latitude, pm.longitude, pm.date_taken
+FROM scanned_files sf
+JOIN photo_metadata pm ON sf.id = pm.file_id
+WHERE pm.latitude IS NOT NULL;
+
+-- Find music by artist
+SELECT sf.path, mm.title, mm.album, mm.year
+FROM scanned_files sf
+JOIN music_metadata mm ON sf.id = mm.file_id
+WHERE mm.artist LIKE '%Beatles%';
+
+-- Find long videos
+SELECT sf.path, vm.duration, vm.width, vm.height
+FROM scanned_files sf
+JOIN video_metadata vm ON sf.id = vm.file_id
+WHERE vm.duration > 3600  -- Longer than 1 hour
+ORDER BY vm.duration DESC;
+
+-- Find high bitrate music files
+SELECT sf.path, mm.bitrate, mm.format
+FROM scanned_files sf
+JOIN music_metadata mm ON sf.id = mm.file_id
+WHERE mm.bitrate > 320000  -- > 320 kbps
+ORDER BY mm.bitrate DESC;
 ```
 
 ## MySQL Database Storage
