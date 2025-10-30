@@ -3,6 +3,9 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
+import { Worker } from 'worker_threads';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import { FileScanner } from '../lib/scanner.js';
 import { DuplicateFinder } from '../lib/duplicates.js';
 import { EmptyFinder } from '../lib/empty.js';
@@ -13,6 +16,10 @@ import { MediaMetadataExtractor } from '../lib/media.js';
 import { formatBytes, truncatePath, loadConfig } from '../lib/utils.js';
 
 const program = new Command();
+
+// Get current file paths for worker
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Load configuration
 const config = loadConfig();
@@ -483,9 +490,10 @@ program
   .option('--scan-id <id>', 'Process only files from specific scan session')
   .option('--limit <number>', 'Limit number of files to process', '0')
   .option('--skip-existing', 'Skip files that already have metadata', false)
+  .option('--threads <number>', 'Number of worker threads to use', '4')
+  .option('--batch-size <number>', 'Files per worker thread', '50')
   .action(async (options) => {
     const spinner = ora('Connecting to database...').start();
-    let mediaExtractor = null;
     
     try {
       // Force database connection
@@ -543,77 +551,121 @@ program
       
       spinner.text = `Found ${files.length} media files. Starting extraction...`;
       
-      // Initialize media extractor
-      mediaExtractor = new MediaMetadataExtractor();
+      const numThreads = parseInt(options.threads || '4');
+      const batchSize = parseInt(options.batchSize || '50');
       
-      let processed = 0;
-      let extracted = 0;
-      let skipped = 0;
-      let errors = 0;
+      // Create batches for worker threads
+      const batches = [];
+      for (let i = 0; i < files.length; i += batchSize) {
+        batches.push(files.slice(i, i + batchSize));
+      }
       
-      for (const file of files) {
-        processed++;
-        spinner.text = `Processing ${processed}/${files.length}: ${file.name}`;
+      console.log(chalk.cyan(`\nUsing ${numThreads} worker threads with ${batches.length} batches (${batchSize} files per batch)`));
+      
+      // Process batches with worker threads
+      let totalProcessed = 0;
+      let totalExtracted = 0;
+      let totalSkipped = 0;
+      let totalErrors = 0;
+      let activeWorkers = 0;
+      
+      const workerPromises = [];
+      const workerPath = join(__dirname, '..', 'media-worker.js');
+      
+      // Function to process a batch with a worker
+      const processBatch = async (batch, batchIndex) => {
+        return new Promise((resolve, reject) => {
+          const worker = new Worker(workerPath, {
+            workerData: {
+              files: batch,
+              dbConfig: {
+                host: options.dbHost,
+                port: parseInt(options.dbPort),
+                user: options.dbUser,
+                password: options.dbPassword,
+                database: options.dbName
+              }
+            }
+          });
+          
+          activeWorkers++;
+          
+          worker.on('message', (message) => {
+            if (message.type === 'progress') {
+              const globalProgress = totalProcessed + message.data.processed;
+              spinner.text = `Processing ${globalProgress}/${files.length}: ${message.data.filename} (${activeWorkers} workers active)`;
+            } else if (message.type === 'complete') {
+              activeWorkers--;
+              resolve(message.data);
+            } else if (message.type === 'error') {
+              activeWorkers--;
+              reject(new Error(message.data.error));
+            }
+          });
+          
+          worker.on('error', (error) => {
+            activeWorkers--;
+            reject(error);
+          });
+          
+          worker.on('exit', (code) => {
+            if (code !== 0) {
+              activeWorkers--;
+              reject(new Error(`Worker stopped with exit code ${code}`));
+            }
+          });
+        });
+      };
+      
+      // Process batches in parallel with limited concurrency
+      for (let i = 0; i < batches.length; i += numThreads) {
+        const batchGroup = batches.slice(i, i + numThreads);
+        const batchPromises = batchGroup.map((batch, index) => 
+          processBatch(batch, i + index)
+        );
         
         try {
-          // Check if file still exists
-          const fs = await import('fs/promises');
-          try {
-            await fs.access(file.path);
-          } catch (err) {
-            skipped++;
-            console.log(chalk.gray(`\nSkipped (file not found): ${file.path}`));
-            continue;
+          const results = await Promise.all(batchPromises);
+          
+          // Aggregate results
+          for (const result of results) {
+            totalProcessed += result.processed;
+            totalExtracted += result.extracted;
+            totalSkipped += result.skipped;
+            totalErrors += result.errors;
+            
+            // Log any errors
+            for (const error of result.errorDetails) {
+              console.log(chalk.red(`\nError processing ${error.file}: ${error.error}`));
+            }
           }
           
-          // Extract metadata
-          const result = await mediaExtractor.extractMetadata(file.path);
+          console.log(chalk.green(`\nCompleted batch group ${Math.floor(i/numThreads) + 1}/${Math.ceil(batches.length/numThreads)} - Extracted: ${totalExtracted}/${files.length}`));
           
-          if (result && result.metadata) {
-            extracted++;
-            
-            // Store metadata based on type
-            if (result.type === 'photo') {
-              await db.storePhotoMetadata(file.id, result.metadata);
-            } else if (result.type === 'music') {
-              await db.storeMusicMetadata(file.id, result.metadata);
-            } else if (result.type === 'video') {
-              await db.storeVideoMetadata(file.id, result.metadata);
-            }
-            
-            if (extracted % 10 === 0) {
-              console.log(chalk.green(`\nExtracted: ${extracted}/${files.length}`));
-            }
-          } else {
-            skipped++;
-          }
         } catch (err) {
-          errors++;
-          console.log(chalk.red(`\nError processing ${file.name}: ${err.message}`));
+          console.error(chalk.red(`\nBatch processing error: ${err.message}`));
+          totalErrors++;
         }
       }
       
-      spinner.succeed('Media metadata extraction complete!');
+      spinner.succeed('Multi-threaded media metadata extraction complete!');
       
       console.log(chalk.yellow('\n=== Extraction Summary ===\n'));
-      console.log(chalk.white(`Total files processed: ${processed}`));
-      console.log(chalk.green(`Successfully extracted: ${extracted}`));
-      console.log(chalk.gray(`Skipped: ${skipped}`));
-      if (errors > 0) {
-        console.log(chalk.red(`Errors: ${errors}`));
+      console.log(chalk.white(`Total files processed: ${totalProcessed}`));
+      console.log(chalk.green(`Successfully extracted: ${totalExtracted}`));
+      console.log(chalk.gray(`Skipped: ${totalSkipped}`));
+      if (totalErrors > 0) {
+        console.log(chalk.red(`Errors: ${totalErrors}`));
       }
+      console.log(chalk.cyan(`\nPerformance: Used ${numThreads} worker threads processing ${batches.length} batches`));
       
-      // Cleanup
-      if (mediaExtractor) {
-        await mediaExtractor.cleanup();
-      }
       await db.close();
       
     } catch (err) {
       spinner.fail('Extraction failed');
       console.error(chalk.red(`Error: ${err.message}`));
-      if (mediaExtractor) {
-        await mediaExtractor.cleanup();
+      if (db) {
+        await db.close();
       }
       process.exit(1);
     }
