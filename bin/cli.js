@@ -1035,4 +1035,183 @@ program
     }
   });
 
+// Report files by size and name command
+program
+  .command('report-by-size')
+  .description('Report files grouped by size and name (potential duplicates)')
+  .option('-m, --min-size <bytes>', 'Minimum file size to include (in bytes)', '0')
+  .option('-l, --limit <number>', 'Limit number of groups to show', '0')
+  .option('--format <type>', 'Output format: table, json, csv', 'table')
+  .option('--names-only', 'Show only filename and size (no paths)')
+  .option('--sizes-only', 'Group by size only (ignore filenames)')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .action(async (options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      });
+      
+      await db.connect();
+      spinner.text = 'Fetching file data...';
+      
+      const minSize = parseInt(options.minSize || '0');
+      const limit = parseInt(options.limit || '0') || null;
+      
+      let groups;
+      if (options.sizesOnly) {
+        groups = await db.getFilesBySize(minSize);
+      } else {
+        groups = await db.getFilesBySizeAndName(minSize);
+      }
+      
+      if (limit && limit > 0) {
+        groups = groups.slice(0, limit);
+      }
+      
+      spinner.succeed('Report generated!');
+      
+      if (groups.length === 0) {
+        console.log(chalk.yellow('\nNo duplicate files found with the specified criteria.'));
+        await db.close();
+        return;
+      }
+      
+      // Display results based on format
+      if (options.format === 'json') {
+        console.log(JSON.stringify(groups, null, 2));
+      } else if (options.format === 'csv') {
+        console.log('Name,Size (bytes),Size (formatted),Count,Paths');
+        groups.forEach(group => {
+          const name = options.sizesOnly ? 'Multiple files' : group.name;
+          const paths = options.sizesOnly 
+            ? group.files.map(f => f.path).join('; ')
+            : (options.namesOnly ? 'Multiple locations' : group.paths.join('; '));
+          console.log(`"${name}",${group.size},"${formatBytes(group.size)}",${group.count},"${paths}"`);
+        });
+      } else {
+        // Table format
+        console.log(chalk.yellow('\n=== Files by Size and Name Report ===\n'));
+        
+        let totalFiles = 0;
+        let totalWastedSpace = 0;
+        
+        groups.forEach((group, index) => {
+          const wastedSpace = (group.count - 1) * group.size;
+          totalFiles += group.count;
+          totalWastedSpace += wastedSpace;
+          
+          console.log(chalk.cyan(`${index + 1}. ${options.sizesOnly ? 'Files of size' : 'File'}: ${options.sizesOnly ? '' : group.name}`));
+          console.log(chalk.white(`   Size: ${formatBytes(group.size)} (${group.size.toLocaleString()} bytes)`));
+          console.log(chalk.white(`   Count: ${group.count} copies`));
+          console.log(chalk.white(`   Wasted space: ${formatBytes(wastedSpace)}`));
+          
+          if (!options.namesOnly) {
+            console.log(chalk.gray('   Locations:'));
+            if (options.sizesOnly) {
+              group.files.slice(0, 10).forEach(file => {
+                console.log(chalk.gray(`     ${file.name} - ${file.path}`));
+              });
+              if (group.files.length > 10) {
+                console.log(chalk.gray(`     ... and ${group.files.length - 10} more files`));
+              }
+            } else {
+              group.paths.slice(0, 10).forEach(path => {
+                console.log(chalk.gray(`     ${path}`));
+              });
+              if (group.paths.length > 10) {
+                console.log(chalk.gray(`     ... and ${group.paths.length - 10} more locations`));
+              }
+            }
+          }
+          console.log();
+        });
+        
+        console.log(chalk.green(`📊 Summary:`));
+        console.log(chalk.white(`   Total groups: ${groups.length}`));
+        console.log(chalk.white(`   Total files: ${totalFiles}`));
+        console.log(chalk.white(`   Total wasted space: ${formatBytes(totalWastedSpace)}`));
+      }
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Report generation failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Generate folder-grouped HTML report from database command
+program
+  .command('report-by-folder')
+  .description('Generate HTML report of duplicate files grouped by folder')
+  .argument('<output>', 'Output HTML file path')
+  .option('-m, --min-size <bytes>', 'Minimum file size to include (in bytes)', '0')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .action(async (output, options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      });
+      
+      await db.connect();
+      spinner.text = 'Fetching duplicate files by folder...';
+      
+      const minSize = parseInt(options.minSize || '0');
+      const folderGroups = await db.getDuplicatesByFolder(minSize);
+      
+      spinner.text = 'Generating HTML report...';
+      const reportGen = new ReportGenerator();
+      const reportPath = await reportGen.generateFolderDuplicateReport(folderGroups, output);
+      
+      spinner.succeed('Folder report generated!');
+      
+      const totalFolders = folderGroups.length;
+      const totalFiles = folderGroups.reduce((sum, folder) => sum + folder.totalFiles, 0);
+      const totalWasted = folderGroups.reduce((sum, folder) => sum + folder.totalWastedSpace, 0);
+      
+      console.log(chalk.green(`\n📁 Report saved to: ${reportPath}`));
+      console.log(chalk.cyan(`\n📊 Statistics:`));
+      console.log(chalk.white(`   Folders with duplicates: ${totalFolders}`));
+      console.log(chalk.white(`   Total duplicate files: ${totalFiles}`));
+      console.log(chalk.white(`   Total wasted space: ${formatBytes(totalWasted)}`));
+      
+      if (folderGroups.length > 0) {
+        console.log(chalk.yellow(`\n🔥 Top folders by wasted space:`));
+        folderGroups.slice(0, 5).forEach((folder, index) => {
+          console.log(chalk.white(`   ${index + 1}. ${folder.folderPath}: ${formatBytes(folder.totalWastedSpace)}`));
+        });
+      }
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Report generation failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
 program.parse();
