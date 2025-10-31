@@ -541,4 +541,132 @@ program
     }
   });
 
+// Update folder statistics command
+program
+  .command('update-folder-stats')
+  .description('Update folder sizes and file counts based on actual files')
+  .option('--db-host <host>', 'Database host (default: localhost)')
+  .option('--db-port <port>', 'Database port (default: 3306)')
+  .option('--db-user <user>', 'Database user (default: sfs)')
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', 'Database name (default: silverfilesystem)')
+  .action(async (options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || process.env.DB_HOST || 'localhost',
+        port: parseInt(options.dbPort || process.env.DB_PORT || '3306'),
+        user: options.dbUser || process.env.DB_USER || 'sfs',
+        password: options.dbPassword || process.env.DB_PASSWORD,
+        database: options.dbName || process.env.DB_NAME || 'silverfilesystem'
+      });
+      
+      await db.connect();
+      
+      spinner.text = 'Calculating folder statistics...';
+      
+      await db.updateFolderStatistics();
+      
+      spinner.succeed('Folder statistics update complete!');
+      
+      console.log(chalk.green('\n✅ Folder statistics updated successfully!'));
+      
+      console.log(chalk.yellow('\n📊 Updated statistics include:'));
+      console.log(chalk.white('   • File count per folder (direct files only)'));
+      console.log(chalk.white('   • Total size per folder (sum of file sizes)'));
+      console.log(chalk.white('   • Accurate folder-level metrics'));
+      console.log(chalk.white('   • Performance-optimized calculations'));
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Folder statistics update failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Get folder statistics command
+program
+  .command('folder-stats')
+  .description('Get folder statistics for specific paths or patterns')
+  .argument('[path]', 'Folder path or pattern (supports wildcards like D:/Videos/*)')
+  .option('-r, --recursive', 'Include subfolder totals in calculations')
+  .option('--db-host <host>', 'Database host (default: localhost)')
+  .option('--db-port <port>', 'Database port (default: 3306)')
+  .option('--db-user <user>', 'Database user (default: sfs)')
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', 'Database name (default: silverfilesystem)')
+  .action(async (path, options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || process.env.DB_HOST || 'localhost',
+        port: parseInt(options.dbPort || process.env.DB_PORT || '3306'),
+        user: options.dbUser || process.env.DB_USER || 'sfs',
+        password: options.dbPassword || process.env.DB_PASSWORD,
+        database: options.dbName || process.env.DB_NAME || 'silverfilesystem'
+      });
+      
+      await db.connect();
+      
+      spinner.text = `Getting folder statistics${path ? ` for ${path}` : ''}...`;
+      
+      const results = await db.getFolderStatistics(path || '', options.recursive);
+      
+      spinner.succeed('Folder statistics retrieved!');
+      
+      if (results.length === 0) {
+        console.log(chalk.yellow(`\n📁 No folders found${path ? ` matching pattern: ${path}` : ''}`));
+      } else {
+        console.log(chalk.green(`\n📊 Found ${results.length} folder(s)${path ? ` matching: ${path}` : ''}:`));
+        console.log(chalk.gray('─'.repeat(80)));
+        
+        for (const folder of results.slice(0, 20)) { // Limit to top 20 results
+          console.log(chalk.white(`📂 ${folder.full_path}`));
+          console.log(chalk.cyan(`   Direct files: ${folder.file_count.toLocaleString()}`));
+          console.log(chalk.cyan(`   Direct size: ${formatBytes(folder.total_size)}`));
+          
+          if (options.recursive && folder.recursive_file_count !== undefined) {
+            console.log(chalk.magenta(`   Total files (inc. subfolders): ${folder.recursive_file_count.toLocaleString()}`));
+            console.log(chalk.magenta(`   Total size (inc. subfolders): ${formatBytes(folder.recursive_total_size)}`));
+          }
+          
+          console.log('');
+        }
+        
+        if (results.length > 20) {
+          console.log(chalk.gray(`... and ${results.length - 20} more folders`));
+        }
+        
+        // Summary statistics
+        const totalDirectFiles = results.reduce((sum, f) => sum + f.file_count, 0);
+        const totalDirectSize = results.reduce((sum, f) => sum + f.total_size, 0);
+        
+        console.log(chalk.yellow('\n📈 Summary:'));
+        console.log(chalk.white(`   Folders found: ${results.length.toLocaleString()}`));
+        console.log(chalk.white(`   Total direct files: ${totalDirectFiles.toLocaleString()}`));
+        console.log(chalk.white(`   Total direct size: ${formatBytes(totalDirectSize)}`));
+        
+        if (options.recursive) {
+          const totalRecursiveFiles = results.reduce((sum, f) => sum + (f.recursive_file_count || f.file_count), 0);
+          const totalRecursiveSize = results.reduce((sum, f) => sum + (f.recursive_total_size || f.total_size), 0);
+          console.log(chalk.white(`   Total recursive files: ${totalRecursiveFiles.toLocaleString()}`));
+          console.log(chalk.white(`   Total recursive size: ${formatBytes(totalRecursiveSize)}`));
+        }
+      }
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Failed to get folder statistics');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
 program.parse();
