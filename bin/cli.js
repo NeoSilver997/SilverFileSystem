@@ -1214,4 +1214,135 @@ program
     }
   });
 
+// Generate HTML report for duplicates by name and size
+program
+  .command('report-by-name-size')
+  .description('Generate interactive HTML report for files with same name and size in different locations')
+  .argument('<output>', 'Output HTML file path')
+  .option('-m, --min-size <bytes>', 'Minimum file size to include (in bytes)', '0')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .action(async (output, options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      });
+      
+      await db.connect();
+      spinner.text = 'Fetching duplicates by name and size...';
+      
+      const minSize = parseInt(options.minSize || '0');
+      const duplicates = await db.getDuplicatesByNameAndSize(minSize);
+      
+      if (duplicates.length === 0) {
+        spinner.warn('No duplicate files found with same name and size!');
+        await db.close();
+        return;
+      }
+      
+      spinner.text = 'Generating HTML report...';
+      const reportGen = new ReportGenerator();
+      const reportPath = await reportGen.generateNameSizeDuplicateReport(duplicates, output);
+      
+      spinner.succeed('Report generated successfully!');
+      
+      const totalFiles = duplicates.reduce((sum, group) => sum + group.count, 0);
+      const totalWasted = duplicates.reduce((sum, group) => sum + group.wastedSpace, 0);
+      
+      console.log(chalk.green(`\n📄 Report saved to: ${reportPath}`));
+      console.log(chalk.cyan(`\n📊 Statistics:`));
+      console.log(chalk.white(`   Unique file names: ${duplicates.length}`));
+      console.log(chalk.white(`   Total duplicate locations: ${totalFiles}`));
+      console.log(chalk.white(`   Wasted space: ${formatBytes(totalWasted)}`));
+      
+      if (duplicates.length > 0) {
+        console.log(chalk.yellow(`\n🔥 Top duplicates by wasted space:`));
+        duplicates.slice(0, 5).forEach((dup, index) => {
+          console.log(chalk.white(`   ${index + 1}. ${dup.name}: ${formatBytes(dup.wastedSpace)} (${dup.count} locations)`));
+        });
+      }
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Report generation failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Detect completely duplicated folders
+program
+  .command('find-duplicate-folders')
+  .description('Find folders that are completely duplicated (identical content)')
+  .option('-m, --min-size <bytes>', 'Minimum file size to include (in bytes)', '0')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .action(async (options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      });
+      
+      await db.connect();
+      spinner.text = 'Analyzing folders for duplicates...';
+      
+      const minSize = parseInt(options.minSize || '0');
+      const duplicateFolders = await db.getCompleteDuplicateFolders(minSize);
+      
+      spinner.succeed('Analysis complete!');
+      
+      if (duplicateFolders.length === 0) {
+        console.log(chalk.green('\n✓ No completely duplicated folders found!'));
+        await db.close();
+        return;
+      }
+      
+      const totalWasted = duplicateFolders.reduce((sum, group) => sum + group.wastedSpace, 0);
+      
+      console.log(chalk.yellow(`\n📁 Found ${duplicateFolders.length} sets of duplicate folders:\n`));
+      
+      duplicateFolders.forEach((group, index) => {
+        console.log(chalk.cyan(`\nDuplicate Set ${index + 1}:`));
+        console.log(chalk.white(`  Files: ${group.fileCount}, Total Size: ${formatBytes(group.totalSize)}`));
+        console.log(chalk.red(`  Wasted Space: ${formatBytes(group.wastedSpace)}`));
+        console.log(chalk.gray(`  Duplicate Locations (${group.count}):`));
+        group.folders.forEach((folder, idx) => {
+          console.log(chalk.white(`    ${idx + 1}. ${folder.folderPath}`));
+        });
+      });
+      
+      console.log(chalk.yellow(`\n📊 Summary:`));
+      console.log(chalk.white(`   Total duplicate folder sets: ${duplicateFolders.length}`));
+      console.log(chalk.white(`   Total wasted space: ${formatBytes(totalWasted)}`));
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Analysis failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
 program.parse();
