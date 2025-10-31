@@ -669,4 +669,155 @@ program
     }
   });
 
+// Find duplicate folders command
+program
+  .command('find-duplicate-folders')
+  .description('Find duplicate folders by size and file count')
+  .option('-m, --min-size <bytes>', 'Minimum folder size in bytes', '0')
+  .option('-f, --min-files <count>', 'Minimum number of files in folder', '1')
+  .option('-r, --report <file>', 'Generate HTML report file')
+  .option('--db-host <host>', 'Database host (default: localhost)')
+  .option('--db-port <port>', 'Database port (default: 3306)')
+  .option('--db-user <user>', 'Database user (default: sfs)')
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', 'Database name (default: silverfilesystem)')
+  .action(async (options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || process.env.DB_HOST || 'localhost',
+        port: parseInt(options.dbPort || process.env.DB_PORT || '3306'),
+        user: options.dbUser || process.env.DB_USER || 'sfs',
+        password: options.dbPassword || process.env.DB_PASSWORD,
+        database: options.dbName || process.env.DB_NAME || 'silverfilesystem'
+      });
+      
+      await db.connect();
+      
+      spinner.text = 'Finding duplicate folders...';
+      
+      const minSize = parseInt(options.minSize) || 0;
+      const minFiles = parseInt(options.minFiles) || 1;
+      
+      const duplicateGroups = await db.findDuplicateFolders(minSize, minFiles);
+      
+      if (duplicateGroups.length === 0) {
+        spinner.succeed('No duplicate folders found!');
+        console.log(chalk.yellow('\n📁 No duplicate folders found matching your criteria.'));
+        console.log(chalk.white('Try adjusting the minimum size or file count filters.'));
+      } else {
+        spinner.succeed(`Found ${duplicateGroups.length} duplicate folder groups!`);
+        
+        // Display summary
+        const totalWastedSpace = duplicateGroups.reduce((sum, group) => sum + group.wastedSpace, 0);
+        const totalFolders = duplicateGroups.reduce((sum, group) => sum + group.folderCount, 0);
+        
+        console.log(chalk.green(`\n📊 Duplicate Folders Summary:`));
+        console.log(chalk.white(`   Duplicate groups: ${duplicateGroups.length.toLocaleString()}`));
+        console.log(chalk.white(`   Total folders: ${totalFolders.toLocaleString()}`));
+        console.log(chalk.red(`   Wasted space: ${formatBytes(totalWastedSpace)}`));
+        
+        // Show top 5 groups
+        console.log(chalk.yellow(`\n🔥 Top 5 Duplicate Groups (by wasted space):`));
+        for (const [index, group] of duplicateGroups.slice(0, 5).entries()) {
+          console.log(chalk.white(`\n${index + 1}. ${group.folderCount} folders × ${formatBytes(group.size)} each = ${formatBytes(group.wastedSpace)} wasted`));
+          console.log(chalk.gray(`   File count: ${group.fileCount.toLocaleString()} files each`));
+          
+          for (const folder of group.folders) {
+            console.log(chalk.cyan(`   📂 ${folder.full_path}`));
+          }
+        }
+        
+        if (duplicateGroups.length > 5) {
+          console.log(chalk.gray(`\n... and ${duplicateGroups.length - 5} more duplicate groups`));
+        }
+        
+        // Generate HTML report if requested
+        if (options.report) {
+          spinner.start('Generating HTML report...');
+          const reportPath = await db.generateDuplicateFoldersReport(duplicateGroups, options.report);
+          spinner.succeed(`HTML report generated: ${reportPath}`);
+          
+          console.log(chalk.green(`\n📄 Interactive HTML report created:`));
+          console.log(chalk.white(`   File: ${options.report}`));
+          console.log(chalk.white(`   Features: Search, filters, expandable groups`));
+          console.log(chalk.white(`   Open in browser to explore results`));
+        }
+      }
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Failed to find duplicate folders');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Generate folder duplicates report command
+program
+  .command('generate-folder-report')
+  .description('Generate HTML report for duplicate folders')
+  .argument('<output>', 'Output HTML file path')
+  .option('-m, --min-size <bytes>', 'Minimum folder size in bytes', '0')
+  .option('-f, --min-files <count>', 'Minimum number of files in folder', '1')
+  .option('--db-host <host>', 'Database host (default: localhost)')
+  .option('--db-port <port>', 'Database port (default: 3306)')
+  .option('--db-user <user>', 'Database user (default: sfs)')
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', 'Database name (default: silverfilesystem)')
+  .action(async (output, options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || process.env.DB_HOST || 'localhost',
+        port: parseInt(options.dbPort || process.env.DB_PORT || '3306'),
+        user: options.dbUser || process.env.DB_USER || 'sfs',
+        password: options.dbPassword || process.env.DB_PASSWORD,
+        database: options.dbName || process.env.DB_NAME || 'silverfilesystem'
+      });
+      
+      await db.connect();
+      
+      spinner.text = 'Finding duplicate folders...';
+      
+      const minSize = parseInt(options.minSize) || 0;
+      const minFiles = parseInt(options.minFiles) || 1;
+      
+      const duplicateGroups = await db.findDuplicateFolders(minSize, minFiles);
+      
+      spinner.text = 'Generating HTML report...';
+      
+      const reportPath = await db.generateDuplicateFoldersReport(duplicateGroups, output);
+      
+      spinner.succeed('Folder duplicates report generated!');
+      
+      const totalWastedSpace = duplicateGroups.reduce((sum, group) => sum + group.wastedSpace, 0);
+      const totalFolders = duplicateGroups.reduce((sum, group) => sum + group.folderCount, 0);
+      
+      console.log(chalk.green(`\n✅ HTML Report Generated Successfully!`));
+      console.log(chalk.white(`   📄 File: ${output}`));
+      console.log(chalk.white(`   📊 Groups: ${duplicateGroups.length.toLocaleString()}`));
+      console.log(chalk.white(`   📁 Folders: ${totalFolders.toLocaleString()}`));
+      console.log(chalk.white(`   💾 Wasted Space: ${formatBytes(totalWastedSpace)}`));
+      
+      console.log(chalk.yellow(`\n🎨 Report Features:`));
+      console.log(chalk.white(`   • Interactive search and filtering`));
+      console.log(chalk.white(`   • Expandable folder groups`));
+      console.log(chalk.white(`   • Mobile responsive design`));
+      console.log(chalk.white(`   • Real-time statistics`));
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Failed to generate folder report');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
 program.parse();
