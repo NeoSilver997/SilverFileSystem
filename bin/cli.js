@@ -13,7 +13,9 @@ import { LargeFilesFinder } from '../lib/large.js';
 import { BrokenFilesFinder } from '../lib/broken.js';
 import { DatabaseManager } from '../lib/database.js';
 import { MediaMetadataExtractor } from '../lib/media.js';
+import { ReportGenerator } from '../lib/report.js';
 import { formatBytes, truncatePath, loadConfig } from '../lib/utils.js';
+import fs from 'fs/promises';
 
 const program = new Command();
 
@@ -738,6 +740,607 @@ program
       if (db) {
         await db.close();
       }
+      process.exit(1);
+    }
+  });
+
+// Find duplicates from database command
+program
+  .command('find-duplicates-db')
+  .description('Find duplicate files from existing database records')
+  .option('-m, --min-size <bytes>', 'Minimum file size to check (in bytes)', '0')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .option('--report <path>', 'Generate HTML report at specified path')
+  .action(async (options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      });
+      
+      await db.connect();
+      spinner.text = 'Querying duplicate files...';
+      
+      const minSize = parseInt(options.minSize || '0');
+      const duplicates = await db.getDuplicatesDetailed(minSize);
+      
+      spinner.succeed('Query complete!');
+      
+      if (duplicates.length === 0) {
+        console.log(chalk.green('\nNo duplicate files found in database!'));
+        await db.close();
+        return;
+      }
+      
+      const totalWasted = duplicates.reduce((sum, group) => sum + group.wastedSpace, 0);
+      const totalFiles = duplicates.reduce((sum, group) => sum + group.count, 0);
+      
+      console.log(chalk.yellow(`\nFound ${duplicates.length} groups of duplicate files:`));
+      console.log(chalk.gray(`Total files: ${totalFiles}`));
+      console.log(chalk.gray(`Wasted space: ${formatBytes(totalWasted)}\n`));
+      
+      duplicates.forEach((group, index) => {
+        console.log(chalk.cyan(`\nGroup ${index + 1} (${group.count} files, ${formatBytes(group.size)} each, ${formatBytes(group.wastedSpace)} wasted):`));
+        group.files.forEach(file => {
+          console.log(chalk.white(`  ${truncatePath(file.path)}`));
+        });
+      });
+      
+      // Generate HTML report if requested
+      if (options.report) {
+        spinner.start('Generating HTML report...');
+        const reportGen = new ReportGenerator();
+        const reportPath = await reportGen.generateDuplicateReport(duplicates, options.report);
+        spinner.succeed('HTML report generated!');
+        console.log(chalk.green(`\n📄 Report saved to: ${reportPath}`));
+      }
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Query failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Update hashes in database command
+program
+  .command('update-hashes-db')
+  .description('Calculate and update file hashes for files in database (only hashes files with same size by default)')
+  .option('-m, --min-size <bytes>', 'Minimum file size to process (in bytes)', '0')
+  .option('-l, --limit <number>', 'Limit number of files to process', '0')
+  .option('--hash-method <method>', 'Hash calculation method: full, streaming, quick, smart, sampling', 'smart')
+  .option('--max-size <bytes>', 'Maximum file size to process (in bytes)', '0')
+  .option('--no-smart', 'Disable smart optimization (hash all files, not just potential duplicates)')
+  .option('--optimize-large', 'DEPRECATED: Use --no-smart to disable default smart optimization')
+  .option('--large-threshold <bytes>', 'DEPRECATED: Smart optimization now applies to all file sizes', String(200 * 1024 * 1024))
+  .option('--stats', 'Show optimization statistics before processing')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .action(async (options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      });
+      
+      await db.connect();
+      spinner.text = 'Loading files without hashes...';
+      
+      // Parse and validate parameters
+      let minSize = parseInt(options.minSize || '0');
+      if (isNaN(minSize) || minSize < 0) {
+        minSize = 0;
+      }
+      
+      let limit = null;
+      if (options.limit) {
+        const parsedLimit = parseInt(options.limit);
+        if (!isNaN(parsedLimit) && parsedLimit > 0) {
+          limit = parsedLimit;
+        }
+      }
+      
+      let maxSize = 0;
+      if (options.maxSize) {
+        const parsedMaxSize = parseInt(options.maxSize);
+        if (!isNaN(parsedMaxSize) && parsedMaxSize > 0) {
+          maxSize = parsedMaxSize;
+        }
+      }
+      
+      // Show deprecation warnings
+      if (options.optimizeLarge) {
+        console.log(chalk.yellow('\nWarning: --optimize-large is deprecated. Smart optimization is now enabled by default.'));
+        console.log(chalk.yellow('Use --no-smart to disable optimization and hash all files.\n'));
+      }
+      
+      // Show optimization statistics if requested
+      if (options.stats) {
+        spinner.text = 'Calculating optimization statistics...';
+        const stats = await db.getSmartHashStats(minSize, maxSize);
+        spinner.stop();
+        console.log(chalk.cyan('\n📊 Smart Hashing Optimization Statistics:'));
+        console.log(chalk.white(`   Total files without hash: ${stats.totalFiles}`));
+        console.log(chalk.green(`   Files with potential duplicates (will process): ${stats.filesWithPotentialDuplicates}`));
+        console.log(chalk.yellow(`   Files with unique size (will skip): ${stats.filesSkipped} (${stats.percentageSkipped}%)`));
+        console.log();
+        spinner.start();
+      }
+      
+      // Use smart optimization by default (only hash files with same size)
+      // Use --no-smart to disable and hash all files
+      const useSmart = options.smart !== false;
+      const files = useSmart
+        ? await db.getFilesWithoutHashSmart(minSize, maxSize, limit)
+        : await db.getFilesWithoutHash(minSize, maxSize, limit);
+      
+      if (files.length === 0) {
+        spinner.succeed(useSmart ? 'No files with potential duplicates found!' : 'No files without hashes found!');
+        await db.close();
+        return;
+      }
+      
+      const hashMethod = options.hashMethod || 'smart';
+      const optimizationMsg = useSmart ? ' (smart: only files with same size)' : ' (processing all files)';
+      spinner.text = `Found ${files.length} files. Calculating hashes using ${hashMethod} method${optimizationMsg}...`;
+      
+      const scanner = new FileScanner();
+      let processed = 0;
+      let updated = 0;
+      let errors = 0;
+      let skippedLarge = 0;
+      
+      for (const file of files) {
+        try {
+          // Calculate hashes based on selected method
+          let hash, quickHash;
+          
+          switch (hashMethod) {
+            case 'full':
+              hash = await scanner.calculateHash(file.path);
+              quickHash = await scanner.calculateQuickHash(file.path);
+              break;
+            case 'streaming':
+              hash = await scanner.calculateStreamingHash(file.path);
+              quickHash = await scanner.calculateQuickHash(file.path);
+              break;
+            case 'quick':
+              hash = await scanner.calculateQuickHash(file.path);
+              quickHash = hash; // Same as full hash for quick method
+              break;
+            case 'sampling':
+              hash = await scanner.calculateSamplingHash(file.path);
+              quickHash = await scanner.calculateQuickHash(file.path);
+              break;
+            case 'smart':
+            default:
+              hash = await scanner.calculateSmartHash(file.path);
+              quickHash = await scanner.calculateQuickHash(file.path);
+              break;
+          }
+          
+          // Update database
+          await db.updateFileHash(file.id, hash, quickHash);
+          
+          updated++;
+          processed++;
+          spinner.text = `Processing ${processed}/${files.length} - Updated: ${updated}, Errors: ${errors} (${hashMethod})`;
+        } catch (err) {
+          errors++;
+          processed++;
+          spinner.text = `Processing ${processed}/${files.length} - Updated: ${updated}, Errors: ${errors} (${hashMethod})`;
+          console.warn(chalk.yellow(`\nWarning: ${file.path}: ${err.message}`));
+        }
+      }
+      
+      spinner.succeed('Hash update complete!');
+      
+      console.log(chalk.green(`\n✓ Updated ${updated} file hashes (${hashMethod} method)`));
+      if (useSmart) {
+        console.log(chalk.cyan(`ℹ Smart optimization: Only hashed files with same size (potential duplicates)`));
+        console.log(chalk.cyan(`  Use --no-smart to hash all files, or --stats to see optimization impact`));
+      }
+      if (errors > 0) {
+        console.log(chalk.yellow(`⚠ ${errors} files had errors (file not found or read error)`));
+      }
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Update failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Generate HTML report from database command
+program
+  .command('generate-report')
+  .description('Generate interactive HTML report for duplicate files from database')
+  .argument('<output>', 'Output HTML file path')
+  .option('-m, --min-size <bytes>', 'Minimum file size to include (in bytes)', '0')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .action(async (output, options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      });
+      
+      await db.connect();
+      spinner.text = 'Querying duplicate files...';
+      
+      const minSize = parseInt(options.minSize || '0');
+      const duplicates = await db.getDuplicatesDetailed(minSize);
+      
+      if (duplicates.length === 0) {
+        spinner.warn('No duplicate files found in database!');
+        await db.close();
+        return;
+      }
+      
+      spinner.text = 'Generating HTML report...';
+      
+      const reportGen = new ReportGenerator();
+      const reportPath = await reportGen.generateDuplicateReport(duplicates, output);
+      
+      spinner.succeed('Report generated successfully!');
+      
+      const totalWasted = duplicates.reduce((sum, group) => sum + group.wastedSpace, 0);
+      const totalFiles = duplicates.reduce((sum, group) => sum + group.count, 0);
+      
+      console.log(chalk.green(`\n📄 Report saved to: ${reportPath}`));
+      console.log(chalk.cyan(`\n📊 Statistics:`));
+      console.log(chalk.white(`   Duplicate groups: ${duplicates.length}`));
+      console.log(chalk.white(`   Total files: ${totalFiles}`));
+      console.log(chalk.white(`   Wasted space: ${formatBytes(totalWasted)}`));
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Report generation failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Report files by size and name command
+program
+  .command('report-by-size')
+  .description('Report files grouped by size and name (potential duplicates)')
+  .option('-m, --min-size <bytes>', 'Minimum file size to include (in bytes)', '0')
+  .option('-l, --limit <number>', 'Limit number of groups to show', '0')
+  .option('--format <type>', 'Output format: table, json, csv', 'table')
+  .option('--names-only', 'Show only filename and size (no paths)')
+  .option('--sizes-only', 'Group by size only (ignore filenames)')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .action(async (options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      });
+      
+      await db.connect();
+      spinner.text = 'Fetching file data...';
+      
+      const minSize = parseInt(options.minSize || '0');
+      const limit = parseInt(options.limit || '0') || null;
+      
+      let groups;
+      if (options.sizesOnly) {
+        groups = await db.getFilesBySize(minSize);
+      } else {
+        groups = await db.getFilesBySizeAndName(minSize);
+      }
+      
+      if (limit && limit > 0) {
+        groups = groups.slice(0, limit);
+      }
+      
+      spinner.succeed('Report generated!');
+      
+      if (groups.length === 0) {
+        console.log(chalk.yellow('\nNo duplicate files found with the specified criteria.'));
+        await db.close();
+        return;
+      }
+      
+      // Display results based on format
+      if (options.format === 'json') {
+        console.log(JSON.stringify(groups, null, 2));
+      } else if (options.format === 'csv') {
+        console.log('Name,Size (bytes),Size (formatted),Count,Paths');
+        groups.forEach(group => {
+          const name = options.sizesOnly ? 'Multiple files' : group.name;
+          const paths = options.sizesOnly 
+            ? group.files.map(f => f.path).join('; ')
+            : (options.namesOnly ? 'Multiple locations' : group.paths.join('; '));
+          console.log(`"${name}",${group.size},"${formatBytes(group.size)}",${group.count},"${paths}"`);
+        });
+      } else {
+        // Table format
+        console.log(chalk.yellow('\n=== Files by Size and Name Report ===\n'));
+        
+        let totalFiles = 0;
+        let totalWastedSpace = 0;
+        
+        groups.forEach((group, index) => {
+          const wastedSpace = (group.count - 1) * group.size;
+          totalFiles += group.count;
+          totalWastedSpace += wastedSpace;
+          
+          console.log(chalk.cyan(`${index + 1}. ${options.sizesOnly ? 'Files of size' : 'File'}: ${options.sizesOnly ? '' : group.name}`));
+          console.log(chalk.white(`   Size: ${formatBytes(group.size)} (${group.size.toLocaleString()} bytes)`));
+          console.log(chalk.white(`   Count: ${group.count} copies`));
+          console.log(chalk.white(`   Wasted space: ${formatBytes(wastedSpace)}`));
+          
+          if (!options.namesOnly) {
+            console.log(chalk.gray('   Locations:'));
+            if (options.sizesOnly) {
+              group.files.slice(0, 10).forEach(file => {
+                console.log(chalk.gray(`     ${file.name} - ${file.path}`));
+              });
+              if (group.files.length > 10) {
+                console.log(chalk.gray(`     ... and ${group.files.length - 10} more files`));
+              }
+            } else {
+              group.paths.slice(0, 10).forEach(path => {
+                console.log(chalk.gray(`     ${path}`));
+              });
+              if (group.paths.length > 10) {
+                console.log(chalk.gray(`     ... and ${group.paths.length - 10} more locations`));
+              }
+            }
+          }
+          console.log();
+        });
+        
+        console.log(chalk.green(`📊 Summary:`));
+        console.log(chalk.white(`   Total groups: ${groups.length}`));
+        console.log(chalk.white(`   Total files: ${totalFiles}`));
+        console.log(chalk.white(`   Total wasted space: ${formatBytes(totalWastedSpace)}`));
+      }
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Report generation failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Generate folder-grouped HTML report from database command
+program
+  .command('report-by-folder')
+  .description('Generate HTML report of duplicate files grouped by folder')
+  .argument('<output>', 'Output HTML file path')
+  .option('-m, --min-size <bytes>', 'Minimum file size to include (in bytes)', '0')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .action(async (output, options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      });
+      
+      await db.connect();
+      spinner.text = 'Fetching duplicate files by folder...';
+      
+      const minSize = parseInt(options.minSize || '0');
+      const folderGroups = await db.getDuplicatesByFolder(minSize);
+      
+      spinner.text = 'Generating HTML report...';
+      const reportGen = new ReportGenerator();
+      const reportPath = await reportGen.generateFolderDuplicateReport(folderGroups, output);
+      
+      spinner.succeed('Folder report generated!');
+      
+      const totalFolders = folderGroups.length;
+      const totalFiles = folderGroups.reduce((sum, folder) => sum + folder.totalFiles, 0);
+      const totalWasted = folderGroups.reduce((sum, folder) => sum + folder.totalWastedSpace, 0);
+      
+      console.log(chalk.green(`\n📁 Report saved to: ${reportPath}`));
+      console.log(chalk.cyan(`\n📊 Statistics:`));
+      console.log(chalk.white(`   Folders with duplicates: ${totalFolders}`));
+      console.log(chalk.white(`   Total duplicate files: ${totalFiles}`));
+      console.log(chalk.white(`   Total wasted space: ${formatBytes(totalWasted)}`));
+      
+      if (folderGroups.length > 0) {
+        console.log(chalk.yellow(`\n🔥 Top folders by wasted space:`));
+        folderGroups.slice(0, 5).forEach((folder, index) => {
+          console.log(chalk.white(`   ${index + 1}. ${folder.folderPath}: ${formatBytes(folder.totalWastedSpace)}`));
+        });
+      }
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Report generation failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Generate HTML report for duplicates by name and size
+program
+  .command('report-by-name-size')
+  .description('Generate interactive HTML report for files with same name and size in different locations')
+  .argument('<output>', 'Output HTML file path')
+  .option('-m, --min-size <bytes>', 'Minimum file size to include (in bytes)', '0')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .action(async (output, options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      });
+      
+      await db.connect();
+      spinner.text = 'Fetching duplicates by name and size...';
+      
+      const minSize = parseInt(options.minSize || '0');
+      const duplicates = await db.getDuplicatesByNameAndSize(minSize);
+      
+      if (duplicates.length === 0) {
+        spinner.warn('No duplicate files found with same name and size!');
+        await db.close();
+        return;
+      }
+      
+      spinner.text = 'Generating HTML report...';
+      const reportGen = new ReportGenerator();
+      const reportPath = await reportGen.generateNameSizeDuplicateReport(duplicates, output);
+      
+      spinner.succeed('Report generated successfully!');
+      
+      const totalFiles = duplicates.reduce((sum, group) => sum + group.count, 0);
+      const totalWasted = duplicates.reduce((sum, group) => sum + group.wastedSpace, 0);
+      
+      console.log(chalk.green(`\n📄 Report saved to: ${reportPath}`));
+      console.log(chalk.cyan(`\n📊 Statistics:`));
+      console.log(chalk.white(`   Unique file names: ${duplicates.length}`));
+      console.log(chalk.white(`   Total duplicate locations: ${totalFiles}`));
+      console.log(chalk.white(`   Wasted space: ${formatBytes(totalWasted)}`));
+      
+      if (duplicates.length > 0) {
+        console.log(chalk.yellow(`\n🔥 Top duplicates by wasted space:`));
+        duplicates.slice(0, 5).forEach((dup, index) => {
+          console.log(chalk.white(`   ${index + 1}. ${dup.name}: ${formatBytes(dup.wastedSpace)} (${dup.count} locations)`));
+        });
+      }
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Report generation failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Detect completely duplicated folders
+program
+  .command('find-duplicate-folders')
+  .description('Find folders that are completely duplicated (identical content)')
+  .option('-m, --min-size <bytes>', 'Minimum file size to include (in bytes)', '0')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .action(async (options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      });
+      
+      await db.connect();
+      spinner.text = 'Analyzing folders for duplicates...';
+      
+      const minSize = parseInt(options.minSize || '0');
+      const duplicateFolders = await db.getCompleteDuplicateFolders(minSize);
+      
+      spinner.succeed('Analysis complete!');
+      
+      if (duplicateFolders.length === 0) {
+        console.log(chalk.green('\n✓ No completely duplicated folders found!'));
+        await db.close();
+        return;
+      }
+      
+      const totalWasted = duplicateFolders.reduce((sum, group) => sum + group.wastedSpace, 0);
+      
+      console.log(chalk.yellow(`\n📁 Found ${duplicateFolders.length} sets of duplicate folders:\n`));
+      
+      duplicateFolders.forEach((group, index) => {
+        console.log(chalk.cyan(`\nDuplicate Set ${index + 1}:`));
+        console.log(chalk.white(`  Files: ${group.fileCount}, Total Size: ${formatBytes(group.totalSize)}`));
+        console.log(chalk.red(`  Wasted Space: ${formatBytes(group.wastedSpace)}`));
+        console.log(chalk.gray(`  Duplicate Locations (${group.count}):`));
+        group.folders.forEach((folder, idx) => {
+          console.log(chalk.white(`    ${idx + 1}. ${folder.folderPath}`));
+        });
+      });
+      
+      console.log(chalk.yellow(`\n📊 Summary:`));
+      console.log(chalk.white(`   Total duplicate folder sets: ${duplicateFolders.length}`));
+      console.log(chalk.white(`   Total wasted space: ${formatBytes(totalWasted)}`));
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Analysis failed');
+      console.error(chalk.red(`Error: ${err.message}`));
       process.exit(1);
     }
   });

@@ -257,3 +257,236 @@ For very large directories:
 - Use minimum size filters
 - Limit the number of results
 - Scan subdirectories separately
+
+## Database and Reporting Examples
+
+### Using Database for Persistent Duplicate Detection
+
+#### 1. Initial Setup and Scan
+
+Store file information in database for later analysis:
+
+```bash
+# Configure database (one-time setup)
+export DB_HOST=localhost
+export DB_USER=root
+export DB_PASSWORD=yourpassword
+export DB_NAME=silverfilesystem
+
+# Scan directories and store to database
+node bin/cli.js scan /home/user/documents --db
+node bin/cli.js scan /home/user/downloads --db
+node bin/cli.js scan /home/user/pictures --db
+```
+
+#### 2. Update File Hashes
+
+Calculate hashes for duplicate detection:
+
+```bash
+# Update hashes for all files in database
+node bin/cli.js update-hashes-db
+
+# Update only files larger than 1MB
+node bin/cli.js update-hashes-db -m 1048576
+
+# Process in batches (useful for large datasets)
+node bin/cli.js update-hashes-db -l 5000
+```
+
+#### 3. Find Duplicates from Database
+
+Query duplicates without re-scanning filesystem:
+
+```bash
+# Find all duplicates from database
+node bin/cli.js find-duplicates-db
+
+# Find duplicates with size filter
+node bin/cli.js find-duplicates-db -m 10485760
+
+# Find duplicates and generate HTML report
+node bin/cli.js find-duplicates-db --report duplicates.html
+```
+
+#### 4. Generate Interactive HTML Reports
+
+Create beautiful HTML reports:
+
+```bash
+# Basic report
+node bin/cli.js generate-report duplicates.html
+
+# Report with size filter (only large files)
+node bin/cli.js generate-report large-duplicates.html -m 10485760
+
+# Report with custom database
+node bin/cli.js generate-report report.html \
+  --db-host mysql.example.com \
+  --db-user scanner \
+  --db-password secret
+```
+
+### Complete Workflow Example
+
+Here's a complete workflow for duplicate detection:
+
+```bash
+#!/bin/bash
+# duplicate-detection.sh
+
+# Step 1: Scan directories
+echo "Scanning directories..."
+node bin/cli.js scan /home/user/Documents --db
+node bin/cli.js scan /home/user/Downloads --db
+node bin/cli.js scan /media/backup --db
+
+# Step 2: Calculate hashes (files > 100KB)
+echo "Calculating hashes..."
+node bin/cli.js update-hashes-db -m 102400
+
+# Step 3: Generate report
+echo "Generating report..."
+REPORT_FILE="duplicates-$(date +%Y%m%d-%H%M%S).html"
+node bin/cli.js generate-report "$REPORT_FILE"
+
+echo "Report generated: $REPORT_FILE"
+echo "Open in browser to review duplicates"
+```
+
+### Scheduled Duplicate Detection
+
+Use cron for automatic duplicate detection:
+
+```bash
+# /etc/cron.d/duplicate-detection
+# Run every Sunday at 2 AM
+
+# Scan directories
+0 2 * * 0 cd /path/to/silverfs && node bin/cli.js scan /data/documents --db
+5 2 * * 0 cd /path/to/silverfs && node bin/cli.js scan /data/media --db
+
+# Update hashes
+0 3 * * 0 cd /path/to/silverfs && node bin/cli.js update-hashes-db -m 1048576
+
+# Generate weekly report
+0 4 * * 0 cd /path/to/silverfs && node bin/cli.js generate-report /var/www/html/duplicates.html
+```
+
+### Advanced Database Queries
+
+Query the database directly for custom analysis:
+
+```sql
+-- Find largest duplicate groups
+SELECT hash, COUNT(*) as files, size, 
+       ROUND((COUNT(*) - 1) * size / 1024 / 1024 / 1024, 2) as wasted_gb
+FROM scanned_files
+WHERE hash IS NOT NULL
+GROUP BY hash, size
+HAVING files > 1
+ORDER BY wasted_gb DESC
+LIMIT 20;
+
+-- Find duplicate photos
+SELECT sf.path, sf.size, sf.mtime
+FROM scanned_files sf
+WHERE sf.extension IN ('jpg', 'jpeg', 'png', 'gif')
+  AND sf.hash IN (
+    SELECT hash FROM scanned_files
+    WHERE hash IS NOT NULL
+    GROUP BY hash
+    HAVING COUNT(*) > 1
+  )
+ORDER BY sf.hash, sf.path;
+
+-- Statistics by file type
+SELECT extension, 
+       COUNT(*) as total_files,
+       ROUND(SUM(size) / 1024 / 1024, 2) as total_mb,
+       COUNT(DISTINCT hash) as unique_files
+FROM scanned_files
+WHERE extension IS NOT NULL
+GROUP BY extension
+ORDER BY total_mb DESC
+LIMIT 20;
+```
+
+### Incremental Updates
+
+Add new files without recalculating existing hashes:
+
+```bash
+# Scan new directory
+node bin/cli.js scan /new/directory --db
+
+# Update hashes only for new files (those without hashes)
+node bin/cli.js update-hashes-db
+
+# Regenerate report with all files
+node bin/cli.js generate-report updated-duplicates.html
+```
+
+## HTML Report Features
+
+The interactive HTML report includes:
+
+- **Summary Statistics**: Total groups, files, and wasted space
+- **Search**: Real-time filtering by file path or name
+- **Expand/Collapse**: Show or hide file lists for each group
+- **Sorting**: Sort by file size or count
+- **File Details**: Path, modification date, and hash for each file
+- **Responsive Design**: Works on desktop, tablet, and mobile
+- **Beautiful UI**: Modern gradient design with smooth animations
+
+### Opening Reports
+
+```bash
+# Linux
+xdg-open duplicates.html
+
+# macOS
+open duplicates.html
+
+# Windows
+start duplicates.html
+
+# Or just open in your browser
+firefox duplicates.html
+chrome duplicates.html
+```
+
+## Best Practices for Database Workflow
+
+1. **Scan First, Hash Later**: Scanning is fast, hashing is slow. Scan all directories first, then calculate hashes.
+
+2. **Use Size Filters**: Skip small files to focus on significant duplicates:
+   ```bash
+   node bin/cli.js update-hashes-db -m 1048576  # > 1MB
+   ```
+
+3. **Regular Updates**: Set up scheduled scans to track changes over time
+
+4. **Backup Database**: Regular backups of your database preserve scan history
+
+5. **Review Reports**: Generate reports periodically to identify cleanup opportunities
+
+6. **Incremental Processing**: Process large datasets in batches:
+   ```bash
+   node bin/cli.js update-hashes-db -l 10000
+   ```
+
+## Conclusion
+
+The database workflow provides powerful duplicate detection and reporting:
+
+- ✅ Scan once, query many times
+- ✅ Fast database queries vs filesystem scanning
+- ✅ Historical tracking of files
+- ✅ Beautiful HTML reports for review
+- ✅ Scriptable and automatable
+
+For more details, see:
+- [DUPLICATE_WORKFLOW.md](DUPLICATE_WORKFLOW.md) - Complete workflow guide
+- [DATABASE.md](DATABASE.md) - Database setup and queries
+- [README.md](README.md) - General usage and features
