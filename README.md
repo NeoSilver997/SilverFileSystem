@@ -75,6 +75,82 @@ node bin/cli.js duplicates /path/to/folder -m 1048576
 node bin/cli.js duplicates /path/folder1 /path/folder2
 ```
 
+#### Find Duplicates from Database
+Query duplicate files from existing database records (no filesystem scanning needed):
+
+```bash
+node bin/cli.js find-duplicates-db [options]
+```
+
+Options:
+- `-m, --min-size <bytes>` - Minimum file size to check (default: 0)
+- `--report <path>` - Generate HTML report at specified path
+- `--db-host <host>` - Database host
+- `--db-user <user>` - Database user
+- `--db-password <password>` - Database password
+- `--db-name <name>` - Database name
+
+Examples:
+```bash
+# Find duplicates from database
+node bin/cli.js find-duplicates-db
+
+# Find duplicates and generate HTML report
+node bin/cli.js find-duplicates-db --report duplicates-report.html
+
+# Find duplicates larger than 1MB
+node bin/cli.js find-duplicates-db -m 1048576
+```
+
+#### Update File Hashes in Database
+Calculate and update file hashes for files already in the database:
+
+```bash
+node bin/cli.js update-hashes-db [options]
+```
+
+Options:
+- `-m, --min-size <bytes>` - Minimum file size to process (default: 0)
+- `-l, --limit <number>` - Limit number of files to process
+- Database connection options (same as above)
+
+Examples:
+```bash
+# Update hashes for all files without hashes
+node bin/cli.js update-hashes-db
+
+# Update hashes for files larger than 1MB, limit to 1000 files
+node bin/cli.js update-hashes-db -m 1048576 -l 1000
+```
+
+#### Generate Interactive HTML Report
+Generate an interactive HTML report for duplicate files from database:
+
+```bash
+node bin/cli.js generate-report <output> [options]
+```
+
+Options:
+- `-m, --min-size <bytes>` - Minimum file size to include (default: 0)
+- Database connection options (same as above)
+
+Examples:
+```bash
+# Generate HTML report
+node bin/cli.js generate-report duplicates-report.html
+
+# Generate report for files larger than 10MB
+node bin/cli.js generate-report large-duplicates.html -m 10485760
+```
+
+The HTML report includes:
+- 📊 Interactive statistics dashboard
+- 🔍 Search functionality to filter files
+- 📁 Collapsible duplicate groups
+- 🔄 Sort by size or file count
+- 📱 Responsive design for mobile devices
+- 🎨 Beautiful gradient design with smooth animations
+
 #### Find Empty Files
 Find empty files (0 bytes):
 
