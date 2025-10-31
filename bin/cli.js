@@ -820,6 +820,10 @@ program
   .description('Calculate and update file hashes for files in database')
   .option('-m, --min-size <bytes>', 'Minimum file size to process (in bytes)', '0')
   .option('-l, --limit <number>', 'Limit number of files to process', '0')
+  .option('--hash-method <method>', 'Hash calculation method: full, streaming, quick, smart, sampling', 'smart')
+  .option('--max-size <bytes>', 'Maximum file size to process (in bytes)', '0')
+  .option('--optimize-large', 'Only hash large files (>200MB) when multiple files have same size')
+  .option('--large-threshold <bytes>', 'File size threshold for optimization (default: 200MB)', String(200 * 1024 * 1024))
   .option('--db-host <host>', `Database host (default: ${config.database.host})`)
   .option('--db-port <port>', `Database port (default: ${config.database.port})`)
   .option('--db-user <user>', `Database user (default: ${config.database.user})`)
@@ -841,9 +845,40 @@ program
       await db.connect();
       spinner.text = 'Loading files without hashes...';
       
-      const minSize = parseInt(options.minSize || '0');
-      const limit = parseInt(options.limit || '0') || null;
-      const files = await db.getFilesWithoutHash(minSize, limit);
+      // Parse and validate parameters
+      let minSize = parseInt(options.minSize || '0');
+      if (isNaN(minSize) || minSize < 0) {
+        minSize = 0;
+      }
+      
+      let limit = null;
+      if (options.limit) {
+        const parsedLimit = parseInt(options.limit);
+        if (!isNaN(parsedLimit) && parsedLimit > 0) {
+          limit = parsedLimit;
+        }
+      }
+      
+      let maxSize = 0;
+      if (options.maxSize) {
+        const parsedMaxSize = parseInt(options.maxSize);
+        if (!isNaN(parsedMaxSize) && parsedMaxSize > 0) {
+          maxSize = parsedMaxSize;
+        }
+      }
+      
+      let largeThreshold = 200 * 1024 * 1024; // 200MB default
+      if (options.largeThreshold) {
+        const parsedThreshold = parseInt(options.largeThreshold);
+        if (!isNaN(parsedThreshold) && parsedThreshold > 0) {
+          largeThreshold = parsedThreshold;
+        }
+      }
+      
+      // Use optimized query if requested
+      const files = options.optimizeLarge 
+        ? await db.getFilesWithoutHashOptimized(minSize, maxSize, limit, largeThreshold)
+        : await db.getFilesWithoutHash(minSize, maxSize, limit);
       
       if (files.length === 0) {
         spinner.succeed('No files without hashes found!');
@@ -851,29 +886,55 @@ program
         return;
       }
       
-      spinner.text = `Found ${files.length} files. Calculating hashes...`;
+      const hashMethod = options.hashMethod || 'smart';
+      const optimizationMsg = options.optimizeLarge ? ` (optimized for large files >${Math.round(largeThreshold/1024/1024)}MB)` : '';
+      spinner.text = `Found ${files.length} files. Calculating hashes using ${hashMethod} method${optimizationMsg}...`;
       
       const scanner = new FileScanner();
       let processed = 0;
       let updated = 0;
       let errors = 0;
+      let skippedLarge = 0;
       
       for (const file of files) {
         try {
-          // Calculate hashes (will throw if file doesn't exist or can't be read)
-          const hash = await scanner.calculateHash(file.path);
-          const quickHash = await scanner.calculateQuickHash(file.path);
+          // Calculate hashes based on selected method
+          let hash, quickHash;
+          
+          switch (hashMethod) {
+            case 'full':
+              hash = await scanner.calculateHash(file.path);
+              quickHash = await scanner.calculateQuickHash(file.path);
+              break;
+            case 'streaming':
+              hash = await scanner.calculateStreamingHash(file.path);
+              quickHash = await scanner.calculateQuickHash(file.path);
+              break;
+            case 'quick':
+              hash = await scanner.calculateQuickHash(file.path);
+              quickHash = hash; // Same as full hash for quick method
+              break;
+            case 'sampling':
+              hash = await scanner.calculateSamplingHash(file.path);
+              quickHash = await scanner.calculateQuickHash(file.path);
+              break;
+            case 'smart':
+            default:
+              hash = await scanner.calculateSmartHash(file.path);
+              quickHash = await scanner.calculateQuickHash(file.path);
+              break;
+          }
           
           // Update database
           await db.updateFileHash(file.id, hash, quickHash);
           
           updated++;
           processed++;
-          spinner.text = `Processing ${processed}/${files.length} - Updated: ${updated}, Errors: ${errors}`;
+          spinner.text = `Processing ${processed}/${files.length} - Updated: ${updated}, Errors: ${errors} (${hashMethod})`;
         } catch (err) {
           errors++;
           processed++;
-          spinner.text = `Processing ${processed}/${files.length} - Updated: ${updated}, Errors: ${errors}`;
+          spinner.text = `Processing ${processed}/${files.length} - Updated: ${updated}, Errors: ${errors} (${hashMethod})`;
           console.warn(chalk.yellow(`\nWarning: ${file.path}: ${err.message}`));
         }
       }
