@@ -447,4 +447,98 @@ program
     }
   });
 
+// Establish folder hierarchy
+program
+  .command('fix-folder-parents')
+  .description('Establish parent-child relationships for folders after migration')
+  .option('--db-host <host>', 'Database host (default: localhost)')
+  .option('--db-port <port>', 'Database port (default: 3306)')
+  .option('--db-user <user>', 'Database user (default: sfs)')
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', 'Database name (default: silverfilesystem)')
+  .action(async (options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || process.env.DB_HOST || 'localhost',
+        port: parseInt(options.dbPort || process.env.DB_PORT || '3306'),
+        user: options.dbUser || process.env.DB_USER || 'sfs',
+        password: options.dbPassword || process.env.DB_PASSWORD,
+        database: options.dbName || process.env.DB_NAME || 'silverfilesystem'
+      });
+      
+      await db.connect();
+      
+      spinner.text = 'Establishing folder parent-child relationships...';
+      
+      await db.establishFolderHierarchy();
+      
+      spinner.succeed('Folder hierarchy establishment complete!');
+      
+      console.log(chalk.green('\n✅ Folder parent relationships established successfully!'));
+      
+      console.log(chalk.yellow('\n📁 Folder hierarchy benefits:'));
+      console.log(chalk.white('   • Proper parent-child folder relationships'));
+      console.log(chalk.white('   • Better folder tree navigation'));
+      console.log(chalk.white('   • Hierarchical folder operations'));
+      console.log(chalk.white('   • Improved folder organization queries'));
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Folder hierarchy establishment failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Create missing parent folders
+program
+  .command('create-missing-parents')
+  .description('Create missing parent folders and establish complete hierarchy')
+  .option('--db-host <host>', 'Database host (default: localhost)')
+  .option('--db-port <port>', 'Database port (default: 3306)')
+  .option('--db-user <user>', 'Database user (default: sfs)')
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', 'Database name (default: silverfilesystem)')
+  .action(async (options) => {
+    const spinner = ora('Connecting to database...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost || process.env.DB_HOST || 'localhost',
+        port: parseInt(options.dbPort || process.env.DB_PORT || '3306'),
+        user: options.dbUser || process.env.DB_USER || 'sfs',
+        password: options.dbPassword || process.env.DB_PASSWORD,
+        database: options.dbName || process.env.DB_NAME || 'silverfilesystem'
+      });
+      
+      await db.connect();
+      
+      spinner.text = 'Creating missing parent folders...';
+      
+      await db.createMissingParentFolders();
+      
+      spinner.succeed('Missing parent folder creation complete!');
+      
+      console.log(chalk.green('\n✅ Missing parent folders created successfully!'));
+      
+      console.log(chalk.yellow('\n📁 Complete hierarchy benefits:'));
+      console.log(chalk.white('   • All folders now have proper parent relationships'));
+      console.log(chalk.white('   • Complete folder tree navigation possible'));
+      console.log(chalk.white('   • Full hierarchical folder operations'));
+      console.log(chalk.white('   • Perfect folder organization structure'));
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Missing parent folder creation failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
 program.parse();
