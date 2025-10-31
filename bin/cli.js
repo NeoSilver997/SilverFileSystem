@@ -860,10 +860,7 @@ program
       
       for (const file of files) {
         try {
-          // Check if file still exists
-          await fs.access(file.path);
-          
-          // Calculate hashes
+          // Calculate hashes (will throw if file doesn't exist or can't be read)
           const hash = await scanner.calculateHash(file.path);
           const quickHash = await scanner.calculateQuickHash(file.path);
           
