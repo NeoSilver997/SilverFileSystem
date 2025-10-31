@@ -103,7 +103,9 @@ node bin/cli.js find-duplicates-db -m 1048576
 ```
 
 #### Update File Hashes in Database
-Calculate and update file hashes for files already in the database:
+Calculate and update file hashes for files already in the database.
+
+**Smart Optimization:** By default, only hashes files that have the same size as other files (potential duplicates). Files with unique sizes are automatically skipped for maximum efficiency.
 
 ```bash
 node bin/cli.js update-hashes-db [options]
@@ -112,15 +114,24 @@ node bin/cli.js update-hashes-db [options]
 Options:
 - `-m, --min-size <bytes>` - Minimum file size to process (default: 0)
 - `-l, --limit <number>` - Limit number of files to process
+- `--stats` - Show optimization statistics before processing
+- `--no-smart` - Disable smart optimization (hash all files)
+- `--hash-method <method>` - Hash method: smart, quick, full, streaming, sampling
 - Database connection options (same as above)
 
 Examples:
 ```bash
-# Update hashes for all files without hashes
+# Update hashes with smart optimization (default - only potential duplicates)
 node bin/cli.js update-hashes-db
+
+# Show optimization statistics first
+node bin/cli.js update-hashes-db --stats
 
 # Update hashes for files larger than 1MB, limit to 1000 files
 node bin/cli.js update-hashes-db -m 1048576 -l 1000
+
+# Hash all files (disable smart optimization)
+node bin/cli.js update-hashes-db --no-smart
 ```
 
 #### Generate Interactive HTML Report

@@ -817,13 +817,15 @@ program
 // Update hashes in database command
 program
   .command('update-hashes-db')
-  .description('Calculate and update file hashes for files in database')
+  .description('Calculate and update file hashes for files in database (only hashes files with same size by default)')
   .option('-m, --min-size <bytes>', 'Minimum file size to process (in bytes)', '0')
   .option('-l, --limit <number>', 'Limit number of files to process', '0')
   .option('--hash-method <method>', 'Hash calculation method: full, streaming, quick, smart, sampling', 'smart')
   .option('--max-size <bytes>', 'Maximum file size to process (in bytes)', '0')
-  .option('--optimize-large', 'Only hash large files (>200MB) when multiple files have same size')
-  .option('--large-threshold <bytes>', 'File size threshold for optimization (default: 200MB)', String(200 * 1024 * 1024))
+  .option('--no-smart', 'Disable smart optimization (hash all files, not just potential duplicates)')
+  .option('--optimize-large', 'DEPRECATED: Use --no-smart to disable default smart optimization')
+  .option('--large-threshold <bytes>', 'DEPRECATED: Smart optimization now applies to all file sizes', String(200 * 1024 * 1024))
+  .option('--stats', 'Show optimization statistics before processing')
   .option('--db-host <host>', `Database host (default: ${config.database.host})`)
   .option('--db-port <port>', `Database port (default: ${config.database.port})`)
   .option('--db-user <user>', `Database user (default: ${config.database.user})`)
@@ -867,27 +869,40 @@ program
         }
       }
       
-      let largeThreshold = 200 * 1024 * 1024; // 200MB default
-      if (options.largeThreshold) {
-        const parsedThreshold = parseInt(options.largeThreshold);
-        if (!isNaN(parsedThreshold) && parsedThreshold > 0) {
-          largeThreshold = parsedThreshold;
-        }
+      // Show deprecation warnings
+      if (options.optimizeLarge) {
+        console.log(chalk.yellow('\nWarning: --optimize-large is deprecated. Smart optimization is now enabled by default.'));
+        console.log(chalk.yellow('Use --no-smart to disable optimization and hash all files.\n'));
       }
       
-      // Use optimized query if requested
-      const files = options.optimizeLarge 
-        ? await db.getFilesWithoutHashOptimized(minSize, maxSize, limit, largeThreshold)
+      // Show optimization statistics if requested
+      if (options.stats) {
+        spinner.text = 'Calculating optimization statistics...';
+        const stats = await db.getSmartHashStats(minSize, maxSize);
+        spinner.stop();
+        console.log(chalk.cyan('\n📊 Smart Hashing Optimization Statistics:'));
+        console.log(chalk.white(`   Total files without hash: ${stats.totalFiles}`));
+        console.log(chalk.green(`   Files with potential duplicates (will process): ${stats.filesWithPotentialDuplicates}`));
+        console.log(chalk.yellow(`   Files with unique size (will skip): ${stats.filesSkipped} (${stats.percentageSkipped}%)`));
+        console.log();
+        spinner.start();
+      }
+      
+      // Use smart optimization by default (only hash files with same size)
+      // Use --no-smart to disable and hash all files
+      const useSmart = options.smart !== false;
+      const files = useSmart
+        ? await db.getFilesWithoutHashSmart(minSize, maxSize, limit)
         : await db.getFilesWithoutHash(minSize, maxSize, limit);
       
       if (files.length === 0) {
-        spinner.succeed('No files without hashes found!');
+        spinner.succeed(useSmart ? 'No files with potential duplicates found!' : 'No files without hashes found!');
         await db.close();
         return;
       }
       
       const hashMethod = options.hashMethod || 'smart';
-      const optimizationMsg = options.optimizeLarge ? ` (optimized for large files >${Math.round(largeThreshold/1024/1024)}MB)` : '';
+      const optimizationMsg = useSmart ? ' (smart: only files with same size)' : ' (processing all files)';
       spinner.text = `Found ${files.length} files. Calculating hashes using ${hashMethod} method${optimizationMsg}...`;
       
       const scanner = new FileScanner();
@@ -941,7 +956,11 @@ program
       
       spinner.succeed('Hash update complete!');
       
-      console.log(chalk.green(`\n✓ Updated ${updated} file hashes`));
+      console.log(chalk.green(`\n✓ Updated ${updated} file hashes (${hashMethod} method)`));
+      if (useSmart) {
+        console.log(chalk.cyan(`ℹ Smart optimization: Only hashed files with same size (potential duplicates)`));
+        console.log(chalk.cyan(`  Use --no-smart to hash all files, or --stats to see optimization impact`));
+      }
       if (errors > 0) {
         console.log(chalk.yellow(`⚠ ${errors} files had errors (file not found or read error)`));
       }
