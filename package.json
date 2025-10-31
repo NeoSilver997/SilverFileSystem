@@ -1,0 +1,33 @@
+{
+  "name": "silverfilesystem",
+  "version": "1.0.0",
+  "description": "Node.js file management system for finding duplicates, empty files, large files and more across networks",
+  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "silverfs": "./bin/cli.js"
+  },
+  "scripts": {
+    "start": "node bin/cli.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "file-management",
+    "duplicate-finder",
+    "file-cleaner",
+    "network-files"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "commander": "^14.0.2",
+    "dotenv": "^17.2.3",
+    "exiftool-vendored": "^31.2.0",
+    "glob": "^11.0.3",
+    "music-metadata": "^11.9.0",
+    "mysql2": "^3.15.3",
+    "ora": "^9.0.0",
+    "sharp": "^0.34.4"
+  }
+}

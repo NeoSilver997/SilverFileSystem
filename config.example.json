@@ -1,0 +1,28 @@
+{
+  "scanner": {
+    "followSymlinks": false,
+    "maxDepth": 100,
+    "excludePatterns": [
+      "node_modules",
+      ".git",
+      ".cache",
+      "temp",
+      "tmp"
+    ]
+  },
+  "duplicates": {
+    "minSize": 0,
+    "useQuickHash": true
+  },
+  "largeFiles": {
+    "minSizeMB": 100,
+    "limit": 50
+  },
+  "database": {
+    "host": "localhost",
+    "port": 3306,
+    "user": "root",
+    "password": "",
+    "database": "silverfilesystem"
+  }
+}
