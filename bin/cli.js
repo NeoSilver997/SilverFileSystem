@@ -14,6 +14,9 @@ import { BrokenFilesFinder } from '../lib/broken.js';
 import { DatabaseManager } from '../lib/database.js';
 import { MediaMetadataExtractor } from '../lib/media.js';
 import { ReportGenerator } from '../lib/report.js';
+import { PhotoLibraryGenerator } from '../lib/photo-ui.js';
+import { MusicPlayerGenerator } from '../lib/music-ui.js';
+import { MoviePlayerGenerator } from '../lib/movie-ui.js';
 import { formatBytes, truncatePath, loadConfig } from '../lib/utils.js';
 import fs from 'fs/promises';
 
@@ -1341,6 +1344,229 @@ program
     } catch (err) {
       spinner.fail('Analysis failed');
       console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Generate photo library UI command
+program
+  .command('generate-photo-library')
+  .description('Generate interactive photo library web UI from database')
+  .argument('<output>', 'Output HTML file path')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .action(async (output, options) => {
+    const spinner = ora('Generating photo library UI...').start();
+    
+    try {
+      // Connect to database
+      const dbConfig = {
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      };
+      
+      const db = new DatabaseManager(dbConfig);
+      await db.connect();
+      
+      spinner.text = 'Retrieving photos from database...';
+      const photos = await db.getPhotosWithMetadata();
+      
+      if (photos.length === 0) {
+        spinner.warn('No photos with metadata found in database');
+        await db.close();
+        console.log(chalk.yellow('\nℹ️  Tip: Use "scan --db --extract-media" to extract photo metadata first'));
+        return;
+      }
+      
+      spinner.text = 'Calculating statistics...';
+      
+      // Calculate statistics
+      const totalSize = photos.reduce((sum, p) => sum + Number(p.size), 0);
+      const uniqueCameras = new Set(photos.map(p => p.camera_make).filter(Boolean)).size;
+      const withGPS = photos.filter(p => p.latitude !== null).length;
+      
+      const stats = {
+        totalPhotos: photos.length,
+        totalSize: formatBytes(totalSize),
+        uniqueCameras,
+        withGPS
+      };
+      
+      spinner.text = 'Generating HTML...';
+      const html = PhotoLibraryGenerator.generateHTML(photos, stats);
+      
+      await fs.writeFile(output, html);
+      await db.close();
+      
+      spinner.succeed(`Photo library UI generated successfully!`);
+      console.log(chalk.green(`\n✓ Output file: ${output}`));
+      console.log(chalk.cyan(`  📷 ${photos.length} photos`));
+      console.log(chalk.cyan(`  📁 ${formatBytes(totalSize)}`));
+      console.log(chalk.gray(`\nOpen the file in a web browser to view your photo library.`));
+      
+    } catch (err) {
+      spinner.fail('Generation failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      await closeDatabase();
+      process.exit(1);
+    }
+  });
+
+// Generate music player UI command
+program
+  .command('generate-music-player')
+  .description('Generate interactive music player web UI from database')
+  .argument('<output>', 'Output HTML file path')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .action(async (output, options) => {
+    const spinner = ora('Generating music player UI...').start();
+    
+    try {
+      // Connect to database
+      const dbConfig = {
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      };
+      
+      const db = new DatabaseManager(dbConfig);
+      await db.connect();
+      
+      spinner.text = 'Retrieving music tracks from database...';
+      const tracks = await db.getMusicWithMetadata();
+      
+      if (tracks.length === 0) {
+        spinner.warn('No music tracks with metadata found in database');
+        await db.close();
+        console.log(chalk.yellow('\nℹ️  Tip: Use "scan --db --extract-media" to extract music metadata first'));
+        return;
+      }
+      
+      spinner.text = 'Calculating statistics...';
+      
+      // Calculate statistics
+      const totalSize = tracks.reduce((sum, t) => sum + Number(t.size), 0);
+      const totalDuration = tracks.reduce((sum, t) => sum + (Number(t.duration) || 0), 0);
+      const uniqueAlbums = new Set(tracks.map(t => t.album).filter(Boolean)).size;
+      const uniqueArtists = new Set(tracks.map(t => t.artist).filter(Boolean)).size;
+      
+      const hours = Math.floor(totalDuration / 3600);
+      const mins = Math.floor((totalDuration % 3600) / 60);
+      
+      const stats = {
+        totalTracks: tracks.length,
+        totalAlbums: uniqueAlbums,
+        totalArtists: uniqueArtists,
+        totalDuration: `${hours}h ${mins}m`,
+        totalSize: formatBytes(totalSize)
+      };
+      
+      spinner.text = 'Generating HTML...';
+      const html = MusicPlayerGenerator.generateHTML(tracks, stats);
+      
+      await fs.writeFile(output, html);
+      await db.close();
+      
+      spinner.succeed(`Music player UI generated successfully!`);
+      console.log(chalk.green(`\n✓ Output file: ${output}`));
+      console.log(chalk.cyan(`  🎵 ${tracks.length} tracks`));
+      console.log(chalk.cyan(`  💿 ${uniqueAlbums} albums`));
+      console.log(chalk.cyan(`  🎤 ${uniqueArtists} artists`));
+      console.log(chalk.cyan(`  ⏱  ${hours}h ${mins}m total duration`));
+      console.log(chalk.gray(`\nOpen the file in a web browser to view your music collection.`));
+      
+    } catch (err) {
+      spinner.fail('Generation failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      await closeDatabase();
+      process.exit(1);
+    }
+  });
+
+// Generate movie player UI command
+program
+  .command('generate-movie-player')
+  .description('Generate interactive movie player web UI from database')
+  .argument('<output>', 'Output HTML file path')
+  .option('--db-host <host>', `Database host (default: ${config.database.host})`)
+  .option('--db-port <port>', `Database port (default: ${config.database.port})`)
+  .option('--db-user <user>', `Database user (default: ${config.database.user})`)
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .action(async (output, options) => {
+    const spinner = ora('Generating movie player UI...').start();
+    
+    try {
+      // Connect to database
+      const dbConfig = {
+        host: options.dbHost || config.database.host,
+        port: parseInt(options.dbPort || config.database.port),
+        user: options.dbUser || config.database.user,
+        password: options.dbPassword || config.database.password,
+        database: options.dbName || config.database.database
+      };
+      
+      const db = new DatabaseManager(dbConfig);
+      await db.connect();
+      
+      spinner.text = 'Retrieving movies from database...';
+      const movies = await db.getVideosWithMetadata();
+      
+      if (movies.length === 0) {
+        spinner.warn('No movies with metadata found in database');
+        await db.close();
+        console.log(chalk.yellow('\nℹ️  Tip: Use "scan --db --extract-media" to extract video metadata first'));
+        return;
+      }
+      
+      spinner.text = 'Calculating statistics...';
+      
+      // Calculate statistics
+      const totalSize = movies.reduce((sum, m) => sum + Number(m.size), 0);
+      const totalDuration = movies.reduce((sum, m) => sum + (Number(m.duration) || 0), 0);
+      const hdCount = movies.filter(m => m.width >= 1280 && m.width < 3840).length;
+      const fourKCount = movies.filter(m => m.width >= 3840).length;
+      
+      const hours = Math.floor(totalDuration / 3600);
+      const mins = Math.floor((totalDuration % 3600) / 60);
+      
+      const stats = {
+        totalMovies: movies.length,
+        totalDuration: `${hours}h ${mins}m`,
+        totalSize: formatBytes(totalSize),
+        hdCount,
+        fourKCount
+      };
+      
+      spinner.text = 'Generating HTML...';
+      const html = MoviePlayerGenerator.generateHTML(movies, stats);
+      
+      await fs.writeFile(output, html);
+      await db.close();
+      
+      spinner.succeed(`Movie player UI generated successfully!`);
+      console.log(chalk.green(`\n✓ Output file: ${output}`));
+      console.log(chalk.cyan(`  🎬 ${movies.length} movies`));
+      console.log(chalk.cyan(`  📺 ${hdCount} HD, ${fourKCount} 4K`));
+      console.log(chalk.cyan(`  ⏱  ${hours}h ${mins}m total duration`));
+      console.log(chalk.gray(`\nOpen the file in a web browser to view your movie collection.`));
+      
+    } catch (err) {
+      spinner.fail('Generation failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      await closeDatabase();
       process.exit(1);
     }
   });
