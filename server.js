@@ -2,6 +2,7 @@
 
 import express from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import { DatabaseManager } from './lib/database.js';
 import { loadConfig } from './lib/utils.js';
 import { fileURLToPath } from 'url';
@@ -14,10 +15,24 @@ const __dirname = dirname(__filename);
 const app = express();
 const config = loadConfig();
 
+// Rate limiting middleware
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.'
+});
+
+const strictLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: 'Too many requests from this IP, please try again later.'
+});
+
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
+app.use('/api/', apiLimiter);
 
 // Database connection
 let db = null;
@@ -275,6 +290,12 @@ app.get('/api/music/albums', async (req, res) => {
 app.get('/api/music/artist/:name', async (req, res) => {
   try {
     const artistName = decodeURIComponent(req.params.name);
+    
+    // Validate input
+    if (!artistName || artistName.length > 512) {
+      return res.status(400).json({ error: 'Invalid artist name' });
+    }
+    
     const tracks = await db.getMusicWithMetadata();
     const artistTracks = tracks.filter(t => t.artist === artistName);
     
@@ -288,6 +309,12 @@ app.get('/api/music/artist/:name', async (req, res) => {
 app.get('/api/music/album/:name', async (req, res) => {
   try {
     const albumName = decodeURIComponent(req.params.name);
+    
+    // Validate input
+    if (!albumName || albumName.length > 512) {
+      return res.status(400).json({ error: 'Invalid album name' });
+    }
+    
     const tracks = await db.getMusicWithMetadata();
     const albumTracks = tracks.filter(t => t.album === albumName);
     
@@ -506,7 +533,8 @@ async function startServer() {
       console.log(`\n📷 Photo Library: http://localhost:${PORT}/photos`);
       console.log(`🎵 Music Player: http://localhost:${PORT}/music`);
       console.log(`🎬 Movie Player: http://localhost:${PORT}/movies`);
-      console.log(`\n🔌 API Documentation: http://localhost:${PORT}\n`);
+      console.log(`\n🔌 API Endpoints: http://localhost:${PORT}/about`);
+      console.log(`📖 See SERVER_GUIDE.md for full API documentation\n`);
     });
   } catch (err) {
     console.error('❌ Failed to start server:', err.message);

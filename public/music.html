@@ -269,12 +269,15 @@
                 if (currentView === 'artists') {
                     const sidebarContent = document.getElementById('sidebarContent');
                     sidebarContent.innerHTML = '<h2 style="margin-top: 1.5rem;">Artists</h2>' + 
-                        artists.map(artist => `
-                            <div class="view-item" onclick="loadArtistTracks('${artist.name.replace(/'/g, "\\'")}')">
+                        artists.map(artist => {
+                            const safeName = artist.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                            return `
+                            <div class="view-item" onclick="loadArtistTracks('${safeName}')">
                                 <div class="view-name">${artist.name}</div>
                                 <div class="view-count">${artist.trackCount} tracks • ${artist.albumCount} albums</div>
                             </div>
-                        `).join('');
+                        `;
+                        }).join('');
                 }
             } catch (err) {
                 console.error('Error loading artists:', err);
@@ -292,12 +295,15 @@
                 if (currentView === 'albums') {
                     const sidebarContent = document.getElementById('sidebarContent');
                     sidebarContent.innerHTML = '<h2 style="margin-top: 1.5rem;">Albums</h2>' + 
-                        albums.map(album => `
-                            <div class="view-item" onclick="loadAlbumTracks('${album.name.replace(/'/g, "\\'")}')">
+                        albums.map(album => {
+                            const safeName = album.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                            return `
+                            <div class="view-item" onclick="loadAlbumTracks('${safeName}')">
                                 <div class="view-name">${album.name}</div>
                                 <div class="view-count">${album.artist || 'Various Artists'} • ${album.trackCount} tracks</div>
                             </div>
-                        `).join('');
+                        `;
+                        }).join('');
                 }
             } catch (err) {
                 console.error('Error loading albums:', err);

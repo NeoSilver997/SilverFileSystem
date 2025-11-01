@@ -27,6 +27,7 @@
     "dotenv": "^17.2.3",
     "exiftool-vendored": "^31.2.0",
     "express": "^5.1.0",
+    "express-rate-limit": "^8.2.1",
     "glob": "^11.0.3",
     "music-metadata": "^11.9.0",
     "mysql2": "^3.15.3",
