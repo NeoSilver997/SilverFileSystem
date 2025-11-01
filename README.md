@@ -11,6 +11,7 @@ A powerful Node.js file management system inspired by [Czkawka](https://github.c
 - ⚠️ **Invalid Names Finder** - Detect files with problematic names
 - 🗄️ **MySQL Database Storage** - Store scan results in MySQL for analysis and reporting
 - 📷 **Media Metadata Extraction** - Extract EXIF, ID3, and video metadata for photos, music, and movies
+- 🖼️ **Interactive Web UIs** - Beautiful web interfaces for photo library, music player, and movie player
 - 🌐 **Network Support** - Scan files across network paths and drives
 - ⚡ **Fast Scanning** - Optimized file scanning with quick hash support
 - 🎨 **Beautiful CLI** - Colorful and user-friendly command-line interface
@@ -32,6 +33,31 @@ npm link
 ```
 
 This allows you to use the `silverfs` command from anywhere.
+
+## Quick Start: Web Server
+
+Want to browse your media collection with a beautiful web interface? Start the web server:
+
+```bash
+# 1. First, scan your media and extract metadata
+node bin/cli.js scan /path/to/photos --db --extract-media
+node bin/cli.js scan /path/to/music --db --extract-media
+node bin/cli.js scan /path/to/movies --db --extract-media
+
+# 2. Start the web server
+npm run server
+
+# 3. Open your browser to http://localhost:3000
+```
+
+**Features:**
+- 📊 **Master Dashboard** - Overview of all media with storage breakdown
+- 📷 **Photo Library** - Browse photos with EXIF data, search by camera/location
+- 🎵 **Music Player** - Browse by artist/album, search tracks
+- 🎬 **Movie Player** - Browse by resolution, search movies
+- 🔌 **REST API** - Access your media programmatically
+
+See [SERVER_GUIDE.md](SERVER_GUIDE.md) for full documentation.
 
 ## Usage
 

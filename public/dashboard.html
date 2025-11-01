@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - SilverFileSystem Media Server</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        .header h1 {
+            font-size: 3.5rem;
+            margin-bottom: 0.5rem;
+            font-weight: 700;
+        }
+
+        .header p {
+            font-size: 1.3rem;
+            opacity: 0.9;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .summary-card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 2rem;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.3s, background 0.3s;
+            cursor: pointer;
+        }
+
+        .summary-card:hover {
+            transform: translateY(-5px);
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .card-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+
+        .card-title {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .card-stats {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .stat-row:last-child {
+            border-bottom: none;
+        }
+
+        .stat-label {
+            font-size: 1rem;
+            opacity: 0.8;
+        }
+
+        .stat-value {
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+
+        .overall-stats {
+            background: rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .overall-stats h2 {
+            font-size: 2rem;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+
+        .overall-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 2rem;
+        }
+
+        .overall-item {
+            text-align: center;
+        }
+
+        .overall-number {
+            font-size: 3rem;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+
+        .overall-label {
+            font-size: 1.1rem;
+            opacity: 0.8;
+        }
+
+        .storage-breakdown {
+            background: rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .storage-breakdown h2 {
+            font-size: 2rem;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+
+        .storage-bar {
+            height: 60px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 30px;
+            overflow: hidden;
+            display: flex;
+            margin-bottom: 2rem;
+        }
+
+        .storage-segment {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 1rem;
+            transition: all 0.3s;
+        }
+
+        .storage-segment:hover {
+            filter: brightness(1.2);
+        }
+
+        .storage-photos {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .storage-music {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+        }
+
+        .storage-movies {
+            background: linear-gradient(135deg, #141e30 0%, #243b55 100%);
+        }
+
+        .storage-legend {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .legend-color {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+        }
+
+        .legend-info {
+            flex: 1;
+        }
+
+        .legend-label {
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .legend-value {
+            font-size: 0.9rem;
+            opacity: 0.8;
+        }
+
+        .action-buttons {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .action-btn {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 1.5rem 2rem;
+            border-radius: 12px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .action-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 4rem 2rem;
+            font-size: 1.5rem;
+        }
+
+        .error {
+            text-align: center;
+            padding: 2rem;
+            background: rgba(231, 76, 60, 0.2);
+            border-radius: 12px;
+            margin: 2rem 0;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2.5rem;
+            }
+
+            .summary-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .storage-bar {
+                flex-direction: column;
+                height: auto;
+            }
+
+            .storage-segment {
+                min-height: 50px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎬 SilverFileSystem</h1>
+        <p>Media Library Dashboard</p>
+    </div>
+
+    <div class="container">
+        <div id="loadingMessage" class="loading">Loading dashboard...</div>
+        <div id="errorMessage" class="error" style="display: none;"></div>
+        <div id="dashboardContent" style="display: none;">
+            
+            <div class="overall-stats">
+                <h2>📊 Overall Statistics</h2>
+                <div class="overall-grid">
+                    <div class="overall-item">
+                        <div class="overall-number" id="totalFiles">-</div>
+                        <div class="overall-label">Total Media Files</div>
+                    </div>
+                    <div class="overall-item">
+                        <div class="overall-number" id="totalSize">-</div>
+                        <div class="overall-label">Total Storage</div>
+                    </div>
+                    <div class="overall-item">
+                        <div class="overall-number" id="totalDuration">-</div>
+                        <div class="overall-label">Total Duration</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="summary-grid">
+                <div class="summary-card" onclick="window.location.href='/photos'">
+                    <div class="card-icon">📷</div>
+                    <div class="card-title">Photo Library</div>
+                    <div class="card-stats">
+                        <div class="stat-row">
+                            <span class="stat-label">Total Photos</span>
+                            <span class="stat-value" id="photoCount">-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Storage Used</span>
+                            <span class="stat-value" id="photoSize">-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Cameras</span>
+                            <span class="stat-value" id="photoCameras">-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">With GPS</span>
+                            <span class="stat-value" id="photoGPS">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="summary-card" onclick="window.location.href='/music'">
+                    <div class="card-icon">🎵</div>
+                    <div class="card-title">Music Library</div>
+                    <div class="card-stats">
+                        <div class="stat-row">
+                            <span class="stat-label">Total Tracks</span>
+                            <span class="stat-value" id="musicCount">-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Storage Used</span>
+                            <span class="stat-value" id="musicSize">-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Artists</span>
+                            <span class="stat-value" id="musicArtists">-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Albums</span>
+                            <span class="stat-value" id="musicAlbums">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="summary-card" onclick="window.location.href='/movies'">
+                    <div class="card-icon">🎬</div>
+                    <div class="card-title">Movie Library</div>
+                    <div class="card-stats">
+                        <div class="stat-row">
+                            <span class="stat-label">Total Movies</span>
+                            <span class="stat-value" id="movieCount">-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Storage Used</span>
+                            <span class="stat-value" id="movieSize">-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">HD Movies</span>
+                            <span class="stat-value" id="movieHD">-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">4K Movies</span>
+                            <span class="stat-value" id="movie4K">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="storage-breakdown">
+                <h2>💾 Storage Breakdown</h2>
+                <div class="storage-bar" id="storageBar"></div>
+                <div class="storage-legend" id="storageLegend"></div>
+            </div>
+
+            <div class="action-buttons">
+                <a href="/photos" class="action-btn">📷 Browse Photos</a>
+                <a href="/music" class="action-btn">🎵 Play Music</a>
+                <a href="/movies" class="action-btn">🎬 Watch Movies</a>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        async function loadDashboard() {
+            try {
+                // Fetch all data in parallel
+                const [photosRes, musicRes, moviesRes] = await Promise.all([
+                    fetch('/api/photos'),
+                    fetch('/api/music'),
+                    fetch('/api/movies')
+                ]);
+
+                const photosData = await photosRes.json();
+                const musicData = await musicRes.json();
+                const moviesData = await moviesRes.json();
+
+                if (photosData.error || musicData.error || moviesData.error) {
+                    throw new Error('Failed to load data from API');
+                }
+
+                // Calculate totals
+                const totalFiles = photosData.photos.length + musicData.tracks.length + moviesData.movies.length;
+                
+                // Parse sizes (remove unit and convert to bytes)
+                const parseSizeToBytes = (sizeStr) => {
+                    const match = sizeStr.match(/^([\d.]+)\s*([A-Z]+)$/);
+                    if (!match) return 0;
+                    const value = parseFloat(match[1]);
+                    const unit = match[2];
+                    const multipliers = { 'B': 1, 'KB': 1024, 'MB': 1024*1024, 'GB': 1024*1024*1024, 'TB': 1024*1024*1024*1024 };
+                    return value * (multipliers[unit] || 0);
+                };
+
+                const photoBytes = parseSizeToBytes(photosData.stats.totalSize);
+                const musicBytes = parseSizeToBytes(musicData.stats.totalSize);
+                const movieBytes = parseSizeToBytes(moviesData.stats.totalSize);
+                const totalBytes = photoBytes + musicBytes + movieBytes;
+
+                // Calculate total duration (music + movies)
+                const parseDuration = (durationStr) => {
+                    const match = durationStr.match(/(\d+)h\s*(\d+)m/);
+                    if (!match) return 0;
+                    return parseInt(match[1]) * 60 + parseInt(match[2]);
+                };
+
+                const musicMinutes = parseDuration(musicData.stats.totalDuration);
+                const movieMinutes = parseDuration(moviesData.stats.totalDuration);
+                const totalMinutes = musicMinutes + movieMinutes;
+                const totalHours = Math.floor(totalMinutes / 60);
+                const remainingMinutes = totalMinutes % 60;
+
+                // Update overall stats
+                document.getElementById('totalFiles').textContent = totalFiles.toLocaleString();
+                document.getElementById('totalSize').textContent = formatBytes(totalBytes);
+                document.getElementById('totalDuration').textContent = `${totalHours}h ${remainingMinutes}m`;
+
+                // Update photo stats
+                document.getElementById('photoCount').textContent = photosData.stats.totalPhotos;
+                document.getElementById('photoSize').textContent = photosData.stats.totalSize;
+                document.getElementById('photoCameras').textContent = photosData.stats.uniqueCameras;
+                document.getElementById('photoGPS').textContent = photosData.stats.withGPS;
+
+                // Update music stats
+                document.getElementById('musicCount').textContent = musicData.stats.totalTracks;
+                document.getElementById('musicSize').textContent = musicData.stats.totalSize;
+                document.getElementById('musicArtists').textContent = musicData.stats.totalArtists;
+                document.getElementById('musicAlbums').textContent = musicData.stats.totalAlbums;
+
+                // Update movie stats
+                document.getElementById('movieCount').textContent = moviesData.stats.totalMovies;
+                document.getElementById('movieSize').textContent = moviesData.stats.totalSize;
+                document.getElementById('movieHD').textContent = moviesData.stats.hdCount;
+                document.getElementById('movie4K').textContent = moviesData.stats.fourKCount;
+
+                // Create storage bar
+                const photoPercent = (photoBytes / totalBytes * 100).toFixed(1);
+                const musicPercent = (musicBytes / totalBytes * 100).toFixed(1);
+                const moviePercent = (movieBytes / totalBytes * 100).toFixed(1);
+
+                document.getElementById('storageBar').innerHTML = `
+                    <div class="storage-segment storage-photos" style="width: ${photoPercent}%">
+                        ${photoPercent > 10 ? photoPercent + '%' : ''}
+                    </div>
+                    <div class="storage-segment storage-music" style="width: ${musicPercent}%">
+                        ${musicPercent > 10 ? musicPercent + '%' : ''}
+                    </div>
+                    <div class="storage-segment storage-movies" style="width: ${moviePercent}%">
+                        ${moviePercent > 10 ? moviePercent + '%' : ''}
+                    </div>
+                `;
+
+                document.getElementById('storageLegend').innerHTML = `
+                    <div class="legend-item">
+                        <div class="legend-color storage-photos"></div>
+                        <div class="legend-info">
+                            <div class="legend-label">📷 Photos</div>
+                            <div class="legend-value">${photosData.stats.totalSize} (${photoPercent}%)</div>
+                        </div>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color storage-music"></div>
+                        <div class="legend-info">
+                            <div class="legend-label">🎵 Music</div>
+                            <div class="legend-value">${musicData.stats.totalSize} (${musicPercent}%)</div>
+                        </div>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color storage-movies"></div>
+                        <div class="legend-info">
+                            <div class="legend-label">🎬 Movies</div>
+                            <div class="legend-value">${moviesData.stats.totalSize} (${moviePercent}%)</div>
+                        </div>
+                    </div>
+                `;
+
+                // Show dashboard
+                document.getElementById('loadingMessage').style.display = 'none';
+                document.getElementById('dashboardContent').style.display = 'block';
+
+            } catch (err) {
+                document.getElementById('loadingMessage').style.display = 'none';
+                const errorEl = document.getElementById('errorMessage');
+                errorEl.textContent = `Error loading dashboard: ${err.message}`;
+                errorEl.style.display = 'block';
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // Load dashboard on page load
+        loadDashboard();
+    </script>
+</body>
+</html>
