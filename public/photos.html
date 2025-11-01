@@ -94,6 +94,13 @@
             display: flex;
             gap: 0.5rem;
             flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .filter-label {
+            font-weight: 600;
+            color: #2c3e50;
+            font-size: 0.9rem;
         }
 
         .filter-btn {
@@ -290,6 +297,13 @@
             <button class="filter-btn" data-filter="portrait">Portrait</button>
             <button class="filter-btn" data-filter="landscape">Landscape</button>
         </div>
+        <div class="filter-group">
+            <span class="filter-label">Format:</span>
+            <button class="filter-btn" data-filter="jpg">JPG</button>
+            <button class="filter-btn" data-filter="png">PNG</button>
+            <button class="filter-btn" data-filter="heic">HEIC</button>
+            <button class="filter-btn" data-filter="gif">GIF</button>
+        </div>
         <div class="view-toggle">
             <button class="view-btn active" data-view="grid">Grid</button>
             <button class="view-btn" data-view="list">List</button>
@@ -350,7 +364,8 @@
                 container.innerHTML = data.photos.map(photo => `
                     <div class="photo-card">
                         <div class="photo-thumbnail">
-                            <span class="photo-icon">📷</span>
+                            <img src="/images/${photo.id}" alt="${photo.name}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                            <span class="photo-icon" style="display: none;">📷</span>
                         </div>
                         <div class="photo-info">
                             <div class="photo-name" title="${photo.name}">${photo.name}</div>

@@ -397,26 +397,46 @@
     <script>
         async function loadDashboard() {
             try {
-                // Fetch all data in parallel
-                const [photosRes, musicRes, moviesRes] = await Promise.all([
-                    fetch('/api/photos'),
-                    fetch('/api/music'),
-                    fetch('/api/movies')
-                ]);
+                // Fetch summary data from cached API
+                const summaryRes = await fetch('/api/summary');
+                const summary = await summaryRes.json();
 
-                const photosData = await photosRes.json();
-                const musicData = await musicRes.json();
-                const moviesData = await moviesRes.json();
-
-                if (photosData.error || musicData.error || moviesData.error) {
-                    throw new Error('Failed to load data from API');
+                if (summary.error) {
+                    throw new Error('Failed to load summary data');
                 }
 
-                // Calculate totals
-                const totalFiles = photosData.photos.length + musicData.tracks.length + moviesData.movies.length;
-                
-                // Parse sizes (remove unit and convert to bytes)
+                // Update overall stats from cached summary
+                document.getElementById('totalFiles').textContent = summary.totalFiles.toLocaleString();
+                document.getElementById('totalSize').textContent = summary.totalSize;
+                document.getElementById('totalDuration').textContent = summary.totalDuration;
+
+                // Update photo stats from cached summary
+                document.getElementById('photoCount').textContent = summary.breakdown.photos.totalPhotos;
+                document.getElementById('photoSize').textContent = summary.breakdown.photos.totalSize;
+                document.getElementById('photoCameras').textContent = summary.breakdown.photos.uniqueCameras;
+                document.getElementById('photoGPS').textContent = summary.breakdown.photos.withGPS;
+
+                // Update music stats from cached summary
+                document.getElementById('musicCount').textContent = summary.breakdown.music.totalTracks;
+                document.getElementById('musicSize').textContent = summary.breakdown.music.totalSize;
+                document.getElementById('musicArtists').textContent = summary.breakdown.music.totalArtists;
+                document.getElementById('musicAlbums').textContent = summary.breakdown.music.totalAlbums;
+
+                // Update movie stats from cached summary
+                document.getElementById('movieCount').textContent = summary.breakdown.movies.totalMovies;
+                document.getElementById('movieSize').textContent = summary.breakdown.movies.totalSize;
+                document.getElementById('movieHD').textContent = summary.breakdown.movies.hdCount;
+                document.getElementById('movie4K').textContent = summary.breakdown.movies.fourKCount;
+
+                // Create storage bar using cached summary data
+                const photoBytes = summary.breakdown.photos.totalSize;
+                const musicBytes = summary.breakdown.music.totalSize;
+                const movieBytes = summary.breakdown.movies.totalSize;
+                const totalBytes = summary.totalSizeBytes;
+
+                // Parse size strings back to bytes for percentage calculation
                 const parseSizeToBytes = (sizeStr) => {
+                    if (!sizeStr) return 0;
                     const match = sizeStr.match(/^([\d.]+)\s*([A-Z]+)$/);
                     if (!match) return 0;
                     const value = parseFloat(match[1]);
@@ -425,51 +445,13 @@
                     return value * (multipliers[unit] || 0);
                 };
 
-                const photoBytes = parseSizeToBytes(photosData.stats.totalSize);
-                const musicBytes = parseSizeToBytes(musicData.stats.totalSize);
-                const movieBytes = parseSizeToBytes(moviesData.stats.totalSize);
-                const totalBytes = photoBytes + musicBytes + movieBytes;
+                const photoBytesNum = parseSizeToBytes(photoBytes);
+                const musicBytesNum = parseSizeToBytes(musicBytes);
+                const movieBytesNum = parseSizeToBytes(movieBytes);
 
-                // Calculate total duration (music + movies)
-                const parseDuration = (durationStr) => {
-                    const match = durationStr.match(/(\d+)h\s*(\d+)m/);
-                    if (!match) return 0;
-                    return parseInt(match[1]) * 60 + parseInt(match[2]);
-                };
-
-                const musicMinutes = parseDuration(musicData.stats.totalDuration);
-                const movieMinutes = parseDuration(moviesData.stats.totalDuration);
-                const totalMinutes = musicMinutes + movieMinutes;
-                const totalHours = Math.floor(totalMinutes / 60);
-                const remainingMinutes = totalMinutes % 60;
-
-                // Update overall stats
-                document.getElementById('totalFiles').textContent = totalFiles.toLocaleString();
-                document.getElementById('totalSize').textContent = formatBytes(totalBytes);
-                document.getElementById('totalDuration').textContent = `${totalHours}h ${remainingMinutes}m`;
-
-                // Update photo stats
-                document.getElementById('photoCount').textContent = photosData.stats.totalPhotos;
-                document.getElementById('photoSize').textContent = photosData.stats.totalSize;
-                document.getElementById('photoCameras').textContent = photosData.stats.uniqueCameras;
-                document.getElementById('photoGPS').textContent = photosData.stats.withGPS;
-
-                // Update music stats
-                document.getElementById('musicCount').textContent = musicData.stats.totalTracks;
-                document.getElementById('musicSize').textContent = musicData.stats.totalSize;
-                document.getElementById('musicArtists').textContent = musicData.stats.totalArtists;
-                document.getElementById('musicAlbums').textContent = musicData.stats.totalAlbums;
-
-                // Update movie stats
-                document.getElementById('movieCount').textContent = moviesData.stats.totalMovies;
-                document.getElementById('movieSize').textContent = moviesData.stats.totalSize;
-                document.getElementById('movieHD').textContent = moviesData.stats.hdCount;
-                document.getElementById('movie4K').textContent = moviesData.stats.fourKCount;
-
-                // Create storage bar
-                const photoPercent = (photoBytes / totalBytes * 100).toFixed(1);
-                const musicPercent = (musicBytes / totalBytes * 100).toFixed(1);
-                const moviePercent = (movieBytes / totalBytes * 100).toFixed(1);
+                const photoPercent = totalBytes > 0 ? (photoBytesNum / totalBytes * 100).toFixed(1) : 0;
+                const musicPercent = totalBytes > 0 ? (musicBytesNum / totalBytes * 100).toFixed(1) : 0;
+                const moviePercent = totalBytes > 0 ? (movieBytesNum / totalBytes * 100).toFixed(1) : 0;
 
                 document.getElementById('storageBar').innerHTML = `
                     <div class="storage-segment storage-photos" style="width: ${photoPercent}%">
@@ -488,21 +470,21 @@
                         <div class="legend-color storage-photos"></div>
                         <div class="legend-info">
                             <div class="legend-label">📷 Photos</div>
-                            <div class="legend-value">${photosData.stats.totalSize} (${photoPercent}%)</div>
+                            <div class="legend-value">${photoBytes} (${photoPercent}%)</div>
                         </div>
                     </div>
                     <div class="legend-item">
                         <div class="legend-color storage-music"></div>
                         <div class="legend-info">
                             <div class="legend-label">🎵 Music</div>
-                            <div class="legend-value">${musicData.stats.totalSize} (${musicPercent}%)</div>
+                            <div class="legend-value">${musicBytes} (${musicPercent}%)</div>
                         </div>
                     </div>
                     <div class="legend-item">
                         <div class="legend-color storage-movies"></div>
                         <div class="legend-info">
                             <div class="legend-label">🎬 Movies</div>
-                            <div class="legend-value">${moviesData.stats.totalSize} (${moviePercent}%)</div>
+                            <div class="legend-value">${movieBytes} (${moviePercent}%)</div>
                         </div>
                     </div>
                 `;

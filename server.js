@@ -8,6 +8,7 @@ import { loadConfig } from './lib/utils.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
+import path from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -46,10 +47,64 @@ async function initDatabase(dbConfig = {}) {
     password: dbConfig.password || config.database.password,
     database: dbConfig.database || config.database.database
   };
-  
+
   db = new DatabaseManager(finalConfig);
   await db.connect();
   console.log('✓ Connected to database');
+
+  // Serve image files (after database is initialized)
+  app.get('/images/:id', async (req, res) => {
+    try {
+      const fileId = req.params.id;
+
+      // Get file path from database
+      const photo = await db.connection.query(
+        'SELECT path FROM scanned_files WHERE id = ?',
+        [fileId]
+      );
+
+      if (photo[0].length === 0) {
+        return res.status(404).json({ error: 'Image not found' });
+      }
+
+      const filePath = photo[0][0].path;
+
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'File not found on disk' });
+      }
+
+      // Set appropriate content type based on file extension
+      const ext = path.extname(filePath).toLowerCase();
+      const contentTypes = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.bmp': 'image/bmp',
+        '.tiff': 'image/tiff',
+        '.webp': 'image/webp',
+        '.heic': 'image/heic',
+        '.heif': 'image/heif'
+      };
+
+      const contentType = contentTypes[ext] || 'application/octet-stream';
+      res.setHeader('Content-Type', contentType);
+
+      // Stream the file
+      const fileStream = fs.createReadStream(filePath);
+      fileStream.pipe(res);
+
+      fileStream.on('error', (err) => {
+        console.error('Error streaming file:', err);
+        res.status(500).json({ error: 'Error serving image' });
+      });
+
+    } catch (err) {
+      console.error('Error serving image:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
 }
 
 // Helper function to format bytes
@@ -68,12 +123,125 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', database: db ? 'connected' : 'disconnected' });
 });
 
+// Cached summary data
+let summaryCache = null;
+let summaryCacheTime = 0;
+const SUMMARY_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+// Get cached summary statistics for dashboard header
+app.get('/api/summary', async (req, res) => {
+  try {
+    const now = Date.now();
+    
+    // Return cached data if still valid
+    if (summaryCache && (now - summaryCacheTime) < SUMMARY_CACHE_DURATION) {
+      return res.json(summaryCache);
+    }
+    
+    // Fetch fresh data from all APIs
+    const [photosData, musicData, moviesData] = await Promise.all([
+      db.getPhotosWithMetadata(),
+      db.getMusicWithMetadata(),
+      db.getVideosWithMetadata()
+    ]);
+    
+    // Calculate totals
+    const totalFiles = photosData.length + musicData.length + moviesData.length;
+    
+    // Calculate total size in bytes
+    const parseSizeToBytes = (sizeStr) => {
+      if (!sizeStr) return 0;
+      const match = sizeStr.match(/^([\d.]+)\s*([A-Z]+)$/);
+      if (!match) return 0;
+      const value = parseFloat(match[1]);
+      const unit = match[2];
+      const multipliers = { 'B': 1, 'KB': 1024, 'MB': 1024*1024, 'GB': 1024*1024*1024, 'TB': 1024*1024*1024*1024 };
+      return value * (multipliers[unit] || 0);
+    };
+    
+    let totalBytes = 0;
+    photosData.forEach(p => totalBytes += Number(p.size || 0));
+    musicData.forEach(m => totalBytes += Number(m.size || 0));
+    moviesData.forEach(m => totalBytes += Number(m.size || 0));
+    
+    // Calculate total duration in minutes
+    const parseDuration = (durationStr) => {
+      if (!durationStr) return 0;
+      const match = durationStr.match(/(\d+)h\s*(\d+)m/);
+      if (!match) return 0;
+      return parseInt(match[1]) * 60 + parseInt(match[2]);
+    };
+    
+    let totalMinutes = 0;
+    musicData.forEach(m => totalMinutes += parseDuration(m.duration || ''));
+    moviesData.forEach(m => totalMinutes += parseDuration(m.duration || ''));
+    
+    const totalHours = Math.floor(totalMinutes / 60);
+    const remainingMinutes = totalMinutes % 60;
+    
+    // Calculate detailed stats for each media type
+    const photosStats = {
+      totalPhotos: photosData.length,
+      totalSize: formatBytes(photosData.reduce((sum, p) => sum + Number(p.size || 0), 0)),
+      uniqueCameras: new Set(photosData.map(p => p.camera_make).filter(Boolean)).size,
+      withGPS: photosData.filter(p => p.latitude !== null).length
+    };
+
+    const musicStats = {
+      totalTracks: musicData.length,
+      totalSize: formatBytes(musicData.reduce((sum, m) => sum + Number(m.size || 0), 0)),
+      totalArtists: new Set(musicData.map(m => m.artist).filter(Boolean)).size,
+      totalAlbums: new Set(musicData.map(m => m.album).filter(Boolean)).size
+    };
+
+    const moviesStats = {
+      totalMovies: moviesData.length,
+      totalSize: formatBytes(moviesData.reduce((sum, m) => sum + Number(m.size || 0), 0)),
+      hdCount: moviesData.filter(m => m.width >= 1280 && m.width < 3840).length,
+      fourKCount: moviesData.filter(m => m.width >= 3840).length
+    };
+
+    // Create summary object
+    const summary = {
+      totalFiles,
+      totalSize: formatBytes(totalBytes),
+      totalSizeBytes: totalBytes,
+      totalDuration: `${totalHours}h ${remainingMinutes}m`,
+      totalDurationMinutes: totalMinutes,
+      breakdown: {
+        photos: photosStats,
+        music: musicStats,
+        movies: moviesStats
+      },
+      lastUpdated: new Date().toISOString(),
+      cacheExpiry: new Date(now + SUMMARY_CACHE_DURATION).toISOString()
+    };
+    
+    // Cache the summary
+    summaryCache = summary;
+    summaryCacheTime = now;
+    
+    res.json(summary);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get all photos with optional search and filters
 app.get('/api/photos', async (req, res) => {
   try {
     const { search, filter } = req.query;
     
     let photos = await db.getPhotosWithMetadata();
+    
+    // Filter out photos with future dates
+    const now = new Date();
+    photos = photos.filter(photo => {
+      if (!photo.date_taken) return true; // Keep photos without dates
+      const photoDate = new Date(photo.date_taken);
+      return photoDate <= now;
+    });
+    
     
     // Apply search
     if (search) {
@@ -93,6 +261,13 @@ app.get('/api/photos', async (req, res) => {
       photos = photos.filter(photo => photo.height > photo.width);
     } else if (filter === 'landscape') {
       photos = photos.filter(photo => photo.width > photo.height);
+    } else if (filter && ['jpg', 'jpeg', 'png', 'heic', 'gif'].includes(filter.toLowerCase())) {
+      // Extension filter
+      const ext = filter.toLowerCase();
+      photos = photos.filter(photo => {
+        const photoExt = photo.name.split('.').pop().toLowerCase();
+        return photoExt === ext;
+      });
     }
     
     // Calculate stats
@@ -511,7 +686,7 @@ app.get('/movies', (req, res) => {
 
 // ==================== START SERVER ====================
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 4000;
 
 async function startServer() {
   try {
