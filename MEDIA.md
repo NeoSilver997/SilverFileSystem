@@ -92,6 +92,38 @@ node bin/cli.js extract-media-from-db --limit 50
 node bin/cli.js extract-media-from-db --skip-existing
 ```
 
+### Fix Music Metadata Encoding Issues
+
+If you have music files with garbled character encoding (especially Chinese, Japanese, or other non-ASCII characters):
+
+```bash
+# Fix encoding for a specific file by ID
+node bin/cli.js fix-music-encoding --id 18730
+
+# Fix encoding for a specific file by path
+node bin/cli.js fix-music-encoding --path "D:\Music\artist\song.mp3"
+
+# Preview changes without applying them
+node bin/cli.js fix-music-encoding --id 18730 --dry-run
+
+# Batch fix all music files with encoding issues
+node bin/cli.js fix-all-music-encoding --limit 100
+
+# Preview batch changes
+node bin/cli.js fix-all-music-encoding --dry-run --limit 50
+```
+
+**Common Encoding Issues:**
+- Chinese characters showing as: `¤j­·§j`, `³\§Ó¦w`, `¼sªF·sºq`
+- Japanese characters showing as: `Ç¯Ç¯ÇéÇÊÇ§Ç»Ç½`, `¥É¸m¯E¤G`
+- Special characters showing as: `Äêªd`, `·¥¼Ö`, `ÄøÄø±ý°Ê`
+
+**How it works:**
+- Re-extracts metadata from the original MP3/music file
+- Applies improved character encoding detection and conversion
+- Uses UTF8MB4 database charset for proper multi-byte character support
+- Tries multiple encoding formats (Shift_JIS, GBK, Big5, EUC-JP, EUC-KR)
+
 **Benefits:**
 - No need to rescan the file system
 - Works with existing database records

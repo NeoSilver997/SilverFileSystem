@@ -4,12 +4,20 @@ This guide demonstrates the complete workflow for detecting and reporting duplic
 
 ## Overview
 
-SilverFileSystem provides a powerful workflow for managing duplicate files:
+SilverFileSystem provides a powerful workflow for managing duplicate files and folders:
 
 1. **Scan** - Scan directories and store file information in database
 2. **Update Hashes** - Calculate file hashes for duplicate detection
-3. **Find Duplicates** - Query duplicate files from database
+3. **Find Duplicates** - Query duplicate files and folders from database
 4. **Generate Report** - Create interactive HTML reports
+
+## Duplicates
+
+### File Duplicates
+SilverFileSystem can find duplicate files by comparing SHA-256 hashes, providing accurate detection of identical content regardless of filename or location.
+
+### Folder Duplicates  
+SilverFileSystem can also find duplicate folders by comparing folder size and file count, helping identify redundant directory structures and backup copies.
 
 ## Prerequisites
 
@@ -18,7 +26,9 @@ SilverFileSystem provides a powerful workflow for managing duplicate files:
 
 ## Complete Workflow
 
-### Step 1: Initial Scan
+### File Duplicates Workflow
+
+#### Step 1: Initial Scan
 
 Scan your directories and store file information in the database:
 
@@ -131,6 +141,91 @@ node bin/cli.js find-duplicates-db --report ~/duplicates-$(date +%Y%m%d).html
 echo "Done! Open the HTML report to review duplicates."
 ```
 
+### Folder Duplicates Workflow
+
+#### Step 1: Update Folder Statistics
+
+Ensure all folder sizes and file counts are current:
+
+```bash
+# Update folder statistics (file counts and sizes)
+node bin/cli.js update-folder-stats
+```
+
+**What happens:**
+- Calculates file count and total size for each folder
+- Updates the folders table with current statistics
+- Required for accurate duplicate folder detection
+
+#### Step 2: Find Duplicate Folders
+
+Find folders with identical size and file count:
+
+```bash
+# Find all duplicate folders
+node bin/cli.js find-duplicate-folders
+
+# Find larger duplicate folders (minimum 10MB)
+node bin/cli.js find-duplicate-folders -m 10485760
+
+# Find folders with many files (minimum 10 files)
+node bin/cli.js find-duplicate-folders -f 10
+
+# Combine filters and generate report
+node bin/cli.js find-duplicate-folders -m 104857600 -f 20 -r "folder-duplicates.html"
+```
+
+**What happens:**
+- Queries database for folders with identical total_size and file_count
+- Groups duplicate folders together
+- Calculates wasted space from redundant folders
+- Displays results in console
+- Optionally generates HTML report
+
+#### Step 3: Generate Folder Duplicates Report
+
+Create an interactive HTML report specifically for folder duplicates:
+
+```bash
+# Generate folder duplicates report
+node bin/cli.js generate-folder-report "folder-duplicates.html"
+
+# Generate report for large folders only (100MB+)
+node bin/cli.js generate-folder-report "large-folders.html" -m 104857600
+
+# Filter by both size and file count
+node bin/cli.js generate-folder-report "filtered-folders.html" -m 10485760 -f 5
+```
+
+**Folder Report Features:**
+- 📊 Summary statistics (groups, folders, wasted space)
+- 🔍 Real-time search by folder path
+- 📁 Expandable duplicate groups showing all folder paths
+- 🔄 Filter buttons (All, Large Folders >100MB, Many Files >50, High Waste >1GB)
+- 📅 Folder details including IDs and names
+- 🎨 Beautiful responsive design
+- 📱 Mobile-friendly interface
+
+## Example: Complete Folder Duplicates Workflow
+
+Here's a complete example for finding folder duplicates:
+
+```bash
+# 1. Ensure folder statistics are current
+echo "Step 1: Updating folder statistics..."
+node bin/cli.js update-folder-stats
+
+# 2. Find duplicate folders with reasonable filters
+echo "Step 2: Finding duplicate folders..."
+node bin/cli.js find-duplicate-folders -m 10485760 -f 5
+
+# 3. Generate detailed HTML report
+echo "Step 3: Generating interactive report..."
+node bin/cli.js generate-folder-report ~/folder-duplicates-$(date +%Y%m%d).html -m 10485760 -f 5
+
+echo "Done! Open the HTML report to review folder duplicates."
+```
+
 ## Advanced Usage
 
 ### Incremental Updates
@@ -203,6 +298,38 @@ FROM (
   GROUP BY hash, size
   HAVING count > 1
 ) duplicates;
+
+-- Folder duplicate queries
+-- Find duplicate folders by size and file count
+SELECT 
+  total_size / 1024 / 1024 as size_mb,
+  file_count,
+  COUNT(*) as duplicate_count,
+  (COUNT(*) - 1) * total_size / 1024 / 1024 as wasted_mb
+FROM folders
+WHERE total_size > 0 AND file_count > 0
+GROUP BY total_size, file_count
+HAVING COUNT(*) > 1
+ORDER BY wasted_mb DESC;
+
+-- Get all folders in a duplicate size group
+SELECT full_path, total_size / 1024 / 1024 as size_mb, file_count
+FROM folders
+WHERE total_size = 'your-size-here' AND file_count = 'your-count-here'
+ORDER BY full_path;
+
+-- Find largest wasted space from folder duplicates
+SELECT 
+  f1.full_path as folder1,
+  f2.full_path as folder2,
+  f1.total_size / 1024 / 1024 as size_mb,
+  f1.file_count
+FROM folders f1
+JOIN folders f2 ON f1.total_size = f2.total_size 
+  AND f1.file_count = f2.file_count 
+  AND f1.id < f2.id
+WHERE f1.total_size > 100 * 1024 * 1024  -- > 100MB
+ORDER BY f1.total_size DESC;
 ```
 
 ## Tips and Best Practices
@@ -317,13 +444,21 @@ After identifying duplicates:
 
 ## Conclusion
 
-The database-driven workflow provides efficient duplicate detection:
+The database-driven workflow provides efficient duplicate detection for both files and folders:
 
+### File Duplicates:
 - ✅ Scan files once, query many times
 - ✅ No re-scanning needed for duplicate checks
 - ✅ Fast queries on indexed database
 - ✅ Beautiful HTML reports for review
 - ✅ Safe - read-only operations
+
+### Folder Duplicates:
+- ✅ Identify redundant folder structures
+- ✅ Find backup copies and sync duplicates
+- ✅ Calculate wasted disk space from duplicate folders
+- ✅ Interactive HTML reports with search and filtering
+- ✅ Based on folder size and file count matching
 
 For more information, see:
 - [README.md](README.md) - General usage

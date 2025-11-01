@@ -303,6 +303,10 @@ node bin/cli.js extract-media-from-db --skip-existing
 
 # Custom database connection
 node bin/cli.js extract-media-from-db --db-host localhost --db-user myuser --db-password mypass
+
+# Fix music encoding issues for specific files
+node bin/cli.js fix-music-encoding --id 18730
+node bin/cli.js fix-all-music-encoding --limit 100
 ```
 
 This command:
@@ -311,6 +315,7 @@ This command:
 - Extracts metadata only for photo, music, and video files
 - Stores metadata in the appropriate database tables
 - Shows progress and summary statistics
+- **NEW**: Includes encoding fix for garbled Chinese/Japanese music tags
 
 ### Database Tables for Media
 
