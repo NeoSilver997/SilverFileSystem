@@ -16,12 +16,12 @@
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             min-height: 100vh;
-            padding: 2rem;
+            padding: 1rem;
         }
 
         .header {
             text-align: center;
-            margin-bottom: 3rem;
+            margin-bottom: 2rem;
         }
 
         .header h1 {
@@ -43,15 +43,15 @@
         .summary-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 2rem;
-            margin-bottom: 3rem;
+            gap: 1rem;
+            margin-bottom: 2rem;
         }
 
         .summary-card {
             background: rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
             border-radius: 16px;
-            padding: 2rem;
+            padding: 1.5rem;
             border: 2px solid rgba(255, 255, 255, 0.2);
             transition: transform 0.3s, background 0.3s;
             cursor: pointer;
@@ -105,8 +105,8 @@
             background: rgba(0, 0, 0, 0.2);
             backdrop-filter: blur(10px);
             border-radius: 16px;
-            padding: 2rem;
-            margin-bottom: 3rem;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
         }
 
         .overall-stats h2 {
@@ -136,12 +136,60 @@
             opacity: 0.8;
         }
 
+        .cli-tools {
+            background: rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .cli-tools h2 {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+        
+        .cli-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+        
+        .cli-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 1rem;
+            border-radius: 12px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s;
+        }
+        
+        .cli-card:hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+        
+        .cli-title {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            font-size: 1.1rem;
+        }
+        
+        .cli-command {
+            font-family: 'Courier New', monospace;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 0.5rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            word-break: break-all;
+        }
+        
         .storage-breakdown {
             background: rgba(0, 0, 0, 0.2);
             backdrop-filter: blur(10px);
             border-radius: 16px;
-            padding: 2rem;
-            margin-bottom: 3rem;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
         }
 
         .storage-breakdown h2 {
@@ -375,6 +423,36 @@
                             <span class="stat-label">4K Movies</span>
                             <span class="stat-value" id="movie4K">-</span>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="cli-tools">
+                <h2>🛠️ CLI Tools</h2>
+                <div class="cli-grid">
+                    <div class="cli-card">
+                        <div class="cli-title">📂 Scan Directory</div>
+                        <div class="cli-command">silverfs scan /path/to/folder --db</div>
+                    </div>
+                    <div class="cli-card">
+                        <div class="cli-title">🔍 Find Duplicates</div>
+                        <div class="cli-command">silverfs duplicates /path --db</div>
+                    </div>
+                    <div class="cli-card">
+                        <div class="cli-title">📸 Extract Media</div>
+                        <div class="cli-command">silverfs scan /path --db --extract-media</div>
+                    </div>
+                    <div class="cli-card">
+                        <div class="cli-title">📊 Generate Report</div>
+                        <div class="cli-command">silverfs generate-report report.html</div>
+                    </div>
+                    <div class="cli-card">
+                        <div class="cli-title">📁 Find Empty Files</div>
+                        <div class="cli-command">silverfs empty-files /path</div>
+                    </div>
+                    <div class="cli-card">
+                        <div class="cli-title">💾 Find Large Files</div>
+                        <div class="cli-command">silverfs large-files /path -m 100</div>
                     </div>
                 </div>
             </div>

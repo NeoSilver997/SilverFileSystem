@@ -105,6 +105,151 @@ async function initDatabase(dbConfig = {}) {
       res.status(500).json({ error: 'Internal server error' });
     }
   });
+
+  // Serve audio files
+  app.get('/audio/:id', async (req, res) => {
+    try {
+      const fileId = req.params.id;
+
+      // Get file path from database
+      const audio = await db.connection.query(
+        'SELECT path FROM scanned_files WHERE id = ?',
+        [fileId]
+      );
+
+      if (audio[0].length === 0) {
+        return res.status(404).json({ error: 'Audio not found' });
+      }
+
+      const filePath = audio[0][0].path;
+
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'File not found on disk' });
+      }
+
+      // Set appropriate content type
+      const ext = path.extname(filePath).toLowerCase();
+      const contentTypes = {
+        '.mp3': 'audio/mpeg',
+        '.flac': 'audio/flac',
+        '.wav': 'audio/wav',
+        '.aac': 'audio/aac',
+        '.m4a': 'audio/mp4',
+        '.ogg': 'audio/ogg',
+        '.wma': 'audio/x-ms-wma',
+        '.opus': 'audio/opus'
+      };
+
+      const contentType = contentTypes[ext] || 'audio/mpeg';
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Accept-Ranges', 'bytes');
+
+      // Get file stats
+      const stat = fs.statSync(filePath);
+      const fileSize = stat.size;
+      const range = req.headers.range;
+
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunksize = (end - start) + 1;
+        const fileStream = fs.createReadStream(filePath, { start, end });
+        const head = {
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Content-Length': chunksize,
+          'Content-Type': contentType,
+        };
+        res.writeHead(206, head);
+        fileStream.pipe(res);
+      } else {
+        const head = {
+          'Content-Length': fileSize,
+          'Content-Type': contentType,
+        };
+        res.writeHead(200, head);
+        fs.createReadStream(filePath).pipe(res);
+      }
+
+    } catch (err) {
+      console.error('Error serving audio:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // Serve video files
+  app.get('/video/:id', async (req, res) => {
+    try {
+      const fileId = req.params.id;
+
+      // Get file path from database
+      const video = await db.connection.query(
+        'SELECT path FROM scanned_files WHERE id = ?',
+        [fileId]
+      );
+
+      if (video[0].length === 0) {
+        return res.status(404).json({ error: 'Video not found' });
+      }
+
+      const filePath = video[0][0].path;
+
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'File not found on disk' });
+      }
+
+      // Set appropriate content type
+      const ext = path.extname(filePath).toLowerCase();
+      const contentTypes = {
+        '.mp4': 'video/mp4',
+        '.mkv': 'video/x-matroska',
+        '.avi': 'video/x-msvideo',
+        '.mov': 'video/quicktime',
+        '.wmv': 'video/x-ms-wmv',
+        '.flv': 'video/x-flv',
+        '.webm': 'video/webm',
+        '.m4v': 'video/mp4',
+        '.mpeg': 'video/mpeg'
+      };
+
+      const contentType = contentTypes[ext] || 'video/mp4';
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Accept-Ranges', 'bytes');
+
+      // Get file stats
+      const stat = fs.statSync(filePath);
+      const fileSize = stat.size;
+      const range = req.headers.range;
+
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunksize = (end - start) + 1;
+        const fileStream = fs.createReadStream(filePath, { start, end });
+        const head = {
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Content-Length': chunksize,
+          'Content-Type': contentType,
+        };
+        res.writeHead(206, head);
+        fileStream.pipe(res);
+      } else {
+        const head = {
+          'Content-Length': fileSize,
+          'Content-Type': contentType,
+        };
+        res.writeHead(200, head);
+        fs.createReadStream(filePath).pipe(res);
+      }
+
+    } catch (err) {
+      console.error('Error serving video:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
 }
 
 // Helper function to format bytes
