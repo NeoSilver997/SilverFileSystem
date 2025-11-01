@@ -516,6 +516,7 @@
     </div>
 
     <script>
+        const MAX_ITEMS_TO_DISPLAY = 100; // Limit for performance
         let currentFilter = 'all';
         let currentView = 'grid';
         let searchTimeout = null;
@@ -601,7 +602,7 @@
                     return;
                 }
                 
-                allPhotos = data.photos.slice(0, 100); // Limit to 100 items
+                allPhotos = data.photos.slice(0, MAX_ITEMS_TO_DISPLAY);
                 
                 container.innerHTML = allPhotos.map((photo, index) => `
                     <div class="photo-card" onclick="openLightbox(${index})">
@@ -621,8 +622,8 @@
                     </div>
                 `).join('');
                 
-                if (data.photos.length > 100) {
-                    container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: #666;">Showing first 100 of ${data.photos.length} photos. Use search or filters to refine results.</div>`;
+                if (data.photos.length > MAX_ITEMS_TO_DISPLAY) {
+                    container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: #666;">Showing first ${MAX_ITEMS_TO_DISPLAY} of ${data.photos.length} photos. Use search or filters to refine results.</div>`;
                 }
                 
             } catch (err) {

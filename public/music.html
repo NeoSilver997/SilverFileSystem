@@ -262,6 +262,7 @@
     </div>
 
     <script>
+        const MAX_ITEMS_TO_DISPLAY = 100; // Limit for performance
         let currentFilter = 'all';
         let currentView = 'all';
         let searchTimeout = null;
@@ -310,7 +311,7 @@
                     return;
                 }
                 
-                allTracks = data.tracks.slice(0, 100);
+                allTracks = data.tracks.slice(0, MAX_ITEMS_TO_DISPLAY);
                 
                 container.innerHTML = allTracks.map((track, index) => `
                     <div class="track-item" onclick='playTrack(${JSON.stringify(track).replace(/'/g, "&#39;")})'>
@@ -325,8 +326,8 @@
                     </div>
                 `).join('');
                 
-                if (data.tracks.length > 100) {
-                    container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: rgba(255,255,255,0.6);">Showing first 100 of ${data.tracks.length} tracks. Use search or filters to refine results.</div>`;
+                if (data.tracks.length > MAX_ITEMS_TO_DISPLAY) {
+                    container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: rgba(255,255,255,0.6);">Showing first ${MAX_ITEMS_TO_DISPLAY} of ${data.tracks.length} tracks. Use search or filters to refine results.</div>`;
                 }
                 
             } catch (err) {
@@ -455,7 +456,7 @@
                 return;
             }
             
-            allTracks = tracks.slice(0, 100); // Limit to 100 items
+            allTracks = tracks.slice(0, MAX_ITEMS_TO_DISPLAY);
             
             container.innerHTML = allTracks.map((track, index) => `
                 <div class="track-item" onclick='playTrack(${JSON.stringify(track).replace(/'/g, "&#39;")})'>
@@ -470,8 +471,8 @@
                 </div>
             `).join('');
             
-            if (tracks.length > 100) {
-                container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: rgba(255,255,255,0.6);">Showing first 100 of ${tracks.length} tracks. Use search or filters to refine results.</div>`;
+            if (tracks.length > MAX_ITEMS_TO_DISPLAY) {
+                container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: rgba(255,255,255,0.6);">Showing first ${MAX_ITEMS_TO_DISPLAY} of ${tracks.length} tracks. Use search or filters to refine results.</div>`;
             }
         }
 

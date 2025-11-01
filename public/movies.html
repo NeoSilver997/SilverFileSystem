@@ -219,6 +219,7 @@
     </div>
 
     <script>
+        const MAX_ITEMS_TO_DISPLAY = 100; // Limit for performance
         let currentFilter = 'all';
         let searchTimeout = null;
         let currentMovie = null;
@@ -309,7 +310,7 @@
                     return;
                 }
                 
-                const movies = data.movies.slice(0, 100);
+                const movies = data.movies.slice(0, MAX_ITEMS_TO_DISPLAY);
                 
                 container.innerHTML = movies.map(movie => {
                     const quality = getQualityBadge(movie);
@@ -332,8 +333,8 @@
                     `;
                 }).join('');
                 
-                if (data.movies.length > 100) {
-                    container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: #666;">Showing first 100 of ${data.movies.length} movies. Use search or filters to refine results.</div>`;
+                if (data.movies.length > MAX_ITEMS_TO_DISPLAY) {
+                    container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: #666;">Showing first ${MAX_ITEMS_TO_DISPLAY} of ${data.movies.length} movies. Use search or filters to refine results.</div>`;
                 }
                 
             } catch (err) {

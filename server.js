@@ -154,6 +154,12 @@ async function initDatabase(dbConfig = {}) {
         const parts = range.replace(/bytes=/, '').split('-');
         const start = parseInt(parts[0], 10);
         const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        
+        // Validate range values
+        if (isNaN(start) || isNaN(end) || start < 0 || end >= fileSize || start > end) {
+          return res.status(416).json({ error: 'Invalid range' });
+        }
+        
         const chunksize = (end - start) + 1;
         const fileStream = fs.createReadStream(filePath, { start, end });
         const head = {
@@ -227,6 +233,12 @@ async function initDatabase(dbConfig = {}) {
         const parts = range.replace(/bytes=/, '').split('-');
         const start = parseInt(parts[0], 10);
         const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        
+        // Validate range values
+        if (isNaN(start) || isNaN(end) || start < 0 || end >= fileSize || start > end) {
+          return res.status(416).json({ error: 'Invalid range' });
+        }
+        
         const chunksize = (end - start) + 1;
         const fileStream = fs.createReadStream(filePath, { start, end });
         const head = {
