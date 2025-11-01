@@ -53,7 +53,7 @@ async function initDatabase(dbConfig = {}) {
   console.log('✓ Connected to database');
 
   // Serve image files (after database is initialized)
-  app.get('/images/:id', async (req, res) => {
+  app.get('/images/:id', strictLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -107,7 +107,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Serve audio files
-  app.get('/audio/:id', async (req, res) => {
+  app.get('/audio/:id', strictLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -185,7 +185,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Serve video files
-  app.get('/video/:id', async (req, res) => {
+  app.get('/video/:id', strictLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
