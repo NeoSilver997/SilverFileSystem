@@ -20,33 +20,33 @@
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 1rem 2rem;
+            padding: 0.5rem 1rem;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
         }
 
         .header h1 {
-            font-size: 2.5rem;
-            margin-bottom: 0.5rem;
+            font-size: 1.8rem;
+            margin-bottom: 0.25rem;
             font-weight: 700;
         }
 
         .header p {
-            font-size: 1.1rem;
+            font-size: 0.9rem;
             opacity: 0.9;
         }
 
         .stats-bar {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 0.75rem;
-            padding: 1rem;
+            gap: 0.5rem;
+            padding: 0.5rem;
             background: white;
             border-bottom: 2px solid #e9ecef;
         }
 
         .stat-card {
             text-align: center;
-            padding: 0.5rem;
+            padding: 0.25rem;
         }
 
         .stat-number {
@@ -63,11 +63,11 @@
 
         .controls {
             background: white;
-            padding: 1rem;
+            padding: 0.5rem;
             border-bottom: 1px solid #e9ecef;
             display: flex;
             flex-wrap: wrap;
-            gap: 0.75rem;
+            gap: 0.5rem;
             align-items: center;
         }
 
@@ -145,7 +145,7 @@
         }
 
         .container {
-            padding: 1rem;
+            padding: 0.5rem;
             max-width: 1600px;
             margin: 0 auto;
         }
@@ -153,7 +153,7 @@
         .gallery-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 1rem;
+            gap: 0.5rem;
         }
 
         .gallery-list {
@@ -296,7 +296,7 @@
         }
 
         .photo-info {
-            padding: 0.75rem;
+            padding: 0.5rem;
         }
 
         .photo-name {
@@ -516,12 +516,15 @@
     </div>
 
     <script>
-        const MAX_ITEMS_TO_DISPLAY = 100; // Limit for performance
+        const ITEMS_PER_PAGE = 100; // Items to load per page
         let currentFilter = 'all';
         let currentView = 'grid';
         let searchTimeout = null;
         let allPhotos = [];
+        let displayedPhotos = [];
+        let allPhotosData = [];
         let currentLightboxIndex = 0;
+        let currentPage = 0;
 
         function formatDate(dateString) {
             if (!dateString) return 'N/A';
@@ -568,6 +571,59 @@
             }
         });
 
+        function renderPhotos(reset = false) {
+            const container = document.getElementById('photoContainer');
+            
+            if (reset) {
+                displayedPhotos = [];
+                currentPage = 0;
+            }
+            
+            const startIdx = currentPage * ITEMS_PER_PAGE;
+            const endIdx = startIdx + ITEMS_PER_PAGE;
+            const photosToAdd = allPhotosData.slice(startIdx, endIdx);
+            
+            displayedPhotos = displayedPhotos.concat(photosToAdd);
+            
+            container.innerHTML = displayedPhotos.map((photo, index) => `
+                <div class="photo-card" onclick="openLightbox(${index})">
+                    <div class="photo-thumbnail">
+                        <img src="/images/${photo.id}" alt="${photo.name}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                        <span class="photo-icon" style="display: none;">📷</span>
+                    </div>
+                    <div class="photo-info">
+                        <div class="photo-name" title="${photo.name}">${photo.name}</div>
+                        <div class="photo-meta">
+                            <div>${photo.width || 0}×${photo.height || 0} • ${photo.size ? formatBytes(photo.size) : '0 B'}</div>
+                            ${photo.camera_make ? `<div>📸 ${photo.camera_make} ${photo.camera_model || ''}</div>` : ''}
+                            ${photo.date_taken ? `<div>📅 ${formatDate(photo.date_taken)}</div>` : ''}
+                            ${photo.latitude ? `<span class="photo-badge">📍 GPS</span>` : ''}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+            
+            allPhotos = displayedPhotos;
+            
+            // Add load more button if there are more items
+            if (endIdx < allPhotosData.length) {
+                container.innerHTML += `
+                    <div style="grid-column: 1/-1; text-align: center; padding: 1rem;">
+                        <button onclick="loadMorePhotos()" style="padding: 0.75rem 2rem; background: #667eea; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 1rem; font-weight: 600;">
+                            Load More (${displayedPhotos.length} of ${allPhotosData.length})
+                        </button>
+                    </div>
+                `;
+            } else if (allPhotosData.length > ITEMS_PER_PAGE) {
+                container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 1rem; color: #666;">Showing all ${allPhotosData.length} photos</div>`;
+            }
+        }
+        
+        function loadMorePhotos() {
+            currentPage++;
+            renderPhotos(false);
+        }
+
         async function loadPhotos() {
             const container = document.getElementById('photoContainer');
             const searchTerm = document.getElementById('searchInput').value;
@@ -591,7 +647,7 @@
                 document.getElementById('uniqueCameras').textContent = data.stats.uniqueCameras;
                 document.getElementById('withGPS').textContent = data.stats.withGPS;
                 
-                // Render photos (limit to 100 items for performance)
+                // Store all photos and render first page
                 if (data.photos.length === 0) {
                     container.innerHTML = `
                         <div class="no-results">
@@ -602,29 +658,12 @@
                     return;
                 }
                 
-                allPhotos = data.photos.slice(0, MAX_ITEMS_TO_DISPLAY);
+                allPhotosData = data.photos;
+                allPhotos = data.photos;
+                currentPage = 0;
+                displayedPhotos = [];
                 
-                container.innerHTML = allPhotos.map((photo, index) => `
-                    <div class="photo-card" onclick="openLightbox(${index})">
-                        <div class="photo-thumbnail">
-                            <img src="/images/${photo.id}" alt="${photo.name}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
-                            <span class="photo-icon" style="display: none;">📷</span>
-                        </div>
-                        <div class="photo-info">
-                            <div class="photo-name" title="${photo.name}">${photo.name}</div>
-                            <div class="photo-meta">
-                                <div>${photo.width || 0}×${photo.height || 0} • ${photo.size ? formatBytes(photo.size) : '0 B'}</div>
-                                ${photo.camera_make ? `<div>📸 ${photo.camera_make} ${photo.camera_model || ''}</div>` : ''}
-                                ${photo.date_taken ? `<div>📅 ${formatDate(photo.date_taken)}</div>` : ''}
-                                ${photo.latitude ? `<span class="photo-badge">📍 GPS</span>` : ''}
-                            </div>
-                        </div>
-                    </div>
-                `).join('');
-                
-                if (data.photos.length > MAX_ITEMS_TO_DISPLAY) {
-                    container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: #666;">Showing first ${MAX_ITEMS_TO_DISPLAY} of ${data.photos.length} photos. Use search or filters to refine results.</div>`;
-                }
+                renderPhotos(true);
                 
             } catch (err) {
                 container.innerHTML = `
