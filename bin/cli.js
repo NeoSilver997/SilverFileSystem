@@ -820,4 +820,452 @@ program
     }
   });
 
+// Fix music metadata encoding
+program
+  .command('fix-music-encoding')
+  .description('Re-extract and fix music metadata encoding for specific files')
+  .option('--id <id>', 'File ID from scanned_files table')
+  .option('--path <path>', 'Direct file path to process')
+  .option('--dry-run', 'Show what would be done without making changes')
+  .option('--db-host <host>', 'Database host', 'localhost')
+  .option('--db-port <port>', 'Database port', '3306')
+  .option('--db-user <user>', 'Database user', 'sfs')
+  .option('--db-password <password>', 'Database password', 'SilverFS_Secure2025!')
+  .option('--db-name <name>', 'Database name', 'silverfilesystem')
+  .action(async (options) => {
+    const spinner = ora('Processing music metadata...').start();
+    
+    try {
+      if (!options.id && !options.path) {
+        spinner.fail('Must specify either --id or --path');
+        console.error(chalk.red('Please provide either --id <file_id> or --path <file_path>'));
+        process.exit(1);
+      }
+      
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost,
+        port: options.dbPort,
+        user: options.dbUser,
+        password: options.dbPassword,
+        database: options.dbName
+      });
+      await db.connect();
+      
+      let filePath = options.path;
+      let fileId = options.id ? parseInt(options.id) : null;
+      
+      // If ID provided, get the file path
+      if (options.id) {
+        const [rows] = await db.connection.execute(
+          'SELECT id, path, name FROM scanned_files WHERE id = ?', 
+          [options.id]
+        );
+        
+        if (!rows || rows.length === 0) {
+          spinner.fail('File not found');
+          console.error(chalk.red(`No file found with ID: ${options.id}`));
+          await db.close();
+          process.exit(1);
+        }
+        
+        filePath = rows[0].path;
+        fileId = rows[0].id;
+        console.log(chalk.blue(`Found file: ${filePath}`));
+      }
+      
+      // Import MediaMetadataExtractor
+      const { MediaMetadataExtractor } = await import('../lib/media.js');
+      const extractor = new MediaMetadataExtractor();
+      
+      // Check if it's a music file
+      if (!extractor.isAudio(filePath)) {
+        spinner.fail('Not a music file');
+        console.error(chalk.red(`File is not a supported audio format: ${filePath}`));
+        await extractor.cleanup();
+        await db.close();
+        process.exit(1);
+      }
+      
+      spinner.text = 'Extracting metadata...';
+      
+      // Extract metadata
+      const result = await extractor.extractMetadata(filePath);
+      
+      if (!result || !result.metadata) {
+        spinner.fail('No metadata extracted');
+        console.error(chalk.red('Failed to extract metadata from file'));
+        await extractor.cleanup();
+        await db.close();
+        process.exit(1);
+      }
+      
+      const metadata = result.metadata;
+      
+      // Show current values
+      console.log(chalk.yellow('\n=== Raw Extracted Metadata ==='));
+      console.log(chalk.white(`Title: ${metadata.track?.title || 'N/A'}`));
+      console.log(chalk.white(`Artist: ${metadata.track?.artist || 'N/A'}`));
+      console.log(chalk.white(`Album: ${metadata.track?.album || 'N/A'}`));
+      console.log(chalk.white(`Album Artist: ${metadata.track?.albumArtist || 'N/A'}`));
+      console.log(chalk.white(`Composer: ${metadata.composer || 'N/A'}`));
+      console.log(chalk.white(`Genre: ${metadata.track?.genre || 'N/A'}`));
+      
+      // Show sanitized values
+      console.log(chalk.yellow('\n=== Sanitized for Database ==='));
+      const sanitized = {
+        title: db.sanitizeForDb(metadata.track?.title),
+        artist: db.sanitizeForDb(metadata.track?.artist),
+        album: db.sanitizeForDb(metadata.track?.album),
+        albumArtist: db.sanitizeForDb(metadata.track?.albumArtist),
+        composer: db.sanitizeForDb(metadata.composer),
+        genre: db.sanitizeForDb(metadata.track?.genre)
+      };
+      
+      Object.entries(sanitized).forEach(([key, value]) => {
+        console.log(chalk.white(`${key}: ${value || 'N/A'}`));
+      });
+      
+      if (options.dryRun) {
+        spinner.succeed('Dry run complete - no changes made');
+        console.log(chalk.green('\nDry run: Would update database with sanitized values above'));
+      } else {
+        spinner.text = 'Updating database...';
+        
+        // Delete existing metadata if it exists
+        await db.connection.execute(
+          'DELETE FROM music_metadata WHERE file_id = ?',
+          [fileId]
+        );
+        
+        // Store updated metadata
+        await db.storeMusicMetadata(fileId, metadata);
+        
+        spinner.succeed('Music metadata updated successfully');
+        console.log(chalk.green(`\n✅ Updated metadata for file ID: ${fileId}`));
+        console.log(chalk.white(`   Path: ${filePath}`));
+      }
+      
+      await extractor.cleanup();
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Failed to process music metadata');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Batch fix music metadata encoding
+program
+  .command('fix-all-music-encoding')
+  .description('Find and fix music metadata encoding issues for all files in database')
+  .option('--dry-run', 'Show what would be done without making changes')
+  .option('--limit <number>', 'Maximum number of files to process', '100')
+  .option('--db-host <host>', 'Database host', 'localhost')
+  .option('--db-port <port>', 'Database port', '3306')
+  .option('--db-user <user>', 'Database user', 'sfs')
+  .option('--db-password <password>', 'Database password', 'SilverFS_Secure2025!')
+  .option('--db-name <name>', 'Database name', 'silverfilesystem')
+  .action(async (options) => {
+    const spinner = ora('Finding music files with encoding issues...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost,
+        port: options.dbPort,
+        user: options.dbUser,
+        password: options.dbPassword,
+        database: options.dbName
+      });
+      await db.connect();
+      
+      // Find music files with encoding issues (garbled characters)
+      const limit = parseInt(options.limit);
+      const [rows] = await db.connection.execute(`
+        SELECT sf.id, sf.path, sf.name, mm.title, mm.artist, mm.album
+        FROM scanned_files sf
+        JOIN music_metadata mm ON sf.id = mm.file_id
+        WHERE (mm.title REGEXP '[ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ¤¥µ§]'
+           OR mm.artist REGEXP '[ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ¤¥µ§]'
+           OR mm.album REGEXP '[ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ¤¥µ§]')
+        LIMIT ${limit}
+      `);
+      
+      if (rows.length === 0) {
+        spinner.succeed('No music files with encoding issues found');
+        console.log(chalk.green('\n✅ All music metadata appears to have correct encoding'));
+        await db.close();
+        return;
+      }
+      
+      spinner.succeed(`Found ${rows.length} music files with encoding issues`);
+      
+      console.log(chalk.yellow(`\n📋 Files to process (showing first 10):`));
+      rows.slice(0, 10).forEach((row, index) => {
+        console.log(chalk.white(`${index + 1}. ID: ${row.id}`));
+        console.log(chalk.gray(`   Title: ${row.title || 'N/A'}`));
+        console.log(chalk.gray(`   Artist: ${row.artist || 'N/A'}`));
+        console.log(chalk.gray(`   Path: ${row.path.length > 80 ? '...' + row.path.slice(-77) : row.path}`));
+        console.log('');
+      });
+      
+      if (rows.length > 10) {
+        console.log(chalk.gray(`   ... and ${rows.length - 10} more files\n`));
+      }
+      
+      if (options.dryRun) {
+        console.log(chalk.green(`\nDry run: Would process ${rows.length} files with encoding issues`));
+        await db.close();
+        return;
+      }
+      
+      // Import MediaMetadataExtractor
+      const { MediaMetadataExtractor } = await import('../lib/media.js');
+      const extractor = new MediaMetadataExtractor();
+      
+      let processed = 0;
+      let errors = 0;
+      let fixed = 0;
+      
+      for (const row of rows) {
+        try {
+          spinner.text = `Processing ${processed + 1}/${rows.length}: ${row.name}`;
+          
+          // Check if file still exists
+          const fs = await import('fs/promises');
+          try {
+            await fs.access(row.path);
+          } catch (err) {
+            errors++;
+            console.log(chalk.red(`\n❌ File not accessible: ${row.path}`));
+            continue;
+          }
+          
+          // Extract metadata
+          const result = await extractor.extractMetadata(row.path);
+          
+          if (result && result.metadata && extractor.isAudio(row.path)) {
+            // Delete existing metadata
+            await db.connection.execute(
+              'DELETE FROM music_metadata WHERE file_id = ?',
+              [row.id]
+            );
+            
+            // Store updated metadata with improved encoding
+            await db.storeMusicMetadata(row.id, result.metadata);
+            fixed++;
+          } else {
+            errors++;
+            console.log(chalk.yellow(`\n⚠️  No metadata extracted: ${row.path}`));
+          }
+          
+          processed++;
+          
+          // Show progress every 10 files
+          if (processed % 10 === 0) {
+            console.log(chalk.blue(`\n📊 Progress: ${processed}/${rows.length} (${fixed} fixed, ${errors} errors)`));
+          }
+          
+        } catch (err) {
+          errors++;
+          console.log(chalk.red(`\n❌ Error processing ${row.path}: ${err.message}`));
+        }
+      }
+      
+      await extractor.cleanup();
+      
+      spinner.succeed('Batch encoding fix completed');
+      
+      console.log(chalk.green(`\n✅ Batch Processing Complete!`));
+      console.log(chalk.white(`   📁 Total files processed: ${processed}`));
+      console.log(chalk.white(`   🔧 Successfully fixed: ${fixed}`));
+      console.log(chalk.white(`   ❌ Errors encountered: ${errors}`));
+      
+      if (fixed > 0) {
+        console.log(chalk.yellow(`\n🎵 Music metadata encoding has been improved for ${fixed} files`));
+        console.log(chalk.white(`   Database now uses UTF8MB4 charset for better character support`));
+      }
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Failed to process music metadata');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+// Revert music metadata to original extraction
+program
+  .command('revert-music-encoding')
+  .description('Revert music metadata back to original extraction without encoding conversion')
+  .option('--id <fileId>', 'Specific file ID to revert')
+  .option('--limit <number>', 'Maximum number of files to process', '1000')
+  .option('--dry-run', 'Show what would be done without making changes')
+  .option('--db-host <host>', 'Database host', 'localhost')
+  .option('--db-port <port>', 'Database port', '3306')
+  .option('--db-user <user>', 'Database user', 'sfs')
+  .option('--db-password <password>', 'Database password', 'SilverFS_Secure2025!')
+  .option('--db-name <name>', 'Database name', 'silverfilesystem')
+  .action(async (options) => {
+    const spinner = ora('Reverting music metadata to original extraction...').start();
+    
+    try {
+      // Initialize database
+      const db = new DatabaseManager({
+        host: options.dbHost,
+        port: options.dbPort,
+        user: options.dbUser,
+        password: options.dbPassword,
+        database: options.dbName
+      });
+      await db.connect();
+      
+      // Find music files that need re-extraction
+      let query, params = [];
+      
+      if (options.id) {
+        // Specific file ID
+        query = `
+          SELECT sf.id, sf.path, sf.name
+          FROM scanned_files sf
+          WHERE sf.id = ?
+          AND sf.extension IN ('mp3', 'flac', 'wav', 'aac', 'm4a', 'ogg', 'wma')
+          AND EXISTS (SELECT 1 FROM music_metadata mm WHERE mm.file_id = sf.id)
+        `;
+        params = [parseInt(options.id)];
+      } else {
+        // Batch processing
+        const limit = parseInt(options.limit);
+        query = `
+          SELECT sf.id, sf.path, sf.name
+          FROM scanned_files sf
+          WHERE sf.extension IN ('mp3', 'flac', 'wav', 'aac', 'm4a', 'ogg', 'wma')
+          AND EXISTS (SELECT 1 FROM music_metadata mm WHERE mm.file_id = sf.id)
+          LIMIT ${limit}
+        `;
+      }
+      
+      const [rows] = await db.connection.execute(query, params);
+      
+      if (rows.length === 0) {
+        spinner.succeed('No music files found to revert');
+        console.log(chalk.green('\n✅ No music metadata found to revert'));
+        await db.close();
+        return;
+      }
+      
+      spinner.succeed(`Found ${rows.length} music files to revert`);
+      
+      console.log(chalk.yellow(`\n📋 Files to revert (showing first 10):`));
+      rows.slice(0, 10).forEach((row, index) => {
+        console.log(chalk.white(`${index + 1}. ID: ${row.id} - ${row.name}`));
+        console.log(chalk.gray(`   Path: ${row.path.length > 80 ? '...' + row.path.slice(-77) : row.path}`));
+      });
+      
+      if (rows.length > 10) {
+        console.log(chalk.gray(`   ... and ${rows.length - 10} more files\n`));
+      }
+      
+      if (options.dryRun) {
+        console.log(chalk.green(`\nDry run: Would revert metadata for ${rows.length} files`));
+        await db.close();
+        return;
+      }
+      
+      // Import MediaMetadataExtractor
+      const { MediaMetadataExtractor } = await import('../lib/media.js');
+      const extractor = new MediaMetadataExtractor();
+      
+      let processed = 0;
+      let errors = 0;
+      let reverted = 0;
+      
+      // Temporarily disable encoding conversion by saving original sanitizeForDb
+      const originalSanitize = db.sanitizeForDb;
+      db.sanitizeForDb = function(value) {
+        // Simple sanitization without encoding conversion
+        if (value === undefined || value === null) return null;
+        if (Buffer.isBuffer(value)) return value.toString('utf8');
+        if (typeof value === 'number' || typeof value === 'boolean') return value;
+        if (Array.isArray(value)) return value.map(v => (v === null || v === undefined) ? '' : String(v)).join(', ');
+        if (typeof value === 'object') {
+          try { return JSON.stringify(value); } catch (err) { return String(value); }
+        }
+        return String(value);
+      };
+      
+      for (const row of rows) {
+        try {
+          spinner.text = `Reverting ${processed + 1}/${rows.length}: ${row.name}`;
+          
+          // Check if file still exists
+          const fs = await import('fs/promises');
+          try {
+            await fs.access(row.path);
+          } catch (err) {
+            errors++;
+            console.log(chalk.red(`\n❌ File not accessible: ${row.path}`));
+            continue;
+          }
+          
+          // Extract fresh metadata without encoding conversion
+          const result = await extractor.extractMetadata(row.path);
+          
+          if (result && result.metadata && extractor.isAudio(row.path)) {
+            // Delete existing metadata
+            await db.connection.execute(
+              'DELETE FROM music_metadata WHERE file_id = ?',
+              [row.id]
+            );
+            
+            // Store fresh metadata
+            await db.storeMusicMetadata(row.id, result.metadata);
+            reverted++;
+          } else {
+            errors++;
+            console.log(chalk.yellow(`\n⚠️  No metadata extracted: ${row.path}`));
+          }
+          
+          processed++;
+          
+          // Show progress every 50 files
+          if (processed % 50 === 0) {
+            console.log(chalk.blue(`\n📊 Progress: ${processed}/${rows.length} (${reverted} reverted, ${errors} errors)`));
+          }
+          
+        } catch (err) {
+          errors++;
+          console.log(chalk.red(`\n❌ Error processing ${row.path}: ${err.message}`));
+        }
+      }
+      
+      // Restore original sanitization function
+      db.sanitizeForDb = originalSanitize;
+      
+      await extractor.cleanup();
+      
+      spinner.succeed('Music metadata reversion completed');
+      
+      console.log(chalk.green(`\n✅ Reversion Complete!`));
+      console.log(chalk.white(`   📁 Total files processed: ${processed}`));
+      console.log(chalk.white(`   🔄 Successfully reverted: ${reverted}`));
+      console.log(chalk.white(`   ❌ Errors encountered: ${errors}`));
+      
+      if (reverted > 0) {
+        console.log(chalk.yellow(`\n🎵 Music metadata has been reverted to original extraction for ${reverted} files`));
+        console.log(chalk.white(`   Original text encoding preserved, UTF8MB4 connection ensures proper storage`));
+      }
+      
+      await db.close();
+      
+    } catch (err) {
+      spinner.fail('Failed to revert music metadata');
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
 program.parse();
