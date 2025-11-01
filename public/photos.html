@@ -162,6 +162,103 @@
             gap: 1rem;
         }
 
+        .gallery-map {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 1rem;
+            height: 70vh;
+        }
+
+        .map-list {
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .map-photo-card {
+            background: white;
+            border-radius: 8px;
+            padding: 0.75rem;
+            cursor: pointer;
+            transition: all 0.3s;
+            border: 2px solid transparent;
+        }
+
+        .map-photo-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .map-photo-card.selected {
+            border-color: #667eea;
+            background: #f0f0ff;
+        }
+
+        .map-photo-thumbnail {
+            width: 100%;
+            height: 150px;
+            object-fit: cover;
+            border-radius: 4px;
+            margin-bottom: 0.5rem;
+        }
+
+        .map-photo-name {
+            font-weight: 600;
+            font-size: 0.9rem;
+            margin-bottom: 0.25rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .map-photo-location {
+            font-size: 0.8rem;
+            color: #666;
+        }
+
+        .map-container {
+            background: #f0f0f0;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .map-placeholder {
+            text-align: center;
+            color: #666;
+        }
+
+        .map-placeholder h3 {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        .location-marker {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            background: #667eea;
+            border: 3px solid white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            cursor: pointer;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+            transition: all 0.3s;
+        }
+
+        .location-marker:hover {
+            transform: translate(-50%, -50%) scale(1.2);
+        }
+
+        .location-marker.selected {
+            background: #e74c3c;
+            z-index: 10;
+        }
+
         .photo-card {
             background: white;
             border-radius: 12px;
@@ -397,6 +494,7 @@
         <div class="view-toggle">
             <button class="view-btn active" data-view="grid">Grid</button>
             <button class="view-btn" data-view="list">List</button>
+            <button class="view-btn" data-view="map">Map</button>
         </div>
     </div>
 
@@ -560,13 +658,105 @@
             });
         });
 
+        let selectedMapPhoto = null;
+
+        function renderMapView() {
+            const container = document.getElementById('photoContainer');
+            const photosWithGPS = allPhotos.filter(p => p.latitude && p.longitude);
+            
+            if (photosWithGPS.length === 0) {
+                container.innerHTML = `
+                    <div class="no-results">
+                        <h2>No photos with GPS data</h2>
+                        <p>Photos need GPS coordinates to be displayed on the map</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // Calculate map bounds
+            const lats = photosWithGPS.map(p => parseFloat(p.latitude));
+            const lngs = photosWithGPS.map(p => parseFloat(p.longitude));
+            const minLat = Math.min(...lats);
+            const maxLat = Math.max(...lats);
+            const minLng = Math.min(...lngs);
+            const maxLng = Math.max(...lngs);
+
+            container.innerHTML = `
+                <div class="gallery-map">
+                    <div class="map-list" id="mapList"></div>
+                    <div class="map-container" id="mapContainer">
+                        <div class="map-placeholder">
+                            <h3>📍 ${photosWithGPS.length} Photos with Location</h3>
+                            <p>Click on photos in the list to see their location</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const mapList = document.getElementById('mapList');
+            mapList.innerHTML = photosWithGPS.map((photo, index) => `
+                <div class="map-photo-card" onclick="selectMapPhoto(${index}, ${photo.latitude}, ${photo.longitude})" id="map-photo-${index}">
+                    <img src="/images/${photo.id}" class="map-photo-thumbnail" alt="${photo.name}">
+                    <div class="map-photo-name">${photo.name}</div>
+                    <div class="map-photo-location">📍 ${photo.latitude.toFixed(4)}, ${photo.longitude.toFixed(4)}</div>
+                </div>
+            `).join('');
+
+            // Store photos with GPS for map selection
+            window.photosWithGPS = photosWithGPS;
+        }
+
+        function selectMapPhoto(index, lat, lng) {
+            const photosWithGPS = window.photosWithGPS || [];
+            if (!photosWithGPS[index]) return;
+
+            // Update selected card
+            document.querySelectorAll('.map-photo-card').forEach(card => card.classList.remove('selected'));
+            document.getElementById(`map-photo-${index}`).classList.add('selected');
+
+            // Update map display
+            const mapContainer = document.getElementById('mapContainer');
+            const photo = photosWithGPS[index];
+            
+            mapContainer.innerHTML = `
+                <div style="width: 100%; height: 100%; display: flex; flex-direction: column;">
+                    <div style="flex: 1; background: #e0e0e0; position: relative; display: flex; align-items: center; justify-content: center;">
+                        <div style="text-align: center; color: #666;">
+                            <div style="font-size: 3rem; margin-bottom: 1rem;">📍</div>
+                            <div style="font-size: 1.2rem; font-weight: 600; margin-bottom: 0.5rem;">${photo.name}</div>
+                            <div style="font-size: 1rem;">Latitude: ${lat.toFixed(6)}</div>
+                            <div style="font-size: 1rem;">Longitude: ${lng.toFixed(6)}</div>
+                            ${photo.altitude ? `<div style="font-size: 1rem;">Altitude: ${photo.altitude}m</div>` : ''}
+                            <button onclick="openMapInNewWindow(${lat}, ${lng})" style="margin-top: 1rem; padding: 0.5rem 1rem; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer;">Open in Google Maps</button>
+                        </div>
+                    </div>
+                    <div style="padding: 1rem;">
+                        <img src="/images/${photo.id}" style="width: 100%; max-height: 200px; object-fit: contain; border-radius: 8px;" onclick="openLightbox(${allPhotos.findIndex(p => p.id === photo.id)})">
+                    </div>
+                </div>
+            `;
+
+            selectedMapPhoto = index;
+        }
+
+        function openMapInNewWindow(lat, lng) {
+            window.open(`https://www.google.com/maps?q=${lat},${lng}`, '_blank');
+        }
+
         document.querySelectorAll('.view-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
                 this.classList.add('active');
                 currentView = this.dataset.view;
                 const container = document.getElementById('photoContainer');
-                container.className = currentView === 'grid' ? 'gallery-grid' : 'gallery-list';
+                
+                if (currentView === 'map') {
+                    container.className = '';
+                    renderMapView();
+                } else {
+                    container.className = currentView === 'grid' ? 'gallery-grid' : 'gallery-list';
+                }
             });
         });
 
