@@ -848,6 +848,128 @@ app.get('/movies', (req, res) => {
   res.send(html);
 });
 
+// Serve CLI tools page
+app.get('/cli-tools', (req, res) => {
+  const html = fs.readFileSync(join(__dirname, 'public', 'cli-tools.html'), 'utf8');
+  res.send(html);
+});
+
+// CLI execution endpoint (for demonstration - shows command info)
+app.post('/api/cli/execute', strictLimiter, async (req, res) => {
+  try {
+    const { command, args } = req.body;
+    
+    // For security, we'll return a formatted response showing what would be executed
+    // In a production environment, you would want to carefully validate and sanitize inputs
+    // or run commands in a sandboxed environment
+    
+    let output = '';
+    output += `Command: silverfs ${command}\n`;
+    output += `\nArguments:\n`;
+    
+    for (const [key, value] of Object.entries(args)) {
+      if (value) {
+        output += `  ${key}: ${value}\n`;
+      }
+    }
+    
+    output += `\n${'='.repeat(60)}\n\n`;
+    output += `⚠️  CLI Execution Information\n\n`;
+    output += `This is a demonstration interface showing the CLI command structure.\n`;
+    output += `To execute commands:\n\n`;
+    
+    switch(command) {
+      case 'scan':
+        output += `1. Open your terminal\n`;
+        output += `2. Navigate to the SilverFileSystem directory\n`;
+        output += `3. Run: node bin/cli.js scan "${args.path}" ${args.options}\n\n`;
+        output += `Example output:\n`;
+        output += `  ✓ Scanning directory...\n`;
+        output += `  ✓ Found 1,234 files\n`;
+        output += `  ✓ Total size: 5.2 GB\n`;
+        if (args.options.includes('--db')) {
+          output += `  ✓ Stored in database\n`;
+        }
+        if (args.options.includes('--extract-media')) {
+          output += `  ✓ Extracted media metadata\n`;
+        }
+        break;
+        
+      case 'duplicates':
+        output += `Run: node bin/cli.js duplicates "${args.path}"`;
+        if (args.minSize && args.minSize !== '0') {
+          output += ` -m ${args.minSize}`;
+        }
+        output += ` ${args.options}\n\n`;
+        output += `Example output:\n`;
+        output += `  ✓ Found 42 duplicate groups\n`;
+        output += `  ✓ Total wasted space: 856 MB\n`;
+        break;
+        
+      case 'find-duplicates-db':
+        output += `Run: node bin/cli.js find-duplicates-db`;
+        if (args.minSize && args.minSize !== '0') {
+          output += ` -m ${args.minSize}`;
+        }
+        if (args.report) {
+          output += ` --report ${args.report}`;
+        }
+        output += `\n\nExample output:\n`;
+        output += `  ✓ Querying database...\n`;
+        output += `  ✓ Found 42 duplicate groups from database\n`;
+        if (args.report) {
+          output += `  ✓ Generated report: ${args.report}\n`;
+        }
+        break;
+        
+      case 'generate-report':
+        output += `Run: node bin/cli.js generate-report "${args.output}"`;
+        if (args.minSize && args.minSize !== '0') {
+          output += ` -m ${args.minSize}`;
+        }
+        output += `\n\nExample output:\n`;
+        output += `  ✓ Generating HTML report...\n`;
+        output += `  ✓ Report saved: ${args.output}\n`;
+        output += `  ✓ Open in browser to view interactive report\n`;
+        break;
+        
+      case 'empty-files':
+        output += `Run: node bin/cli.js empty-files "${args.path}"\n\n`;
+        output += `Example output:\n`;
+        output += `  ✓ Found 15 empty files\n`;
+        output += `  ✓ Listed all empty files with paths\n`;
+        break;
+        
+      case 'large-files':
+        output += `Run: node bin/cli.js large-files "${args.path}" -m ${args.minSize} -l ${args.limit}\n\n`;
+        output += `Example output:\n`;
+        output += `  ✓ Top ${args.limit} files larger than ${args.minSize} MB\n`;
+        output += `  1. video.mp4 - 2.5 GB\n`;
+        output += `  2. backup.zip - 1.8 GB\n`;
+        output += `  3. database.sql - 950 MB\n`;
+        break;
+    }
+    
+    output += `\n${'='.repeat(60)}\n`;
+    output += `\n💡 Tip: Use the actual CLI for real-time execution and progress updates.\n`;
+    output += `📖 See README.md for complete documentation.\n`;
+    
+    res.json({
+      success: true,
+      command: command,
+      args: args,
+      output: output
+    });
+    
+  } catch (err) {
+    console.error('CLI API error:', err);
+    res.status(500).json({ 
+      error: 'Failed to process command',
+      message: err.message 
+    });
+  }
+});
+
 // ==================== START SERVER ====================
 
 const PORT = process.env.PORT || 4000;
