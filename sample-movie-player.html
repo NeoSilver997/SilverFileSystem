@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Movie Player - SilverFileSystem</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #141e30 0%, #243b55 100%);
+            padding: 2rem;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        .header h1 {
+            font-size: 3rem;
+            margin-bottom: 0.5rem;
+            font-weight: 700;
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.8;
+        }
+
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            padding: 2rem;
+            background: #1a1a1a;
+            border-bottom: 2px solid #2a2a2a;
+        }
+
+        .stat-card {
+            text-align: center;
+            padding: 1rem;
+            background: #252525;
+            border-radius: 8px;
+        }
+
+        .stat-number {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #4a90e2;
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            opacity: 0.7;
+            margin-top: 0.3rem;
+        }
+
+        .controls {
+            background: #1a1a1a;
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid #2a2a2a;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .search-box {
+            flex: 1;
+            min-width: 250px;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 2px solid #2a2a2a;
+            background: #252525;
+            color: #e0e0e0;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: all 0.3s;
+        }
+
+        .search-box input::placeholder {
+            color: #666;
+        }
+
+        .search-box input:focus {
+            outline: none;
+            border-color: #4a90e2;
+            background: #2a2a2a;
+        }
+
+        .filter-group {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .filter-btn {
+            padding: 0.75rem 1.5rem;
+            border: 2px solid #2a2a2a;
+            background: #252525;
+            color: #e0e0e0;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s;
+        }
+
+        .filter-btn:hover {
+            border-color: #4a90e2;
+            background: #2a2a2a;
+        }
+
+        .filter-btn.active {
+            background: #4a90e2;
+            border-color: #4a90e2;
+            color: white;
+        }
+
+        .view-toggle {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .view-btn {
+            padding: 0.75rem 1rem;
+            border: 2px solid #2a2a2a;
+            background: #252525;
+            color: #e0e0e0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .view-btn.active {
+            background: #4a90e2;
+            border-color: #4a90e2;
+            color: white;
+        }
+
+        .container {
+            padding: 2rem;
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+
+        .movie-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+
+        .movie-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .movie-card {
+            background: #1a1a1a;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+            transition: transform 0.3s, box-shadow 0.3s;
+            cursor: pointer;
+        }
+
+        .movie-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(74, 144, 226, 0.3);
+        }
+
+        .movie-poster {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .movie-poster img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .movie-icon {
+            font-size: 4rem;
+            color: #444;
+        }
+
+        .play-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80px;
+            height: 80px;
+            background: rgba(74, 144, 226, 0.9);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .movie-card:hover .play-overlay {
+            opacity: 1;
+        }
+
+        .play-icon {
+            font-size: 2.5rem;
+            color: white;
+            margin-left: 5px;
+        }
+
+        .quality-badge {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+
+        .badge-4k {
+            color: #4a90e2;
+        }
+
+        .badge-hd {
+            color: #50c878;
+        }
+
+        .badge-sd {
+            color: #ffa500;
+        }
+
+        .movie-info {
+            padding: 1.5rem;
+        }
+
+        .movie-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .movie-meta {
+            font-size: 0.9rem;
+            color: #999;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .movie-description {
+            font-size: 0.85rem;
+            color: #aaa;
+            line-height: 1.5;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .list-card {
+            background: #1a1a1a;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+            display: grid;
+            grid-template-columns: 200px 1fr auto;
+            gap: 1.5rem;
+            align-items: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .list-card:hover {
+            box-shadow: 0 4px 20px rgba(74, 144, 226, 0.3);
+        }
+
+        .list-poster {
+            width: 200px;
+            height: 112px;
+            border-radius: 8px;
+            background: #2a2a2a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .list-poster img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .list-info-content {
+            flex: 1;
+        }
+
+        .list-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .list-details {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            font-size: 0.9rem;
+            color: #999;
+            margin-bottom: 0.5rem;
+        }
+
+        .list-description {
+            font-size: 0.9rem;
+            color: #aaa;
+            line-height: 1.5;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.95);
+            z-index: 1000;
+            overflow-y: auto;
+        }
+
+        .modal.active {
+            display: block;
+        }
+
+        .modal-content {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 2rem;
+            position: relative;
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: #4a90e2;
+            border: none;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 1.5rem;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+
+        .video-player {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 2rem;
+            position: relative;
+        }
+
+        .video-placeholder {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .video-placeholder-icon {
+            font-size: 5rem;
+            opacity: 0.3;
+        }
+
+        .video-placeholder-text {
+            font-size: 1.2rem;
+            opacity: 0.5;
+        }
+
+        .movie-details {
+            background: #1a1a1a;
+            padding: 2rem;
+            border-radius: 12px;
+        }
+
+        .details-header {
+            margin-bottom: 2rem;
+        }
+
+        .details-title {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+
+        .details-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2rem;
+            font-size: 1.1rem;
+            color: #999;
+        }
+
+        .metadata-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .metadata-item {
+            display: flex;
+            flex-direction: column;
+            background: #252525;
+            padding: 1rem;
+            border-radius: 8px;
+        }
+
+        .metadata-label {
+            font-size: 0.85rem;
+            color: #999;
+            margin-bottom: 0.5rem;
+        }
+
+        .metadata-value {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #e0e0e0;
+        }
+
+        .no-results {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: #666;
+        }
+
+        .no-results h2 {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        @media (max-width: 1024px) {
+            .movie-grid {
+                grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            }
+
+            .list-card {
+                grid-template-columns: 150px 1fr;
+            }
+
+            .list-poster {
+                width: 150px;
+                height: 84px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .movie-grid {
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                gap: 1rem;
+            }
+
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .search-box {
+                width: 100%;
+            }
+
+            .list-card {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎬 Movie Player</h1>
+        <p>Your personal cinema collection</p>
+    </div>
+
+    <div class="stats-bar">
+        <div class="stat-card">
+            <div class="stat-number">5</div>
+            <div class="stat-label">Total Movies</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">10h 38m</div>
+            <div class="stat-label">Total Duration</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">28.5 GB</div>
+            <div class="stat-label">Total Size</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">3</div>
+            <div class="stat-label">HD Movies</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">2</div>
+            <div class="stat-label">4K Movies</div>
+        </div>
+    </div>
+
+    <div class="controls">
+        <div class="search-box">
+            <input type="text" id="searchInput" placeholder="Search movies by title, genre, codec...">
+        </div>
+        <div class="filter-group">
+            <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="4k">4K</button>
+            <button class="filter-btn" data-filter="hd">HD</button>
+            <button class="filter-btn" data-filter="long">Long (>2h)</button>
+        </div>
+        <div class="view-toggle">
+            <button class="view-btn active" data-view="grid">Grid</button>
+            <button class="view-btn" data-view="list">List</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <div id="movieContainer" class="movie-grid"></div>
+    </div>
+
+    <div id="movieModal" class="modal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal()">✕</button>
+            
+            <div class="video-player">
+                <div class="video-placeholder">
+                    <div class="video-placeholder-icon">🎬</div>
+                    <div class="video-placeholder-text">Video player would be displayed here</div>
+                    <div class="video-placeholder-text" style="font-size: 0.9rem;">In a real implementation, this would play the video file</div>
+                </div>
+            </div>
+
+            <div class="movie-details" id="movieDetails"></div>
+        </div>
+    </div>
+
+    <script>
+        const moviesData = [{"id":1,"path":"/movies/action/the_matrix.mkv","name":"the_matrix.mkv","size":5368709120,"title":"The Matrix","duration":8160,"width":1920,"height":1080,"frame_rate":23.976,"video_codec":"H.264","video_bitrate":5000000,"audio_codec":"AAC","audio_bitrate":192000,"audio_channels":6,"description":"A computer hacker learns about the true nature of reality.","genre":"Sci-Fi, Action","year":1999,"create_date":"1999-03-31","created_at":"2024-01-10"},{"id":2,"path":"/movies/drama/inception.mp4","name":"inception.mp4","size":10737418240,"title":"Inception","duration":8880,"width":3840,"height":2160,"frame_rate":24,"video_codec":"H.265","video_bitrate":10000000,"audio_codec":"DTS","audio_bitrate":1536000,"audio_channels":8,"description":"A thief who steals corporate secrets through dream-sharing technology.","genre":"Sci-Fi, Thriller","year":2010,"create_date":"2010-07-16","software":"HandBrake","created_at":"2024-02-15"},{"id":3,"path":"/movies/comedy/the_grand_budapest_hotel.mkv","name":"the_grand_budapest_hotel.mkv","size":3221225472,"title":"The Grand Budapest Hotel","duration":6000,"width":1920,"height":1080,"frame_rate":24,"video_codec":"H.264","video_bitrate":4000000,"audio_codec":"AAC","audio_bitrate":256000,"audio_channels":2,"description":"The adventures of Gustave H, a concierge at a famous hotel.","genre":"Comedy, Drama","year":2014,"create_date":"2014-03-07","created_at":"2024-03-20"},{"id":4,"path":"/movies/animation/spirited_away.mp4","name":"spirited_away.mp4","size":2684354560,"title":"Spirited Away","duration":7500,"width":1280,"height":720,"frame_rate":23.976,"video_codec":"H.264","video_bitrate":2500000,"audio_codec":"AAC","audio_bitrate":128000,"audio_channels":2,"description":"A young girl enters a magical world ruled by a witch.","genre":"Animation, Fantasy","year":2001,"create_date":"2001-07-20","created_at":"2024-04-08"},{"id":5,"path":"/movies/thriller/parasite.mkv","name":"parasite.mkv","size":8589934592,"title":"Parasite","duration":7920,"width":3840,"height":2160,"frame_rate":24,"video_codec":"H.265","video_bitrate":8000000,"audio_codec":"DTS","audio_bitrate":768000,"audio_channels":6,"description":"Greed and class discrimination threaten the newly formed symbiotic relationship.","genre":"Thriller, Drama","year":2019,"create_date":"2019-05-30","created_at":"2024-05-18"}];
+        let filteredMovies = [...moviesData];
+        let currentView = 'grid';
+        let currentFilter = 'all';
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds) return '0m';
+            const hours = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            if (hours > 0) {
+                return `${hours}h ${mins}m`;
+            }
+            return `${mins}m`;
+        }
+
+        function getQualityBadge(movie) {
+            if (movie.width >= 3840) return { class: 'badge-4k', text: '4K' };
+            if (movie.width >= 1920) return { class: 'badge-hd', text: 'Full HD' };
+            if (movie.width >= 1280) return { class: 'badge-hd', text: 'HD' };
+            return { class: 'badge-sd', text: 'SD' };
+        }
+
+        function renderMovies() {
+            const container = document.getElementById('movieContainer');
+            container.className = currentView === 'grid' ? 'movie-grid' : 'movie-list';
+            
+            if (filteredMovies.length === 0) {
+                container.innerHTML = `
+                    <div class="no-results">
+                        <h2>No movies found</h2>
+                        <p>Try adjusting your search or filters</p>
+                    </div>
+                `;
+                return;
+            }
+
+            if (currentView === 'grid') {
+                container.innerHTML = filteredMovies.map((movie, index) => {
+                    const quality = getQualityBadge(movie);
+                    return `
+                        <div class="movie-card" onclick="openModal(${index})">
+                            <div class="movie-poster">
+                                <span class="movie-icon">🎬</span>
+                                <div class="play-overlay">
+                                    <span class="play-icon">▶</span>
+                                </div>
+                                <span class="quality-badge ${quality.class}">${quality.text}</span>
+                            </div>
+                            <div class="movie-info">
+                                <div class="movie-title" title="${movie.title || movie.name}">${movie.title || movie.name}</div>
+                                <div class="movie-meta">
+                                    <span>${movie.width || 0}×${movie.height || 0}</span>
+                                    <span>⏱ ${formatDuration(movie.duration)}</span>
+                                    <span>💾 ${formatBytes(movie.size)}</span>
+                                </div>
+                                <div class="movie-description">${movie.description || movie.genre || 'No description available'}</div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } else {
+                container.innerHTML = filteredMovies.map((movie, index) => {
+                    const quality = getQualityBadge(movie);
+                    return `
+                        <div class="list-card" onclick="openModal(${index})">
+                            <div class="list-poster">
+                                <span class="movie-icon">🎬</span>
+                                <span class="quality-badge ${quality.class}">${quality.text}</span>
+                            </div>
+                            <div class="list-info-content">
+                                <div class="list-title">${movie.title || movie.name}</div>
+                                <div class="list-details">
+                                    <span>📺 ${movie.width || 0}×${movie.height || 0}</span>
+                                    <span>⏱ ${formatDuration(movie.duration)}</span>
+                                    <span>💾 ${formatBytes(movie.size)}</span>
+                                    ${movie.video_codec ? `<span>🎥 ${movie.video_codec}</span>` : ''}
+                                    ${movie.frame_rate ? `<span>📹 ${movie.frame_rate} fps</span>` : ''}
+                                </div>
+                                <div class="list-description">${movie.description || movie.genre || 'No description available'}</div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+
+        function applyFilters() {
+            let results = moviesData;
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+
+            // Apply search
+            if (searchTerm) {
+                results = results.filter(movie => 
+                    (movie.title && movie.title.toLowerCase().includes(searchTerm)) ||
+                    (movie.name && movie.name.toLowerCase().includes(searchTerm)) ||
+                    (movie.genre && movie.genre.toLowerCase().includes(searchTerm)) ||
+                    (movie.video_codec && movie.video_codec.toLowerCase().includes(searchTerm)) ||
+                    (movie.path && movie.path.toLowerCase().includes(searchTerm))
+                );
+            }
+
+            // Apply filter
+            if (currentFilter === '4k') {
+                results = results.filter(movie => movie.width >= 3840);
+            } else if (currentFilter === 'hd') {
+                results = results.filter(movie => movie.width >= 1280 && movie.width < 3840);
+            } else if (currentFilter === 'long') {
+                results = results.filter(movie => movie.duration > 7200); // > 2 hours
+            }
+
+            filteredMovies = results;
+            renderMovies();
+        }
+
+        function openModal(index) {
+            const movie = filteredMovies[index];
+            const modal = document.getElementById('movieModal');
+            const details = document.getElementById('movieDetails');
+
+            details.innerHTML = `
+                <div class="details-header">
+                    <h2 class="details-title">${movie.title || movie.name}</h2>
+                    <div class="details-meta">
+                        <span>⏱ ${formatDuration(movie.duration)}</span>
+                        <span>📺 ${movie.width || 0}×${movie.height || 0}</span>
+                        ${movie.year ? `<span>📅 ${movie.year}</span>` : ''}
+                        ${movie.genre ? `<span>🎭 ${movie.genre}</span>` : ''}
+                    </div>
+                    ${movie.description ? `<p style="margin-top: 1rem; line-height: 1.6;">${movie.description}</p>` : ''}
+                </div>
+
+                <div class="metadata-grid">
+                    <div class="metadata-item">
+                        <div class="metadata-label">File Size</div>
+                        <div class="metadata-value">${formatBytes(movie.size)}</div>
+                    </div>
+                    <div class="metadata-item">
+                        <div class="metadata-label">Duration</div>
+                        <div class="metadata-value">${formatDuration(movie.duration)}</div>
+                    </div>
+                    <div class="metadata-item">
+                        <div class="metadata-label">Resolution</div>
+                        <div class="metadata-value">${movie.width || 0}×${movie.height || 0}</div>
+                    </div>
+                    ${movie.video_codec ? `
+                        <div class="metadata-item">
+                            <div class="metadata-label">Video Codec</div>
+                            <div class="metadata-value">${movie.video_codec}</div>
+                        </div>
+                    ` : ''}
+                    ${movie.audio_codec ? `
+                        <div class="metadata-item">
+                            <div class="metadata-label">Audio Codec</div>
+                            <div class="metadata-value">${movie.audio_codec}</div>
+                        </div>
+                    ` : ''}
+                    ${movie.frame_rate ? `
+                        <div class="metadata-item">
+                            <div class="metadata-label">Frame Rate</div>
+                            <div class="metadata-value">${movie.frame_rate} fps</div>
+                        </div>
+                    ` : ''}
+                    ${movie.video_bitrate ? `
+                        <div class="metadata-item">
+                            <div class="metadata-label">Video Bitrate</div>
+                            <div class="metadata-value">${formatBytes(movie.video_bitrate)}/s</div>
+                        </div>
+                    ` : ''}
+                    ${movie.audio_bitrate ? `
+                        <div class="metadata-item">
+                            <div class="metadata-label">Audio Bitrate</div>
+                            <div class="metadata-value">${movie.audio_bitrate / 1000} kbps</div>
+                        </div>
+                    ` : ''}
+                    ${movie.audio_channels ? `
+                        <div class="metadata-item">
+                            <div class="metadata-label">Audio Channels</div>
+                            <div class="metadata-value">${movie.audio_channels}</div>
+                        </div>
+                    ` : ''}
+                    ${movie.software ? `
+                        <div class="metadata-item">
+                            <div class="metadata-label">Encoder</div>
+                            <div class="metadata-value">${movie.software}</div>
+                        </div>
+                    ` : ''}
+                    ${movie.create_date ? `
+                        <div class="metadata-item">
+                            <div class="metadata-label">Created</div>
+                            <div class="metadata-value">${new Date(movie.create_date).toLocaleDateString()}</div>
+                        </div>
+                    ` : ''}
+                    <div class="metadata-item" style="grid-column: 1/-1;">
+                        <div class="metadata-label">File Path</div>
+                        <div class="metadata-value" style="word-break: break-all; font-size: 0.9rem;">${movie.path}</div>
+                    </div>
+                </div>
+            `;
+
+            modal.classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('movieModal').classList.remove('active');
+        }
+
+        // Event listeners
+        document.getElementById('searchInput').addEventListener('input', applyFilters);
+
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                currentFilter = this.dataset.filter;
+                applyFilters();
+            });
+        });
+
+        document.querySelectorAll('.view-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                currentView = this.dataset.view;
+                renderMovies();
+            });
+        });
+
+        document.getElementById('movieModal').addEventListener('click', function(e) {
+            if (e.target === this) closeModal();
+        });
+
+        document.addEventListener('keydown', function(e) {
+            const modal = document.getElementById('movieModal');
+            if (modal.classList.contains('active') && e.key === 'Escape') {
+                closeModal();
+            }
+        });
+
+        // Initial render
+        renderMovies();
+    </script>
+</body>
+</html>

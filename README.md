@@ -11,6 +11,7 @@ A powerful Node.js file management system inspired by [Czkawka](https://github.c
 - ⚠️ **Invalid Names Finder** - Detect files with problematic names
 - 🗄️ **MySQL Database Storage** - Store scan results in MySQL for analysis and reporting
 - 📷 **Media Metadata Extraction** - Extract EXIF, ID3, and video metadata for photos, music, and movies
+- 🖼️ **Interactive Web UIs** - Beautiful web interfaces for photo library, music player, and movie player
 - 🌐 **Network Support** - Scan files across network paths and drives
 - ⚡ **Fast Scanning** - Optimized file scanning with quick hash support
 - 🎨 **Beautiful CLI** - Colorful and user-friendly command-line interface
