@@ -150,6 +150,35 @@
             font-size: 0.85rem;
             opacity: 0.7;
         }
+        
+        .track-header > div {
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.2s;
+        }
+        
+        .track-header > div:hover {
+            opacity: 1;
+            color: #667eea;
+        }
+        
+        .track-header > div.sortable::after {
+            content: ' ⇅';
+            opacity: 0.5;
+            font-size: 0.7rem;
+        }
+        
+        .track-header > div.sorted-asc::after {
+            content: ' ▲';
+            opacity: 1;
+            color: #667eea;
+        }
+        
+        .track-header > div.sorted-desc::after {
+            content: ' ▼';
+            opacity: 1;
+            color: #667eea;
+        }
         .track-item {
             display: grid;
             grid-template-columns: 40px 2fr 1.5fr 80px 70px 80px 60px;
@@ -388,31 +417,37 @@
             background: rgba(255, 100, 100, 1);
         }
         
-        /* Year Multi-Select */
+        /* Year Range Filter */
         .year-filter {
-            position: relative;
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
         }
         
-        .year-select {
-            padding: 0.75rem 1rem;
+        .year-filter label {
+            font-size: 0.85rem;
+            opacity: 0.9;
+        }
+        
+        .year-input {
+            padding: 0.75rem 0.75rem;
             background: rgba(255, 255, 255, 0.1);
             border: 2px solid rgba(255, 255, 255, 0.2);
             color: white;
             border-radius: 8px;
-            cursor: pointer;
             font-size: 0.9rem;
-            min-width: 140px;
-            max-height: 200px;
+            width: 80px;
+            text-align: center;
         }
         
-        .year-select option {
-            background: #1e3c72;
-            color: white;
-            padding: 0.5rem;
+        .year-input::placeholder {
+            color: rgba(255, 255, 255, 0.5);
         }
         
-        .year-select option:checked {
-            background: #667eea;
+        .year-input:focus {
+            outline: none;
+            border-color: #667eea;
+            background: rgba(255, 255, 255, 0.15);
         }
         
         /* Queue Panel */
@@ -496,8 +531,10 @@
             <button class="filter-btn" data-filter="recent">Recent (2020+)</button>
             <button class="filter-btn" data-filter="long">Long (>5min)</button>
             <div class="year-filter">
-                <select class="year-select" id="yearFilter" multiple size="5">
-                </select>
+                <label>Year:</label>
+                <input type="number" class="year-input" id="yearFrom" placeholder="From" min="1900" max="2100">
+                <label>-</label>
+                <input type="number" class="year-input" id="yearTo" placeholder="To" min="1900" max="2100">
             </div>
             <button class="filter-btn" onclick="toggleQueue()">📋 Queue</button>
         </div>
@@ -526,12 +563,12 @@
             <div class="track-list">
                 <div class="track-header">
                     <div>#</div>
-                    <div>Title / Artist</div>
-                    <div>Album</div>
-                    <div>Duration</div>
-                    <div class="track-year">Year</div>
-                    <div class="track-genre">Genre</div>
-                    <div class="track-bitrate">Quality</div>
+                    <div class="sortable" data-sort="title">Title / Artist</div>
+                    <div class="sortable" data-sort="album">Album</div>
+                    <div class="sortable" data-sort="duration">Duration</div>
+                    <div class="track-year sortable" data-sort="year">Year</div>
+                    <div class="track-genre sortable" data-sort="genre">Genre</div>
+                    <div class="track-bitrate sortable" data-sort="bitrate">Quality</div>
                 </div>
                 <div id="trackContainer">
                     <div class="loading">Loading tracks...</div>
@@ -605,6 +642,7 @@
         let currentQueueIndex = -1;
         let contextTrack = null;
         let selectedYearFilter = '';
+        let currentSort = { field: null, direction: 'asc' };
 
         function formatDuration(seconds) {
             if (!seconds) return '0:00';
@@ -686,11 +724,13 @@
                 allTracksData = filterHiddenTracks(data.tracks);
                 currentPage = 1;
                 
-                // Populate year filter
-                populateYearFilter(allTracksData);
-                
                 // Apply client-side filters
                 let filteredTracks = applyFilters(allTracksData);
+                
+                // Apply sorting if set
+                if (currentSort.field) {
+                    filteredTracks = sortTracks(filteredTracks, currentSort.field, currentSort.direction);
+                }
                 
                 renderTracks(filteredTracks);
                 
@@ -925,28 +965,47 @@
                 }
             });
         });
+        
+        // Track header sorting
+        document.querySelectorAll('.track-header .sortable').forEach(header => {
+            header.addEventListener('click', function() {
+                const sortField = this.dataset.sort;
+                
+                // Toggle sort direction
+                if (currentSort.field === sortField) {
+                    currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                } else {
+                    currentSort.field = sortField;
+                    currentSort.direction = 'asc';
+                }
+                
+                // Update header styles
+                document.querySelectorAll('.track-header .sortable').forEach(h => {
+                    h.classList.remove('sorted-asc', 'sorted-desc');
+                });
+                this.classList.add(currentSort.direction === 'asc' ? 'sorted-asc' : 'sorted-desc');
+                
+                // Apply sort
+                let filtered = applyFilters(allTracksData);
+                filtered = sortTracks(filtered, currentSort.field, currentSort.direction);
+                currentPage = 1;
+                renderTracks(filtered);
+            });
+        });
 
         // Filter functions
-        function populateYearFilter(tracks) {
-            const years = new Set();
-            tracks.forEach(track => {
-                if (track.year) years.add(track.year);
-            });
-            
-            const yearFilter = document.getElementById('yearFilter');
-            const sortedYears = Array.from(years).sort((a, b) => b - a);
-            
-            yearFilter.innerHTML = sortedYears.map(year => `<option value="${year}">${year} (${tracks.filter(t => t.year === year).length})</option>`).join('');
-        }
-
         function applyFilters(tracks) {
             let filtered = tracks;
             
-            // Multi-select year filter
-            const yearFilter = document.getElementById('yearFilter');
-            const selectedYears = Array.from(yearFilter.selectedOptions).map(opt => opt.value);
-            if (selectedYears.length > 0) {
-                filtered = filtered.filter(track => selectedYears.includes(String(track.year)));
+            // Year range filter
+            const yearFrom = document.getElementById('yearFrom').value;
+            const yearTo = document.getElementById('yearTo').value;
+            
+            if (yearFrom) {
+                filtered = filtered.filter(track => track.year >= parseInt(yearFrom));
+            }
+            if (yearTo) {
+                filtered = filtered.filter(track => track.year <= parseInt(yearTo));
             }
             
             // Quality filters
@@ -958,9 +1017,42 @@
             
             return filtered;
         }
+        
+        // Sorting function
+        function sortTracks(tracks, field, direction) {
+            return [...tracks].sort((a, b) => {
+                let aVal = a[field];
+                let bVal = b[field];
+                
+                // Handle null/undefined values
+                if (aVal === null || aVal === undefined) aVal = '';
+                if (bVal === null || bVal === undefined) bVal = '';
+                
+                // Convert to lowercase for string comparison
+                if (typeof aVal === 'string') aVal = aVal.toLowerCase();
+                if (typeof bVal === 'string') bVal = bVal.toLowerCase();
+                
+                if (aVal < bVal) return direction === 'asc' ? -1 : 1;
+                if (aVal > bVal) return direction === 'asc' ? 1 : -1;
+                return 0;
+            });
+        }
 
-        document.getElementById('yearFilter').addEventListener('change', function() {
-            const filtered = applyFilters(allTracksData);
+        // Year range filter listeners
+        document.getElementById('yearFrom').addEventListener('input', function() {
+            let filtered = applyFilters(allTracksData);
+            if (currentSort.field) {
+                filtered = sortTracks(filtered, currentSort.field, currentSort.direction);
+            }
+            currentPage = 1;
+            renderTracks(filtered);
+        });
+        
+        document.getElementById('yearTo').addEventListener('input', function() {
+            let filtered = applyFilters(allTracksData);
+            if (currentSort.field) {
+                filtered = sortTracks(filtered, currentSort.field, currentSort.direction);
+            }
             currentPage = 1;
             renderTracks(filtered);
         });
