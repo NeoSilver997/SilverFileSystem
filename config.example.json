@@ -8,6 +8,12 @@
       ".cache",
       "temp",
       "tmp"
+    ],
+    "hiddenFolders": [
+      ".Trash",
+      ".RecycleBin",
+      "System Volume Information",
+      "$RECYCLE.BIN"
     ]
   },
   "duplicates": {

@@ -29,6 +29,13 @@ const strictLimiter = rateLimit({
   message: 'Too many requests from this IP, please try again later.'
 });
 
+// Higher limit for media streaming (images, audio, video)
+const mediaLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 500, // Higher limit for media files
+  message: 'Too many media requests from this IP, please try again later.'
+});
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -53,7 +60,7 @@ async function initDatabase(dbConfig = {}) {
   console.log('✓ Connected to database');
 
   // Serve image files (after database is initialized)
-  app.get('/images/:id', async (req, res) => {
+  app.get('/images/:id', mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -102,6 +109,163 @@ async function initDatabase(dbConfig = {}) {
 
     } catch (err) {
       console.error('Error serving image:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // Serve audio files
+  app.get('/audio/:id', mediaLimiter, async (req, res) => {
+    try {
+      const fileId = req.params.id;
+
+      // Get file path from database
+      const audio = await db.connection.query(
+        'SELECT path FROM scanned_files WHERE id = ?',
+        [fileId]
+      );
+
+      if (audio[0].length === 0) {
+        return res.status(404).json({ error: 'Audio not found' });
+      }
+
+      const filePath = audio[0][0].path;
+
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'File not found on disk' });
+      }
+
+      // Set appropriate content type
+      const ext = path.extname(filePath).toLowerCase();
+      const contentTypes = {
+        '.mp3': 'audio/mpeg',
+        '.flac': 'audio/flac',
+        '.wav': 'audio/wav',
+        '.aac': 'audio/aac',
+        '.m4a': 'audio/mp4',
+        '.ogg': 'audio/ogg',
+        '.wma': 'audio/x-ms-wma',
+        '.opus': 'audio/opus'
+      };
+
+      const contentType = contentTypes[ext] || 'audio/mpeg';
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Accept-Ranges', 'bytes');
+
+      // Get file stats
+      const stat = fs.statSync(filePath);
+      const fileSize = stat.size;
+      const range = req.headers.range;
+
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        
+        // Validate range values
+        if (isNaN(start) || isNaN(end) || start < 0 || end >= fileSize || start > end) {
+          return res.status(416).json({ error: 'Invalid range' });
+        }
+        
+        const chunksize = (end - start) + 1;
+        const fileStream = fs.createReadStream(filePath, { start, end });
+        const head = {
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Content-Length': chunksize,
+          'Content-Type': contentType,
+        };
+        res.writeHead(206, head);
+        fileStream.pipe(res);
+      } else {
+        const head = {
+          'Content-Length': fileSize,
+          'Content-Type': contentType,
+        };
+        res.writeHead(200, head);
+        fs.createReadStream(filePath).pipe(res);
+      }
+
+    } catch (err) {
+      console.error('Error serving audio:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // Serve video files
+  app.get('/video/:id', mediaLimiter, async (req, res) => {
+    try {
+      const fileId = req.params.id;
+
+      // Get file path from database
+      const video = await db.connection.query(
+        'SELECT path FROM scanned_files WHERE id = ?',
+        [fileId]
+      );
+
+      if (video[0].length === 0) {
+        return res.status(404).json({ error: 'Video not found' });
+      }
+
+      const filePath = video[0][0].path;
+
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'File not found on disk' });
+      }
+
+      // Set appropriate content type
+      const ext = path.extname(filePath).toLowerCase();
+      const contentTypes = {
+        '.mp4': 'video/mp4',
+        '.mkv': 'video/x-matroska',
+        '.avi': 'video/x-msvideo',
+        '.mov': 'video/quicktime',
+        '.wmv': 'video/x-ms-wmv',
+        '.flv': 'video/x-flv',
+        '.webm': 'video/webm',
+        '.m4v': 'video/mp4',
+        '.mpeg': 'video/mpeg'
+      };
+
+      const contentType = contentTypes[ext] || 'video/mp4';
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Accept-Ranges', 'bytes');
+
+      // Get file stats
+      const stat = fs.statSync(filePath);
+      const fileSize = stat.size;
+      const range = req.headers.range;
+
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        
+        // Validate range values
+        if (isNaN(start) || isNaN(end) || start < 0 || end >= fileSize || start > end) {
+          return res.status(416).json({ error: 'Invalid range' });
+        }
+        
+        const chunksize = (end - start) + 1;
+        const fileStream = fs.createReadStream(filePath, { start, end });
+        const head = {
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Content-Length': chunksize,
+          'Content-Type': contentType,
+        };
+        res.writeHead(206, head);
+        fileStream.pipe(res);
+      } else {
+        const head = {
+          'Content-Length': fileSize,
+          'Content-Type': contentType,
+        };
+        res.writeHead(200, head);
+        fs.createReadStream(filePath).pipe(res);
+      }
+
+    } catch (err) {
+      console.error('Error serving video:', err);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -682,6 +846,128 @@ app.get('/music', (req, res) => {
 app.get('/movies', (req, res) => {
   const html = fs.readFileSync(join(__dirname, 'public', 'movies.html'), 'utf8');
   res.send(html);
+});
+
+// Serve CLI tools page
+app.get('/cli-tools', (req, res) => {
+  const html = fs.readFileSync(join(__dirname, 'public', 'cli-tools.html'), 'utf8');
+  res.send(html);
+});
+
+// CLI execution endpoint (for demonstration - shows command info)
+app.post('/api/cli/execute', strictLimiter, async (req, res) => {
+  try {
+    const { command, args } = req.body;
+    
+    // For security, we'll return a formatted response showing what would be executed
+    // In a production environment, you would want to carefully validate and sanitize inputs
+    // or run commands in a sandboxed environment
+    
+    let output = '';
+    output += `Command: silverfs ${command}\n`;
+    output += `\nArguments:\n`;
+    
+    for (const [key, value] of Object.entries(args)) {
+      if (value) {
+        output += `  ${key}: ${value}\n`;
+      }
+    }
+    
+    output += `\n${'='.repeat(60)}\n\n`;
+    output += `⚠️  CLI Execution Information\n\n`;
+    output += `This is a demonstration interface showing the CLI command structure.\n`;
+    output += `To execute commands:\n\n`;
+    
+    switch(command) {
+      case 'scan':
+        output += `1. Open your terminal\n`;
+        output += `2. Navigate to the SilverFileSystem directory\n`;
+        output += `3. Run: node bin/cli.js scan "${args.path}" ${args.options}\n\n`;
+        output += `Example output:\n`;
+        output += `  ✓ Scanning directory...\n`;
+        output += `  ✓ Found 1,234 files\n`;
+        output += `  ✓ Total size: 5.2 GB\n`;
+        if (args.options.includes('--db')) {
+          output += `  ✓ Stored in database\n`;
+        }
+        if (args.options.includes('--extract-media')) {
+          output += `  ✓ Extracted media metadata\n`;
+        }
+        break;
+        
+      case 'duplicates':
+        output += `Run: node bin/cli.js duplicates "${args.path}"`;
+        if (args.minSize && args.minSize !== '0') {
+          output += ` -m ${args.minSize}`;
+        }
+        output += ` ${args.options}\n\n`;
+        output += `Example output:\n`;
+        output += `  ✓ Found 42 duplicate groups\n`;
+        output += `  ✓ Total wasted space: 856 MB\n`;
+        break;
+        
+      case 'find-duplicates-db':
+        output += `Run: node bin/cli.js find-duplicates-db`;
+        if (args.minSize && args.minSize !== '0') {
+          output += ` -m ${args.minSize}`;
+        }
+        if (args.report) {
+          output += ` --report ${args.report}`;
+        }
+        output += `\n\nExample output:\n`;
+        output += `  ✓ Querying database...\n`;
+        output += `  ✓ Found 42 duplicate groups from database\n`;
+        if (args.report) {
+          output += `  ✓ Generated report: ${args.report}\n`;
+        }
+        break;
+        
+      case 'generate-report':
+        output += `Run: node bin/cli.js generate-report "${args.output}"`;
+        if (args.minSize && args.minSize !== '0') {
+          output += ` -m ${args.minSize}`;
+        }
+        output += `\n\nExample output:\n`;
+        output += `  ✓ Generating HTML report...\n`;
+        output += `  ✓ Report saved: ${args.output}\n`;
+        output += `  ✓ Open in browser to view interactive report\n`;
+        break;
+        
+      case 'empty-files':
+        output += `Run: node bin/cli.js empty-files "${args.path}"\n\n`;
+        output += `Example output:\n`;
+        output += `  ✓ Found 15 empty files\n`;
+        output += `  ✓ Listed all empty files with paths\n`;
+        break;
+        
+      case 'large-files':
+        output += `Run: node bin/cli.js large-files "${args.path}" -m ${args.minSize} -l ${args.limit}\n\n`;
+        output += `Example output:\n`;
+        output += `  ✓ Top ${args.limit} files larger than ${args.minSize} MB\n`;
+        output += `  1. video.mp4 - 2.5 GB\n`;
+        output += `  2. backup.zip - 1.8 GB\n`;
+        output += `  3. database.sql - 950 MB\n`;
+        break;
+    }
+    
+    output += `\n${'='.repeat(60)}\n`;
+    output += `\n💡 Tip: Use the actual CLI for real-time execution and progress updates.\n`;
+    output += `📖 See README.md for complete documentation.\n`;
+    
+    res.json({
+      success: true,
+      command: command,
+      args: args,
+      output: output
+    });
+    
+  } catch (err) {
+    console.error('CLI API error:', err);
+    res.status(500).json({ 
+      error: 'Failed to process command',
+      message: err.message 
+    });
+  }
 });
 
 // ==================== START SERVER ====================

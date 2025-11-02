@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CLI Tools - SilverFileSystem</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+            padding: 0.5rem;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 1rem;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.25rem;
+            font-weight: 700;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-bottom: 1rem;
+            color: white;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+        }
+
+        .back-link:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .cli-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .cli-card {
+            background: rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 1rem;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .cli-card h3 {
+            font-size: 1.3rem;
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .cli-card p {
+            margin-bottom: 1rem;
+            opacity: 0.9;
+            font-size: 0.95rem;
+        }
+
+        .input-group {
+            margin-bottom: 0.75rem;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 0.25rem;
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+
+        .input-group input,
+        .input-group select {
+            width: 100%;
+            padding: 0.5rem;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border-radius: 6px;
+            font-size: 0.95rem;
+        }
+
+        .input-group input::placeholder {
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        .run-btn {
+            width: 100%;
+            padding: 0.75rem;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .run-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .run-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .output-section {
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 1rem;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            margin-top: 1rem;
+        }
+
+        .output-section h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .output-content {
+            background: rgba(0, 0, 0, 0.5);
+            padding: 1rem;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .output-content.empty {
+            text-align: center;
+            opacity: 0.6;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-left: 0.5rem;
+        }
+
+        .status-success {
+            background: #10b981;
+        }
+
+        .status-error {
+            background: #ef4444;
+        }
+
+        .status-running {
+            background: #3b82f6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">← Back to Dashboard</a>
+        
+        <div class="header">
+            <h1>🛠️ CLI Tools</h1>
+            <p>Execute SilverFileSystem commands from the web interface</p>
+        </div>
+
+        <div class="cli-grid">
+            <!-- Scan Directory -->
+            <div class="cli-card">
+                <h3>📂 Scan Directory</h3>
+                <p>Scan a directory and optionally store results in database</p>
+                <div class="input-group">
+                    <label>Directory Path *</label>
+                    <input type="text" id="scan-path" placeholder="/path/to/folder">
+                </div>
+                <div class="input-group">
+                    <label>Options</label>
+                    <select id="scan-options">
+                        <option value="">Basic Scan</option>
+                        <option value="--db">With Database</option>
+                        <option value="--db --extract-media">With Database + Media Extraction</option>
+                    </select>
+                </div>
+                <button class="run-btn" onclick="runCommand('scan')">Run Scan</button>
+            </div>
+
+            <!-- Find Duplicates -->
+            <div class="cli-card">
+                <h3>🔍 Find Duplicates</h3>
+                <p>Find duplicate files by comparing content hashes</p>
+                <div class="input-group">
+                    <label>Directory Path *</label>
+                    <input type="text" id="duplicates-path" placeholder="/path/to/folder">
+                </div>
+                <div class="input-group">
+                    <label>Min Size (bytes)</label>
+                    <input type="number" id="duplicates-minsize" placeholder="0" value="0">
+                </div>
+                <div class="input-group">
+                    <label>Options</label>
+                    <select id="duplicates-options">
+                        <option value="">Console Output</option>
+                        <option value="--db">Store in Database</option>
+                    </select>
+                </div>
+                <button class="run-btn" onclick="runCommand('duplicates')">Find Duplicates</button>
+            </div>
+
+            <!-- Find from Database -->
+            <div class="cli-card">
+                <h3>💾 Find Duplicates (DB)</h3>
+                <p>Query duplicates from existing database (no filesystem scan)</p>
+                <div class="input-group">
+                    <label>Min Size (bytes)</label>
+                    <input type="number" id="finddb-minsize" placeholder="0" value="0">
+                </div>
+                <div class="input-group">
+                    <label>Generate Report</label>
+                    <input type="text" id="finddb-report" placeholder="report.html (optional)">
+                </div>
+                <button class="run-btn" onclick="runCommand('find-duplicates-db')">Query Database</button>
+            </div>
+
+            <!-- Generate Report -->
+            <div class="cli-card">
+                <h3>📊 Generate Report</h3>
+                <p>Create an interactive HTML report for duplicates</p>
+                <div class="input-group">
+                    <label>Output File *</label>
+                    <input type="text" id="report-output" placeholder="duplicates-report.html">
+                </div>
+                <div class="input-group">
+                    <label>Min Size (bytes)</label>
+                    <input type="number" id="report-minsize" placeholder="0" value="0">
+                </div>
+                <button class="run-btn" onclick="runCommand('generate-report')">Generate Report</button>
+            </div>
+
+            <!-- Find Empty Files -->
+            <div class="cli-card">
+                <h3>📁 Find Empty Files</h3>
+                <p>Locate empty files (0 bytes)</p>
+                <div class="input-group">
+                    <label>Directory Path *</label>
+                    <input type="text" id="empty-files-path" placeholder="/path/to/folder">
+                </div>
+                <button class="run-btn" onclick="runCommand('empty-files')">Find Empty Files</button>
+            </div>
+
+            <!-- Find Large Files -->
+            <div class="cli-card">
+                <h3>💾 Find Large Files</h3>
+                <p>Find files consuming significant disk space</p>
+                <div class="input-group">
+                    <label>Directory Path *</label>
+                    <input type="text" id="large-files-path" placeholder="/path/to/folder">
+                </div>
+                <div class="input-group">
+                    <label>Min Size (MB)</label>
+                    <input type="number" id="large-files-minsize" placeholder="100" value="100">
+                </div>
+                <div class="input-group">
+                    <label>Limit</label>
+                    <input type="number" id="large-files-limit" placeholder="50" value="50">
+                </div>
+                <button class="run-btn" onclick="runCommand('large-files')">Find Large Files</button>
+            </div>
+        </div>
+
+        <div class="output-section">
+            <h2>
+                Command Output
+                <span id="status-badge" class="status-badge" style="display: none;"></span>
+            </h2>
+            <div id="output" class="output-content empty">
+                No commands executed yet. Run a command above to see results.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentCommand = null;
+
+        async function runCommand(command) {
+            const output = document.getElementById('output');
+            const statusBadge = document.getElementById('status-badge');
+            
+            // Build command arguments
+            let args = {};
+            let commandName = '';
+            
+            try {
+                switch(command) {
+                    case 'scan':
+                        const scanPath = document.getElementById('scan-path').value;
+                        if (!scanPath) {
+                            alert('Please enter a directory path');
+                            return;
+                        }
+                        commandName = 'scan';
+                        args = {
+                            path: scanPath,
+                            options: document.getElementById('scan-options').value
+                        };
+                        break;
+                        
+                    case 'duplicates':
+                        const dupPath = document.getElementById('duplicates-path').value;
+                        if (!dupPath) {
+                            alert('Please enter a directory path');
+                            return;
+                        }
+                        commandName = 'duplicates';
+                        args = {
+                            path: dupPath,
+                            minSize: document.getElementById('duplicates-minsize').value || '0',
+                            options: document.getElementById('duplicates-options').value
+                        };
+                        break;
+                        
+                    case 'find-duplicates-db':
+                        commandName = 'find-duplicates-db';
+                        args = {
+                            minSize: document.getElementById('finddb-minsize').value || '0',
+                            report: document.getElementById('finddb-report').value || ''
+                        };
+                        break;
+                        
+                    case 'generate-report':
+                        const reportOutput = document.getElementById('report-output').value;
+                        if (!reportOutput) {
+                            alert('Please enter an output file name');
+                            return;
+                        }
+                        commandName = 'generate-report';
+                        args = {
+                            output: reportOutput,
+                            minSize: document.getElementById('report-minsize').value || '0'
+                        };
+                        break;
+                        
+                    case 'empty-files':
+                        const emptyPath = document.getElementById('empty-files-path').value;
+                        if (!emptyPath) {
+                            alert('Please enter a directory path');
+                            return;
+                        }
+                        commandName = 'empty-files';
+                        args = {
+                            path: emptyPath
+                        };
+                        break;
+                        
+                    case 'large-files':
+                        const largePath = document.getElementById('large-files-path').value;
+                        if (!largePath) {
+                            alert('Please enter a directory path');
+                            return;
+                        }
+                        commandName = 'large-files';
+                        args = {
+                            path: largePath,
+                            minSize: document.getElementById('large-files-minsize').value || '100',
+                            limit: document.getElementById('large-files-limit').value || '50'
+                        };
+                        break;
+                }
+                
+                // Show running status
+                output.classList.remove('empty');
+                output.textContent = `Running: ${commandName}\nArguments: ${JSON.stringify(args, null, 2)}\n\n`;
+                statusBadge.textContent = 'Running';
+                statusBadge.className = 'status-badge status-running';
+                statusBadge.style.display = 'inline-block';
+                
+                // Disable all buttons
+                document.querySelectorAll('.run-btn').forEach(btn => btn.disabled = true);
+                
+                // Call API
+                const response = await fetch('/api/cli/execute', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        command: commandName,
+                        args: args
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.error) {
+                    throw new Error(result.error);
+                }
+                
+                // Show result
+                output.textContent += '\n' + '='.repeat(60) + '\n';
+                output.textContent += result.output || 'Command completed successfully.';
+                
+                statusBadge.textContent = 'Success';
+                statusBadge.className = 'status-badge status-success';
+                
+            } catch (err) {
+                output.textContent += '\n\nERROR: ' + err.message;
+                statusBadge.textContent = 'Error';
+                statusBadge.className = 'status-badge status-error';
+            } finally {
+                // Re-enable buttons
+                document.querySelectorAll('.run-btn').forEach(btn => btn.disabled = false);
+            }
+        }
+    </script>
+</body>
+</html>
