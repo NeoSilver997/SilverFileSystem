@@ -249,20 +249,20 @@
             background: rgba(0, 0, 0, 0.95);
             border: 2px solid rgba(255, 255, 255, 0.2);
             border-radius: 12px;
-            padding: 1.25rem;
-            max-width: 700px;
+            max-width: 900px;
             width: 100%;
-            max-height: 85vh;
-            overflow-y: auto;
+            max-height: 900px; /* Fit within 1080p (1920x1080) */
+            display: flex;
+            flex-direction: column;
         }
         
         .detail-header {
             display: flex;
             flex-direction: column;
             gap: 0.5rem;
-            margin-bottom: 1rem;
-            padding-bottom: 0.75rem;
+            padding: 1.25rem 1.25rem 0.75rem;
             border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            flex-shrink: 0;
         }
         
         .detail-header-top {
@@ -331,10 +331,32 @@
             gap: 0.75rem;
         }
         
+        .detail-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.25rem;
+        }
+        
+        .detail-section {
+            margin-bottom: 1.5rem;
+        }
+        
+        .detail-section-title {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            color: #667eea;
+        }
+        
         .detail-actions {
             display: flex;
             gap: 0.75rem;
-            margin-top: 1rem;
+            padding: 0.75rem 1.25rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.2);
+            background: rgba(0, 0, 0, 0.5);
+            flex-shrink: 0;
         }
         
         .detail-btn {
@@ -531,7 +553,10 @@
     <div id="detailModal" class="detail-modal">
         <div class="detail-content">
             <div class="detail-header"></div>
-            <div id="detailForm"></div>
+            <div class="detail-body">
+                <div id="detailForm"></div>
+            </div>
+            <div class="detail-actions" id="detailActions"></div>
         </div>
     </div>
 
@@ -911,7 +936,7 @@
             const yearFilter = document.getElementById('yearFilter');
             const sortedYears = Array.from(years).sort((a, b) => b - a);
             
-            yearFilter.innerHTML = sortedYears.map(year => `<option value="${year}">${year} (${tracks.filter(t => t.year == year).length})</option>`).join('');
+            yearFilter.innerHTML = sortedYears.map(year => `<option value="${year}">${year} (${tracks.filter(t => t.year === year).length})</option>`).join('');
         }
 
         function applyFilters(tracks) {
@@ -1016,6 +1041,7 @@
         function showDetailModal(track) {
             const modal = document.getElementById('detailModal');
             const form = document.getElementById('detailForm');
+            const actions = document.getElementById('detailActions');
             
             // Extract filename from path
             const filename = track.name || (track.path ? track.path.split('/').pop() : 'Unknown');
@@ -1031,59 +1057,79 @@
                 <div class="detail-filename">📁 ${filename}</div>
             `;
             
+            // Editable section
             form.innerHTML = `
-                <div class="detail-row">
-                    <div class="detail-field">
-                        <label>Title</label>
-                        <input type="text" id="edit-title" value="${track.title || track.name || ''}" />
+                <div class="detail-section">
+                    <div class="detail-section-title">✏️ Editable Information</div>
+                    <div class="detail-row">
+                        <div class="detail-field">
+                            <label>Title</label>
+                            <input type="text" id="edit-title" value="${track.title || track.name || ''}" />
+                        </div>
+                        <div class="detail-field">
+                            <label>Artist</label>
+                            <input type="text" id="edit-artist" value="${track.artist || ''}" />
+                        </div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-field">
+                            <label>Album</label>
+                            <input type="text" id="edit-album" value="${track.album || ''}" />
+                        </div>
+                        <div class="detail-field">
+                            <label>Year</label>
+                            <input type="number" id="edit-year" value="${track.year || ''}" />
+                        </div>
                     </div>
                     <div class="detail-field">
-                        <label>Artist</label>
-                        <input type="text" id="edit-artist" value="${track.artist || ''}" />
-                    </div>
-                </div>
-                <div class="detail-row">
-                    <div class="detail-field">
-                        <label>Album</label>
-                        <input type="text" id="edit-album" value="${track.album || ''}" />
-                    </div>
-                    <div class="detail-field">
-                        <label>Year</label>
-                        <input type="number" id="edit-year" value="${track.year || ''}" />
-                    </div>
-                </div>
-                <div class="detail-field">
-                    <label>Genre</label>
-                    <input type="text" id="edit-genre" value="${track.genre || ''}" />
-                </div>
-                <div class="detail-row">
-                    <div class="detail-field">
-                        <label>Duration</label>
-                        <input type="text" value="${formatDuration(track.duration)}" readonly />
-                    </div>
-                    <div class="detail-field">
-                        <label>Bitrate</label>
-                        <input type="text" value="${getQualityBadge(track)}" readonly />
+                        <label>Genre</label>
+                        <input type="text" id="edit-genre" value="${track.genre || ''}" />
                     </div>
                 </div>
-                <div class="detail-row">
-                    <div class="detail-field">
-                        <label>Codec</label>
-                        <input type="text" value="${track.codec || '-'}" readonly />
+                
+                <div class="detail-section">
+                    <div class="detail-section-title">📊 File Information</div>
+                    <div class="detail-row">
+                        <div class="detail-field">
+                            <label>Duration</label>
+                            <input type="text" value="${formatDuration(track.duration)}" readonly />
+                        </div>
+                        <div class="detail-field">
+                            <label>Bitrate</label>
+                            <input type="text" value="${getQualityBadge(track)}" readonly />
+                        </div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-field">
+                            <label>Codec</label>
+                            <input type="text" value="${track.codec || '-'}" readonly />
+                        </div>
+                        <div class="detail-field">
+                            <label>Size</label>
+                            <input type="text" value="${track.size ? formatBytes(track.size) : '-'}" readonly />
+                        </div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-field">
+                            <label>Sample Rate</label>
+                            <input type="text" value="${track.sample_rate ? track.sample_rate + ' Hz' : '-'}" readonly />
+                        </div>
+                        <div class="detail-field">
+                            <label>Channels</label>
+                            <input type="text" value="${track.channels || '-'}" readonly />
+                        </div>
                     </div>
                     <div class="detail-field">
-                        <label>Size</label>
-                        <input type="text" value="${track.size ? formatBytes(track.size) : '-'}" readonly />
+                        <label>File Path</label>
+                        <input type="text" value="${track.path || ''}" readonly style="font-size: 0.8rem;" />
                     </div>
                 </div>
-                <div class="detail-field">
-                    <label>File Path</label>
-                    <input type="text" value="${track.path || ''}" readonly style="font-size: 0.8rem;" />
-                </div>
-                <div class="detail-actions">
-                    <button class="detail-btn detail-btn-save" onclick="saveTrackDetails(${track.id})">💾 Save</button>
-                    <button class="detail-btn detail-btn-hide" onclick="hideTrackFromDetails(${track.id})">👁️ Hide</button>
-                </div>
+            `;
+            
+            // Always visible action buttons
+            actions.innerHTML = `
+                <button class="detail-btn detail-btn-save" onclick="saveTrackDetails(${track.id})">💾 Save</button>
+                <button class="detail-btn detail-btn-hide" onclick="hideTrackFromDetails(${track.id})">👁️ Hide</button>
             `;
             
             modal.classList.add('active');
