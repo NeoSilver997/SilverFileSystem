@@ -890,7 +890,7 @@
                 <div class="track-item" onclick="playTrackByIndex(${globalIndex})" oncontextmenu="showContextMenu(event, ${globalIndex}); return false;">
                     <div class="track-number">${globalIndex + 1}</div>
                     <div class="track-info">
-                        <div class="track-title">${track.title || track.name}</div>
+                        <div class="track-title" title="${track.path || (track.title || track.name)}">${track.title || track.name}</div>
                         <div class="track-artist">${track.artist || 'Unknown Artist'}</div>
                     </div>
                     <div class="track-album">${track.album || '-'}</div>
