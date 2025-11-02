@@ -263,6 +263,98 @@
             font-size: 0.9rem;
             opacity: 0.8;
         }
+        
+        /* File Type Breakdown */
+        .file-type-breakdown {
+            background: rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .file-type-breakdown h2 {
+            font-size: 2rem;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+        
+        .file-type-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+        }
+        
+        .file-type-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 1rem;
+            transition: all 0.3s;
+        }
+        
+        .file-type-card:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+        
+        .file-type-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+        }
+        
+        .file-type-icon {
+            font-size: 2rem;
+        }
+        
+        .file-type-name {
+            font-size: 1.2rem;
+            font-weight: 600;
+            text-transform: capitalize;
+        }
+        
+        .file-type-stats {
+            margin-bottom: 0.75rem;
+        }
+        
+        .file-type-stat {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.25rem 0;
+            font-size: 0.9rem;
+        }
+        
+        .file-type-stat-label {
+            opacity: 0.7;
+        }
+        
+        .file-type-stat-value {
+            font-weight: 600;
+        }
+        
+        .file-type-bar {
+            height: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 0.5rem;
+        }
+        
+        .file-type-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s;
+        }
+        
+        .file-type-extensions {
+            margin-top: 0.75rem;
+            font-size: 0.8rem;
+            opacity: 0.6;
+            font-style: italic;
+        }
 
         .action-buttons {
             display: grid;
@@ -462,6 +554,13 @@
                 <div class="storage-bar" id="storageBar"></div>
                 <div class="storage-legend" id="storageLegend"></div>
             </div>
+            
+            <div class="file-type-breakdown">
+                <h2>📂 File Type Classification</h2>
+                <div class="file-type-grid" id="fileTypeGrid">
+                    <div class="loading">Loading file type breakdown...</div>
+                </div>
+            </div>
 
             <div class="action-buttons">
                 <a href="/photos" class="action-btn">📷 Browse Photos</a>
@@ -567,6 +666,9 @@
                         </div>
                     </div>
                 `;
+                
+                // Load file type breakdown
+                loadFileTypeBreakdown();
 
                 // Show dashboard
                 document.getElementById('loadingMessage').style.display = 'none';
@@ -586,6 +688,81 @@
             const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        async function loadFileTypeBreakdown() {
+            try {
+                const response = await fetch('/api/file-type-breakdown');
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error('Failed to load file type breakdown');
+                }
+                
+                // Define icons for each category
+                const categoryIcons = {
+                    script: '📝',
+                    document: '📄',
+                    image: '🖼️',
+                    music: '🎵',
+                    video: '🎬',
+                    log: '📋',
+                    game: '🎮',
+                    system: '⚙️',
+                    program: '💻',
+                    other: '📦'
+                };
+                
+                // Sort categories by size (descending)
+                const sortedCategories = Object.entries(data.categories)
+                    .sort((a, b) => b[1].size - a[1].size)
+                    .filter(([_, cat]) => cat.count > 0); // Only show categories with files
+                
+                const grid = document.getElementById('fileTypeGrid');
+                
+                if (sortedCategories.length === 0) {
+                    grid.innerHTML = '<div style="text-align: center; padding: 2rem; opacity: 0.6;">No files scanned yet</div>';
+                    return;
+                }
+                
+                grid.innerHTML = sortedCategories.map(([category, cat]) => {
+                    const topExt = cat.topExtensions.length > 0 
+                        ? cat.topExtensions.map(e => e.ext).join(', ')
+                        : 'various';
+                    
+                    return `
+                        <div class="file-type-card">
+                            <div class="file-type-header">
+                                <div class="file-type-icon">${categoryIcons[category]}</div>
+                                <div class="file-type-name">${category}</div>
+                            </div>
+                            <div class="file-type-stats">
+                                <div class="file-type-stat">
+                                    <span class="file-type-stat-label">Files:</span>
+                                    <span class="file-type-stat-value">${cat.count.toLocaleString()}</span>
+                                </div>
+                                <div class="file-type-stat">
+                                    <span class="file-type-stat-label">Size:</span>
+                                    <span class="file-type-stat-value">${cat.sizeFormatted}</span>
+                                </div>
+                                <div class="file-type-stat">
+                                    <span class="file-type-stat-label">Percentage:</span>
+                                    <span class="file-type-stat-value">${cat.percentage}%</span>
+                                </div>
+                            </div>
+                            <div class="file-type-bar">
+                                <div class="file-type-bar-fill" style="width: ${cat.percentage}%"></div>
+                            </div>
+                            <div class="file-type-extensions">Top: ${topExt}</div>
+                        </div>
+                    `;
+                }).join('');
+                
+            } catch (err) {
+                console.error('Error loading file type breakdown:', err);
+                document.getElementById('fileTypeGrid').innerHTML = 
+                    `<div style="text-align: center; padding: 2rem; color: #e74c3c;">Error loading file types: ${err.message}</div>`;
+            }
         }
 
         // Load dashboard on page load

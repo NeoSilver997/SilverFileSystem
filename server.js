@@ -391,6 +391,119 @@ app.get('/api/summary', async (req, res) => {
   }
 });
 
+// Get file type breakdown statistics
+app.get('/api/file-type-breakdown', async (req, res) => {
+  try {
+    const connection = db.connection;
+    if (!connection) {
+      throw new Error('Database not connected');
+    }
+    
+    // Define file type categories with their extensions
+    const fileTypeCategories = {
+      script: ['.js', '.py', '.sh', '.bat', '.cmd', '.ps1', '.rb', '.pl', '.php', '.java', '.c', '.cpp', '.cs', '.go', '.rs', '.ts', '.jsx', '.tsx', '.vue', '.swift', '.kt'],
+      document: ['.pdf', '.doc', '.docx', '.txt', '.rtf', '.odt', '.xls', '.xlsx', '.ppt', '.pptx', '.csv', '.md', '.tex'],
+      image: ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.ico', '.tiff', '.tif', '.heic', '.raw', '.cr2', '.nef'],
+      music: ['.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a', '.wma', '.opus', '.ape'],
+      video: ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'],
+      log: ['.log', '.out', '.err'],
+      game: ['.exe', '.apk', '.ipa', '.app', '.dmg', '.iso', '.rom', '.sav'],
+      system: ['.dll', '.sys', '.so', '.dylib', '.ini', '.cfg', '.conf', '.config'],
+      program: ['.exe', '.msi', '.deb', '.rpm', '.pkg', '.appimage', '.snap']
+    };
+    
+    // Query to get size breakdown by extension
+    const [rows] = await connection.query(`
+      SELECT 
+        LOWER(extension) as ext,
+        COUNT(*) as count,
+        SUM(size) as total_size
+      FROM scanned_files
+      WHERE extension IS NOT NULL AND extension != ''
+      GROUP BY LOWER(extension)
+      ORDER BY total_size DESC
+    `);
+    
+    // Categorize files
+    const breakdown = {
+      script: { count: 0, size: 0, extensions: [] },
+      document: { count: 0, size: 0, extensions: [] },
+      image: { count: 0, size: 0, extensions: [] },
+      music: { count: 0, size: 0, extensions: [] },
+      video: { count: 0, size: 0, extensions: [] },
+      log: { count: 0, size: 0, extensions: [] },
+      game: { count: 0, size: 0, extensions: [] },
+      system: { count: 0, size: 0, extensions: [] },
+      program: { count: 0, size: 0, extensions: [] },
+      other: { count: 0, size: 0, extensions: [] }
+    };
+    
+    // Categorize each extension
+    rows.forEach(row => {
+      const ext = row.ext.toLowerCase();
+      const extWithDot = ext.startsWith('.') ? ext : '.' + ext;
+      const count = parseInt(row.count);
+      const size = parseInt(row.total_size);
+      
+      let categorized = false;
+      for (const [category, extensions] of Object.entries(fileTypeCategories)) {
+        if (extensions.includes(extWithDot)) {
+          breakdown[category].count += count;
+          breakdown[category].size += size;
+          breakdown[category].extensions.push({ ext: extWithDot, count, size });
+          categorized = true;
+          break;
+        }
+      }
+      
+      if (!categorized) {
+        breakdown.other.count += count;
+        breakdown.other.size += size;
+        breakdown.other.extensions.push({ ext: extWithDot, count, size });
+      }
+    });
+    
+    // Calculate total
+    let totalFiles = 0;
+    let totalSize = 0;
+    Object.values(breakdown).forEach(category => {
+      totalFiles += category.count;
+      totalSize += category.size;
+    });
+    
+    // Format the response
+    const response = {
+      total: {
+        files: totalFiles,
+        size: totalSize,
+        sizeFormatted: formatBytes(totalSize)
+      },
+      categories: {}
+    };
+    
+    // Add formatted data for each category
+    Object.entries(breakdown).forEach(([category, data]) => {
+      response.categories[category] = {
+        count: data.count,
+        size: data.size,
+        sizeFormatted: formatBytes(data.size),
+        percentage: totalSize > 0 ? ((data.size / totalSize) * 100).toFixed(2) : 0,
+        topExtensions: data.extensions.sort((a, b) => b.size - a.size).slice(0, 5).map(e => ({
+          ext: e.ext,
+          count: e.count,
+          size: e.size,
+          sizeFormatted: formatBytes(e.size)
+        }))
+      };
+    });
+    
+    res.json(response);
+  } catch (err) {
+    console.error('Error getting file type breakdown:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get all photos with optional search and filters
 app.get('/api/photos', async (req, res) => {
   try {
