@@ -142,32 +142,35 @@
         }
         .track-header {
             display: grid;
-            grid-template-columns: 50px 1fr 200px 100px 80px;
-            gap: 1rem;
-            padding: 0.75rem 1rem;
+            grid-template-columns: 40px 2fr 1.5fr 80px 70px 80px 60px;
+            gap: 0.75rem;
+            padding: 0.5rem 0.75rem;
             border-bottom: 2px solid rgba(255, 255, 255, 0.2);
             font-weight: 600;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             opacity: 0.7;
         }
         .track-item {
             display: grid;
-            grid-template-columns: 50px 1fr 200px 100px 80px;
-            gap: 1rem;
-            padding: 1rem;
+            grid-template-columns: 40px 2fr 1.5fr 80px 70px 80px 60px;
+            gap: 0.75rem;
+            padding: 0.5rem 0.75rem;
             border-radius: 8px;
             cursor: pointer;
             transition: all 0.3s;
             align-items: center;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.25rem;
         }
         .track-item:hover { background: rgba(255, 255, 255, 0.1); }
-        .track-number { text-align: center; font-weight: 600; }
+        .track-number { text-align: center; font-weight: 600; font-size: 0.85rem; }
         .track-info { display: flex; flex-direction: column; }
-        .track-title { font-weight: 600; margin-bottom: 0.25rem; }
-        .track-artist { font-size: 0.85rem; opacity: 0.7; }
-        .track-album { font-size: 0.9rem; }
-        .track-duration { text-align: center; }
+        .track-title { font-weight: 600; margin-bottom: 0.15rem; font-size: 0.95rem; }
+        .track-artist { font-size: 0.8rem; opacity: 0.7; }
+        .track-album { font-size: 0.85rem; opacity: 0.9; }
+        .track-duration { text-align: center; font-size: 0.85rem; }
+        .track-year { text-align: center; font-size: 0.85rem; opacity: 0.8; }
+        .track-genre { font-size: 0.85rem; opacity: 0.8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .track-bitrate { text-align: center; font-size: 0.8rem; }
         .quality-badge {
             display: inline-block;
             padding: 0.25rem 0.5rem;
@@ -177,12 +180,28 @@
             text-align: center;
         }
         .loading, .error, .no-results { text-align: center; padding: 4rem 2rem; }
+        .toggle-btn {
+            padding: 0.25rem 0.5rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            margin-left: 0.5rem;
+        }
+        .toggle-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        .hidden {
+            display: none !important;
+        }
         @media (max-width: 1024px) {
             .track-header, .track-item {
                 grid-template-columns: 40px 1fr 80px;
                 font-size: 0.9rem;
             }
-            .track-album, .quality-badge { display: none; }
+            .track-album, .track-year, .track-genre, .track-bitrate, .quality-badge { display: none; }
         }
     </style>
 </head>
@@ -202,12 +221,14 @@
 
     <div class="controls">
         <div class="search-box">
-            <input type="text" id="searchInput" placeholder="Search tracks, artists, albums...">
+            <input type="text" id="searchInput" placeholder="Search tracks, artists, albums, genre...">
         </div>
         <div class="filter-group">
             <button class="filter-btn active" data-filter="all">All</button>
             <button class="filter-btn" data-filter="flac">FLAC</button>
-            <button class="filter-btn" data-filter="hq">High Quality</button>
+            <button class="filter-btn" data-filter="hq">High Quality (>256k)</button>
+            <button class="filter-btn" data-filter="recent">Recent (2020+)</button>
+            <button class="filter-btn" data-filter="long">Long (>5min)</button>
         </div>
     </div>
 
@@ -220,11 +241,11 @@
                     <div class="view-count" id="allCount">Loading...</div>
                 </div>
                 <div class="view-item" data-view="artists">
-                    <div class="view-name">Artists</div>
+                    <div class="view-name">Artists <button class="toggle-btn" onclick="toggleArtists(event)">Hide</button></div>
                     <div class="view-count" id="artistsCount">Loading...</div>
                 </div>
                 <div class="view-item" data-view="albums">
-                    <div class="view-name">Albums</div>
+                    <div class="view-name">Albums <button class="toggle-btn" onclick="toggleAlbums(event)">Hide</button></div>
                     <div class="view-count" id="albumsCount">Loading...</div>
                 </div>
                 
@@ -234,10 +255,12 @@
             <div class="track-list">
                 <div class="track-header">
                     <div>#</div>
-                    <div>Title</div>
-                    <div class="track-album">Album</div>
+                    <div>Title / Artist</div>
+                    <div>Album</div>
                     <div>Duration</div>
-                    <div>Quality</div>
+                    <div class="track-year">Year</div>
+                    <div class="track-genre">Genre</div>
+                    <div class="track-bitrate">Quality</div>
                 </div>
                 <div id="trackContainer">
                     <div class="loading">Loading tracks...</div>
@@ -262,7 +285,7 @@
     </div>
 
     <script>
-        const ITEMS_PER_PAGE = 100; // Items per page
+        const ITEMS_PER_PAGE = 100; // Items per page (default show at least 100)
         let currentFilter = 'all';
         let currentView = 'all';
         let searchTimeout = null;
@@ -270,6 +293,8 @@
         let albums = [];
         let currentPage = 1;
         let allTracksData = [];
+        let artistsVisible = true;
+        let albumsVisible = true;
 
         function formatDuration(seconds) {
             if (!seconds) return '0:00';
@@ -284,6 +309,40 @@
             if (track.bitrate >= 256000) return '256k';
             if (track.bitrate >= 192000) return '192k';
             return `${Math.floor(track.bitrate / 1000)}k`;
+        }
+
+        function toggleArtists(event) {
+            event.stopPropagation();
+            artistsVisible = !artistsVisible;
+            const content = document.getElementById('sidebarContent');
+            const btn = event.target;
+            
+            if (currentView === 'artists') {
+                if (artistsVisible) {
+                    content.classList.remove('hidden');
+                    btn.textContent = 'Hide';
+                } else {
+                    content.classList.add('hidden');
+                    btn.textContent = 'Show';
+                }
+            }
+        }
+
+        function toggleAlbums(event) {
+            event.stopPropagation();
+            albumsVisible = !albumsVisible;
+            const content = document.getElementById('sidebarContent');
+            const btn = event.target;
+            
+            if (currentView === 'albums') {
+                if (albumsVisible) {
+                    content.classList.remove('hidden');
+                    btn.textContent = 'Hide';
+                } else {
+                    content.classList.add('hidden');
+                    btn.textContent = 'Show';
+                }
+            }
         }
 
         async function loadTracks() {
@@ -315,7 +374,16 @@
                 
                 allTracksData = data.tracks;
                 currentPage = 1;
-                renderTracks(allTracksData);
+                
+                // Apply client-side filters
+                let filteredTracks = allTracksData;
+                if (currentFilter === 'recent') {
+                    filteredTracks = allTracksData.filter(track => track.year && track.year >= 2020);
+                } else if (currentFilter === 'long') {
+                    filteredTracks = allTracksData.filter(track => track.duration && track.duration > 300);
+                }
+                
+                renderTracks(filteredTracks);
                 
             } catch (err) {
                 container.innerHTML = `<div class="error"><h2>Error loading tracks</h2><p>${err.message}</p></div>`;
@@ -332,8 +400,10 @@
                 
                 if (currentView === 'artists') {
                     const sidebarContent = document.getElementById('sidebarContent');
-                    sidebarContent.innerHTML = '<h2 style="margin-top: 1.5rem;">Artists</h2>' + 
-                        artists.map(artist => {
+                    // Sort artists by track count (descending)
+                    const sortedArtists = [...artists].sort((a, b) => b.trackCount - a.trackCount);
+                    sidebarContent.innerHTML = '<h2 style="margin-top: 1.5rem;">Artists (by track count)</h2>' + 
+                        sortedArtists.map(artist => {
                             const safeName = artist.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                             return `
                             <div class="view-item" onclick="loadArtistTracks('${safeName}')">
@@ -342,6 +412,10 @@
                             </div>
                         `;
                         }).join('');
+                    
+                    if (!artistsVisible) {
+                        sidebarContent.classList.add('hidden');
+                    }
                 }
             } catch (err) {
                 console.error('Error loading artists:', err);
@@ -358,8 +432,10 @@
                 
                 if (currentView === 'albums') {
                     const sidebarContent = document.getElementById('sidebarContent');
-                    sidebarContent.innerHTML = '<h2 style="margin-top: 1.5rem;">Albums</h2>' + 
-                        albums.map(album => {
+                    // Sort albums by track count (descending)
+                    const sortedAlbums = [...albums].sort((a, b) => b.trackCount - a.trackCount);
+                    sidebarContent.innerHTML = '<h2 style="margin-top: 1.5rem;">Albums (by track count)</h2>' + 
+                        sortedAlbums.map(album => {
                             const safeName = album.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                             return `
                             <div class="view-item" onclick="loadAlbumTracks('${safeName}')">
@@ -368,6 +444,10 @@
                             </div>
                         `;
                         }).join('');
+                    
+                    if (!albumsVisible) {
+                        sidebarContent.classList.add('hidden');
+                    }
                 }
             } catch (err) {
                 console.error('Error loading albums:', err);
@@ -466,7 +546,9 @@
                     </div>
                     <div class="track-album">${track.album || '-'}</div>
                     <div class="track-duration">${formatDuration(track.duration)}</div>
-                    <div><span class="quality-badge">${getQualityBadge(track)}</span></div>
+                    <div class="track-year">${track.year || '-'}</div>
+                    <div class="track-genre">${track.genre || '-'}</div>
+                    <div class="track-bitrate"><span class="quality-badge">${getQualityBadge(track)}</span></div>
                 </div>
             `}).join('');
             
