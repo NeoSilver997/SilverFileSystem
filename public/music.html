@@ -248,19 +248,38 @@
         .detail-content {
             background: rgba(0, 0, 0, 0.95);
             border: 2px solid rgba(255, 255, 255, 0.2);
-            border-radius: 16px;
-            padding: 2rem;
-            max-width: 800px;
+            border-radius: 12px;
+            padding: 1.25rem;
+            max-width: 700px;
             width: 100%;
-            max-height: 80vh;
+            max-height: 85vh;
             overflow-y: auto;
         }
         
         .detail-header {
             display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .detail-header-top {
+            display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 1.5rem;
+        }
+        
+        .detail-header h2 {
+            font-size: 1.3rem;
+            margin: 0;
+        }
+        
+        .detail-filename {
+            font-size: 0.85rem;
+            opacity: 0.7;
+            word-break: break-all;
         }
         
         .detail-close {
@@ -278,47 +297,53 @@
         }
         
         .detail-field {
-            margin-bottom: 1.5rem;
+            margin-bottom: 0.75rem;
         }
         
         .detail-field label {
             display: block;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.3rem;
             font-weight: 600;
-            font-size: 0.9rem;
-            opacity: 0.8;
+            font-size: 0.8rem;
+            opacity: 0.7;
         }
         
         .detail-field input,
         .detail-field textarea {
             width: 100%;
-            padding: 0.75rem;
+            padding: 0.5rem 0.75rem;
             background: rgba(255, 255, 255, 0.1);
             border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 8px;
+            border-radius: 6px;
             color: white;
-            font-size: 1rem;
+            font-size: 0.9rem;
             font-family: inherit;
         }
         
         .detail-field textarea {
-            min-height: 100px;
+            min-height: 80px;
             resize: vertical;
+        }
+        
+        .detail-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
         }
         
         .detail-actions {
             display: flex;
-            gap: 1rem;
-            margin-top: 2rem;
+            gap: 0.75rem;
+            margin-top: 1rem;
         }
         
         .detail-btn {
             flex: 1;
-            padding: 0.75rem;
+            padding: 0.6rem;
             border: none;
-            border-radius: 8px;
+            border-radius: 6px;
             cursor: pointer;
-            font-size: 1rem;
+            font-size: 0.9rem;
             font-weight: 600;
             transition: all 0.3s;
         }
@@ -341,7 +366,7 @@
             background: rgba(255, 100, 100, 1);
         }
         
-        /* Year Dropdown */
+        /* Year Multi-Select */
         .year-filter {
             position: relative;
         }
@@ -353,13 +378,19 @@
             color: white;
             border-radius: 8px;
             cursor: pointer;
-            font-size: 1rem;
-            min-width: 120px;
+            font-size: 0.9rem;
+            min-width: 140px;
+            max-height: 200px;
         }
         
         .year-select option {
             background: #1e3c72;
             color: white;
+            padding: 0.5rem;
+        }
+        
+        .year-select option:checked {
+            background: #667eea;
         }
         
         /* Queue Panel */
@@ -443,8 +474,7 @@
             <button class="filter-btn" data-filter="recent">Recent (2020+)</button>
             <button class="filter-btn" data-filter="long">Long (>5min)</button>
             <div class="year-filter">
-                <select class="year-select" id="yearFilter">
-                    <option value="">All Years</option>
+                <select class="year-select" id="yearFilter" multiple size="5">
                 </select>
             </div>
             <button class="filter-btn" onclick="toggleQueue()">📋 Queue</button>
@@ -500,10 +530,7 @@
     <!-- Detail Modal -->
     <div id="detailModal" class="detail-modal">
         <div class="detail-content">
-            <div class="detail-header">
-                <h2>Track Details</h2>
-                <button class="detail-close" onclick="closeDetailModal()">✕ Close</button>
-            </div>
+            <div class="detail-header"></div>
             <div id="detailForm"></div>
         </div>
     </div>
@@ -884,16 +911,17 @@
             const yearFilter = document.getElementById('yearFilter');
             const sortedYears = Array.from(years).sort((a, b) => b - a);
             
-            yearFilter.innerHTML = '<option value="">All Years</option>' + 
-                sortedYears.map(year => `<option value="${year}">${year}</option>`).join('');
+            yearFilter.innerHTML = sortedYears.map(year => `<option value="${year}">${year} (${tracks.filter(t => t.year == year).length})</option>`).join('');
         }
 
         function applyFilters(tracks) {
             let filtered = tracks;
             
-            // Year filter
-            if (selectedYearFilter) {
-                filtered = filtered.filter(track => track.year == selectedYearFilter);
+            // Multi-select year filter
+            const yearFilter = document.getElementById('yearFilter');
+            const selectedYears = Array.from(yearFilter.selectedOptions).map(opt => opt.value);
+            if (selectedYears.length > 0) {
+                filtered = filtered.filter(track => selectedYears.includes(String(track.year)));
             }
             
             // Quality filters
@@ -907,7 +935,6 @@
         }
 
         document.getElementById('yearFilter').addEventListener('change', function() {
-            selectedYearFilter = this.value;
             const filtered = applyFilters(allTracksData);
             currentPage = 1;
             renderTracks(filtered);
@@ -920,8 +947,22 @@
             
             const menu = document.getElementById('contextMenu');
             menu.style.display = 'block';
-            menu.style.left = event.pageX + 'px';
-            menu.style.top = event.pageY + 'px';
+            
+            // Position relative to viewport, accounting for scroll
+            let x = event.clientX;
+            let y = event.clientY;
+            
+            // Ensure menu doesn't go off-screen
+            const menuRect = menu.getBoundingClientRect();
+            if (x + menuRect.width > window.innerWidth) {
+                x = window.innerWidth - menuRect.width - 10;
+            }
+            if (y + menuRect.height > window.innerHeight) {
+                y = window.innerHeight - menuRect.height - 10;
+            }
+            
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
         }
 
         document.addEventListener('click', function() {
@@ -976,50 +1017,84 @@
             const modal = document.getElementById('detailModal');
             const form = document.getElementById('detailForm');
             
+            // Extract filename from path
+            const filename = track.name || (track.path ? track.path.split('/').pop() : 'Unknown');
+            
+            // Update modal header
+            const modalContent = modal.querySelector('.detail-content');
+            const header = modalContent.querySelector('.detail-header');
+            header.innerHTML = `
+                <div class="detail-header-top">
+                    <h2>Track Details</h2>
+                    <button class="detail-close" onclick="closeDetailModal()">✕</button>
+                </div>
+                <div class="detail-filename">📁 ${filename}</div>
+            `;
+            
             form.innerHTML = `
-                <div class="detail-field">
-                    <label>Title</label>
-                    <input type="text" id="edit-title" value="${track.title || track.name || ''}" />
+                <div class="detail-row">
+                    <div class="detail-field">
+                        <label>Title</label>
+                        <input type="text" id="edit-title" value="${track.title || track.name || ''}" />
+                    </div>
+                    <div class="detail-field">
+                        <label>Artist</label>
+                        <input type="text" id="edit-artist" value="${track.artist || ''}" />
+                    </div>
                 </div>
-                <div class="detail-field">
-                    <label>Artist</label>
-                    <input type="text" id="edit-artist" value="${track.artist || ''}" />
-                </div>
-                <div class="detail-field">
-                    <label>Album</label>
-                    <input type="text" id="edit-album" value="${track.album || ''}" />
-                </div>
-                <div class="detail-field">
-                    <label>Year</label>
-                    <input type="number" id="edit-year" value="${track.year || ''}" />
+                <div class="detail-row">
+                    <div class="detail-field">
+                        <label>Album</label>
+                        <input type="text" id="edit-album" value="${track.album || ''}" />
+                    </div>
+                    <div class="detail-field">
+                        <label>Year</label>
+                        <input type="number" id="edit-year" value="${track.year || ''}" />
+                    </div>
                 </div>
                 <div class="detail-field">
                     <label>Genre</label>
                     <input type="text" id="edit-genre" value="${track.genre || ''}" />
                 </div>
-                <div class="detail-field">
-                    <label>Duration</label>
-                    <input type="text" value="${formatDuration(track.duration)}" readonly />
+                <div class="detail-row">
+                    <div class="detail-field">
+                        <label>Duration</label>
+                        <input type="text" value="${formatDuration(track.duration)}" readonly />
+                    </div>
+                    <div class="detail-field">
+                        <label>Bitrate</label>
+                        <input type="text" value="${getQualityBadge(track)}" readonly />
+                    </div>
                 </div>
-                <div class="detail-field">
-                    <label>Bitrate</label>
-                    <input type="text" value="${getQualityBadge(track)}" readonly />
-                </div>
-                <div class="detail-field">
-                    <label>Codec</label>
-                    <input type="text" value="${track.codec || '-'}" readonly />
+                <div class="detail-row">
+                    <div class="detail-field">
+                        <label>Codec</label>
+                        <input type="text" value="${track.codec || '-'}" readonly />
+                    </div>
+                    <div class="detail-field">
+                        <label>Size</label>
+                        <input type="text" value="${track.size ? formatBytes(track.size) : '-'}" readonly />
+                    </div>
                 </div>
                 <div class="detail-field">
                     <label>File Path</label>
-                    <input type="text" value="${track.path || ''}" readonly />
+                    <input type="text" value="${track.path || ''}" readonly style="font-size: 0.8rem;" />
                 </div>
                 <div class="detail-actions">
-                    <button class="detail-btn detail-btn-save" onclick="saveTrackDetails(${track.id})">💾 Save Changes</button>
-                    <button class="detail-btn detail-btn-hide" onclick="hideTrackFromDetails(${track.id})">👁️ Hide Track</button>
+                    <button class="detail-btn detail-btn-save" onclick="saveTrackDetails(${track.id})">💾 Save</button>
+                    <button class="detail-btn detail-btn-hide" onclick="hideTrackFromDetails(${track.id})">👁️ Hide</button>
                 </div>
             `;
             
             modal.classList.add('active');
+        }
+        
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
 
         function closeDetailModal() {
