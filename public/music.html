@@ -405,6 +405,12 @@
         let currentTrack = null;
         let allTracks = [];
 
+        function playTrackByIndex(index) {
+            if (allTracks && allTracks[index]) {
+                playTrack(allTracks[index]);
+            }
+        }
+
         function playTrack(track) {
             currentTrack = track;
             const audioElement = document.getElementById('audioElement');
@@ -452,7 +458,7 @@
             container.innerHTML = tracksToShow.map((track, index) => {
                 const globalIndex = startIdx + index;
                 return `
-                <div class="track-item" onclick='playTrack(${JSON.stringify(track).replace(/'/g, "&#39;")})'>
+                <div class="track-item" onclick="playTrackByIndex(${globalIndex})">
                     <div class="track-number">${globalIndex + 1}</div>
                     <div class="track-info">
                         <div class="track-title">${track.title || track.name}</div>

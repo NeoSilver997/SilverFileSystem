@@ -248,6 +248,12 @@
             return { class: 'badge-sd', text: 'SD' };
         }
 
+        function playMovieByIndex(index) {
+            if (allMoviesData && allMoviesData[index]) {
+                playMovie(allMoviesData[index]);
+            }
+        }
+
         function playMovie(movie) {
             currentMovie = movie;
             const videoPlayer = document.getElementById('videoPlayer');
@@ -328,10 +334,11 @@
             const endIdx = startIdx + ITEMS_PER_PAGE;
             const moviesToShow = allMoviesData.slice(startIdx, endIdx);
             
-            container.innerHTML = moviesToShow.map(movie => {
+            container.innerHTML = moviesToShow.map((movie, index) => {
+                const globalIndex = startIdx + index;
                 const quality = getQualityBadge(movie);
                 return `
-                    <div class="movie-card" onclick='playMovie(${JSON.stringify(movie).replace(/'/g, "&#39;")})'>
+                    <div class="movie-card" onclick="playMovieByIndex(${globalIndex})">
                         <div class="movie-poster">
                             <span class="movie-icon">🎬</span>
                             <span class="quality-badge ${quality.class}">${quality.text}</span>
