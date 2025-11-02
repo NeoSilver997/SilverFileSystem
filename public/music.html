@@ -262,12 +262,14 @@
     </div>
 
     <script>
-        const MAX_ITEMS_TO_DISPLAY = 100; // Limit for performance
+        const ITEMS_PER_PAGE = 100; // Items per page
         let currentFilter = 'all';
         let currentView = 'all';
         let searchTimeout = null;
         let artists = [];
         let albums = [];
+        let currentPage = 1;
+        let allTracksData = [];
 
         function formatDuration(seconds) {
             if (!seconds) return '0:00';
@@ -305,30 +307,15 @@
                 document.getElementById('totalDuration').textContent = data.stats.totalDuration;
                 document.getElementById('totalSize').textContent = data.stats.totalSize;
                 
-                // Render tracks (limit to 100 items for performance)
+                // Store all tracks and render with pagination
                 if (data.tracks.length === 0) {
                     container.innerHTML = '<div class="no-results"><h2>No tracks found</h2><p>Try adjusting your search or filters</p></div>';
                     return;
                 }
                 
-                allTracks = data.tracks.slice(0, MAX_ITEMS_TO_DISPLAY);
-                
-                container.innerHTML = allTracks.map((track, index) => `
-                    <div class="track-item" onclick='playTrack(${JSON.stringify(track).replace(/'/g, "&#39;")})'>
-                        <div class="track-number">${index + 1}</div>
-                        <div class="track-info">
-                            <div class="track-title">${track.title || track.name}</div>
-                            <div class="track-artist">${track.artist || 'Unknown Artist'}</div>
-                        </div>
-                        <div class="track-album">${track.album || '-'}</div>
-                        <div class="track-duration">${formatDuration(track.duration)}</div>
-                        <div><span class="quality-badge">${getQualityBadge(track)}</span></div>
-                    </div>
-                `).join('');
-                
-                if (data.tracks.length > MAX_ITEMS_TO_DISPLAY) {
-                    container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: rgba(255,255,255,0.6);">Showing first ${MAX_ITEMS_TO_DISPLAY} of ${data.tracks.length} tracks. Use search or filters to refine results.</div>`;
-                }
+                allTracksData = data.tracks;
+                currentPage = 1;
+                renderTracks(allTracksData);
                 
             } catch (err) {
                 container.innerHTML = `<div class="error"><h2>Error loading tracks</h2><p>${err.message}</p></div>`;
@@ -456,11 +443,17 @@
                 return;
             }
             
-            allTracks = tracks.slice(0, MAX_ITEMS_TO_DISPLAY);
+            const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
+            const endIdx = startIdx + ITEMS_PER_PAGE;
+            const tracksToShow = tracks.slice(startIdx, endIdx);
             
-            container.innerHTML = allTracks.map((track, index) => `
+            allTracks = tracks; // Keep all for playing
+            
+            container.innerHTML = tracksToShow.map((track, index) => {
+                const globalIndex = startIdx + index;
+                return `
                 <div class="track-item" onclick='playTrack(${JSON.stringify(track).replace(/'/g, "&#39;")})'>
-                    <div class="track-number">${index + 1}</div>
+                    <div class="track-number">${globalIndex + 1}</div>
                     <div class="track-info">
                         <div class="track-title">${track.title || track.name}</div>
                         <div class="track-artist">${track.artist || 'Unknown Artist'}</div>
@@ -469,10 +462,34 @@
                     <div class="track-duration">${formatDuration(track.duration)}</div>
                     <div><span class="quality-badge">${getQualityBadge(track)}</span></div>
                 </div>
-            `).join('');
+            `}).join('');
             
-            if (tracks.length > MAX_ITEMS_TO_DISPLAY) {
-                container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: rgba(255,255,255,0.6);">Showing first ${MAX_ITEMS_TO_DISPLAY} of ${tracks.length} tracks. Use search or filters to refine results.</div>`;
+            // Add pagination controls if needed
+            const totalPages = Math.ceil(tracks.length / ITEMS_PER_PAGE);
+            if (totalPages > 1) {
+                container.innerHTML += `
+                    <div style="grid-column: 1/-1; text-align: center; padding: 1rem;">
+                        <div style="display: inline-flex; gap: 0.5rem; align-items: center; background: rgba(0,0,0,0.3); padding: 0.5rem; border-radius: 8px;">
+                            <button onclick="goToPageMusic(1)" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === 1 ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === 1 ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === 1 ? 'not-allowed' : 'pointer'}; font-weight: 600;">First</button>
+                            <button onclick="goToPageMusic(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === 1 ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === 1 ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === 1 ? 'not-allowed' : 'pointer'}; font-weight: 600;">‹ Prev</button>
+                            <span style="padding: 0.5rem 1rem; color: white; font-weight: 600;">Page ${currentPage} of ${totalPages}</span>
+                            <button onclick="goToPageMusic(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === totalPages ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Next ›</button>
+                            <button onclick="goToPageMusic(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === totalPages ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Last</button>
+                        </div>
+                        <div style="margin-top: 0.5rem; color: rgba(255,255,255,0.7); font-size: 0.9rem;">
+                            Showing ${startIdx + 1}-${Math.min(endIdx, tracks.length)} of ${tracks.length} tracks
+                        </div>
+                    </div>
+                `;
+            }
+        }
+        
+        function goToPageMusic(page) {
+            const totalPages = Math.ceil(allTracksData.length / ITEMS_PER_PAGE);
+            if (page >= 1 && page <= totalPages) {
+                currentPage = page;
+                renderTracks(allTracksData);
+                document.querySelector('.track-list').scrollTo({ top: 0, behavior: 'smooth' });
             }
         }
 

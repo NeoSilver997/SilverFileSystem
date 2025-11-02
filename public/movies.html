@@ -219,10 +219,12 @@
     </div>
 
     <script>
-        const MAX_ITEMS_TO_DISPLAY = 100; // Limit for performance
+        const ITEMS_PER_PAGE = 100; // Items per page
         let currentFilter = 'all';
         let searchTimeout = null;
         let currentMovie = null;
+        let currentPage = 1;
+        let allMoviesData = [];
 
         function formatDuration(seconds) {
             if (!seconds) return '0m';
@@ -304,41 +306,75 @@
                 document.getElementById('hdCount').textContent = data.stats.hdCount;
                 document.getElementById('fourKCount').textContent = data.stats.fourKCount;
                 
-                // Render movies (limit to 100 items for performance)
+                // Store all movies and render with pagination
                 if (data.movies.length === 0) {
                     container.innerHTML = '<div class="no-results"><h2>No movies found</h2><p>Try adjusting your search or filters</p></div>';
                     return;
                 }
                 
-                const movies = data.movies.slice(0, MAX_ITEMS_TO_DISPLAY);
-                
-                container.innerHTML = movies.map(movie => {
-                    const quality = getQualityBadge(movie);
-                    return `
-                        <div class="movie-card" onclick='playMovie(${JSON.stringify(movie).replace(/'/g, "&#39;")})'>
-                            <div class="movie-poster">
-                                <span class="movie-icon">🎬</span>
-                                <span class="quality-badge ${quality.class}">${quality.text}</span>
-                            </div>
-                            <div class="movie-info">
-                                <div class="movie-title">${movie.title || movie.name}</div>
-                                <div class="movie-meta">
-                                    <span>${movie.width || 0}×${movie.height || 0}</span>
-                                    <span>⏱ ${formatDuration(movie.duration)}</span>
-                                    <span>💾 ${formatBytes(movie.size)}</span>
-                                </div>
-                                <div class="movie-description">${movie.description || movie.genre || 'No description available'}</div>
-                            </div>
-                        </div>
-                    `;
-                }).join('');
-                
-                if (data.movies.length > MAX_ITEMS_TO_DISPLAY) {
-                    container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: #666;">Showing first ${MAX_ITEMS_TO_DISPLAY} of ${data.movies.length} movies. Use search or filters to refine results.</div>`;
-                }
+                allMoviesData = data.movies;
+                currentPage = 1;
+                renderMovies();
                 
             } catch (err) {
                 container.innerHTML = `<div class="error"><h2>Error loading movies</h2><p>${err.message}</p></div>`;
+            }
+        }
+
+        function renderMovies() {
+            const container = document.getElementById('movieContainer');
+            
+            const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
+            const endIdx = startIdx + ITEMS_PER_PAGE;
+            const moviesToShow = allMoviesData.slice(startIdx, endIdx);
+            
+            container.innerHTML = moviesToShow.map(movie => {
+                const quality = getQualityBadge(movie);
+                return `
+                    <div class="movie-card" onclick='playMovie(${JSON.stringify(movie).replace(/'/g, "&#39;")})'>
+                        <div class="movie-poster">
+                            <span class="movie-icon">🎬</span>
+                            <span class="quality-badge ${quality.class}">${quality.text}</span>
+                        </div>
+                        <div class="movie-info">
+                            <div class="movie-title">${movie.title || movie.name}</div>
+                            <div class="movie-meta">
+                                <span>${movie.width || 0}×${movie.height || 0}</span>
+                                <span>⏱ ${formatDuration(movie.duration)}</span>
+                                <span>💾 ${formatBytes(movie.size)}</span>
+                            </div>
+                            <div class="movie-description">${movie.description || movie.genre || 'No description available'}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            // Add pagination controls if needed
+            const totalPages = Math.ceil(allMoviesData.length / ITEMS_PER_PAGE);
+            if (totalPages > 1) {
+                container.innerHTML += `
+                    <div style="grid-column: 1/-1; text-align: center; padding: 1rem;">
+                        <div style="display: inline-flex; gap: 0.5rem; align-items: center; background: #1a1a1a; padding: 0.5rem; border-radius: 8px; border: 1px solid #2a2a2a;">
+                            <button onclick="goToPageMovies(1)" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === 1 ? '#252525' : '#2a2a2a'}; color: ${currentPage === 1 ? '#666' : '#e0e0e0'}; border: none; border-radius: 4px; cursor: ${currentPage === 1 ? 'not-allowed' : 'pointer'}; font-weight: 600;">First</button>
+                            <button onclick="goToPageMovies(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === 1 ? '#252525' : '#2a2a2a'}; color: ${currentPage === 1 ? '#666' : '#e0e0e0'}; border: none; border-radius: 4px; cursor: ${currentPage === 1 ? 'not-allowed' : 'pointer'}; font-weight: 600;">‹ Prev</button>
+                            <span style="padding: 0.5rem 1rem; color: #e0e0e0; font-weight: 600;">Page ${currentPage} of ${totalPages}</span>
+                            <button onclick="goToPageMovies(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? '#252525' : '#2a2a2a'}; color: ${currentPage === totalPages ? '#666' : '#e0e0e0'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Next ›</button>
+                            <button onclick="goToPageMovies(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? '#252525' : '#2a2a2a'}; color: ${currentPage === totalPages ? '#666' : '#e0e0e0'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Last</button>
+                        </div>
+                        <div style="margin-top: 0.5rem; color: #999; font-size: 0.9rem;">
+                            Showing ${startIdx + 1}-${Math.min(endIdx, allMoviesData.length)} of ${allMoviesData.length} movies
+                        </div>
+                    </div>
+                `;
+            }
+        }
+        
+        function goToPageMovies(page) {
+            const totalPages = Math.ceil(allMoviesData.length / ITEMS_PER_PAGE);
+            if (page >= 1 && page <= totalPages) {
+                currentPage = page;
+                renderMovies();
+                window.scrollTo({ top: 0, behavior: 'smooth' });
             }
         }
 

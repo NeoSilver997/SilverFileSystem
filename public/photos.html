@@ -516,15 +516,14 @@
     </div>
 
     <script>
-        const ITEMS_PER_PAGE = 100; // Items to load per page
+        const ITEMS_PER_PAGE = 100; // Items per page
         let currentFilter = 'all';
         let currentView = 'grid';
         let searchTimeout = null;
         let allPhotos = [];
-        let displayedPhotos = [];
         let allPhotosData = [];
         let currentLightboxIndex = 0;
-        let currentPage = 0;
+        let currentPage = 1;
 
         function formatDate(dateString) {
             if (!dateString) return 'N/A';
@@ -575,18 +574,18 @@
             const container = document.getElementById('photoContainer');
             
             if (reset) {
-                displayedPhotos = [];
-                currentPage = 0;
+                currentPage = 1;
             }
             
-            const startIdx = currentPage * ITEMS_PER_PAGE;
+            const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
             const endIdx = startIdx + ITEMS_PER_PAGE;
-            const photosToAdd = allPhotosData.slice(startIdx, endIdx);
+            const photosToShow = allPhotosData.slice(startIdx, endIdx);
             
-            displayedPhotos = displayedPhotos.concat(photosToAdd);
-            
-            container.innerHTML = displayedPhotos.map((photo, index) => `
-                <div class="photo-card" onclick="openLightbox(${index})">
+            // Render current page photos
+            container.innerHTML = photosToShow.map((photo, index) => {
+                const globalIndex = startIdx + index;
+                return `
+                <div class="photo-card" onclick="openLightbox(${globalIndex})">
                     <div class="photo-thumbnail">
                         <img src="/images/${photo.id}" alt="${photo.name}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
                         <span class="photo-icon" style="display: none;">📷</span>
@@ -601,27 +600,41 @@
                         </div>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
             
-            allPhotos = displayedPhotos;
+            allPhotos = allPhotosData; // For lightbox navigation
             
-            // Add load more button if there are more items
-            if (endIdx < allPhotosData.length) {
+            // Add pagination controls if needed
+            const totalPages = Math.ceil(allPhotosData.length / ITEMS_PER_PAGE);
+            if (totalPages > 1) {
                 container.innerHTML += `
                     <div style="grid-column: 1/-1; text-align: center; padding: 1rem;">
-                        <button onclick="loadMorePhotos()" style="padding: 0.75rem 2rem; background: #667eea; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 1rem; font-weight: 600;">
-                            Load More (${displayedPhotos.length} of ${allPhotosData.length})
-                        </button>
+                        <div style="display: inline-flex; gap: 0.5rem; align-items: center; background: white; padding: 0.5rem; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                            <button onclick="goToPage(1)" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === 1 ? '#e0e0e0' : '#667eea'}; color: ${currentPage === 1 ? '#999' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === 1 ? 'not-allowed' : 'pointer'}; font-weight: 600;">First</button>
+                            <button onclick="goToPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === 1 ? '#e0e0e0' : '#667eea'}; color: ${currentPage === 1 ? '#999' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === 1 ? 'not-allowed' : 'pointer'}; font-weight: 600;">‹ Prev</button>
+                            <span style="padding: 0.5rem 1rem; color: #333; font-weight: 600;">Page ${currentPage} of ${totalPages}</span>
+                            <button onclick="goToPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? '#e0e0e0' : '#667eea'}; color: ${currentPage === totalPages ? '#999' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Next ›</button>
+                            <button onclick="goToPage(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? '#e0e0e0' : '#667eea'}; color: ${currentPage === totalPages ? '#999' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Last</button>
+                        </div>
+                        <div style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">
+                            Showing ${startIdx + 1}-${Math.min(endIdx, allPhotosData.length)} of ${allPhotosData.length} photos
+                        </div>
                     </div>
                 `;
-            } else if (allPhotosData.length > ITEMS_PER_PAGE) {
-                container.innerHTML += `<div style="grid-column: 1/-1; text-align: center; padding: 1rem; color: #666;">Showing all ${allPhotosData.length} photos</div>`;
+            }
+            
+            // Scroll to top when changing pages
+            if (!reset) {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
             }
         }
         
-        function loadMorePhotos() {
-            currentPage++;
-            renderPhotos(false);
+        function goToPage(page) {
+            const totalPages = Math.ceil(allPhotosData.length / ITEMS_PER_PAGE);
+            if (page >= 1 && page <= totalPages) {
+                currentPage = page;
+                renderPhotos(false);
+            }
         }
 
         async function loadPhotos() {
@@ -660,8 +673,6 @@
                 
                 allPhotosData = data.photos;
                 allPhotos = data.photos;
-                currentPage = 0;
-                displayedPhotos = [];
                 
                 renderPhotos(true);
                 
