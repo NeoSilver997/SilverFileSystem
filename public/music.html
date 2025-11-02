@@ -1024,13 +1024,19 @@
                 let aVal = a[field];
                 let bVal = b[field];
                 
-                // Handle null/undefined values
-                if (aVal === null || aVal === undefined) aVal = '';
-                if (bVal === null || bVal === undefined) bVal = '';
+                // Handle null/undefined values - put them at the end
+                if (aVal === null || aVal === undefined) return 1;
+                if (bVal === null || bVal === undefined) return -1;
                 
-                // Convert to lowercase for string comparison
-                if (typeof aVal === 'string') aVal = aVal.toLowerCase();
-                if (typeof bVal === 'string') bVal = bVal.toLowerCase();
+                // Handle numeric fields (duration, year, bitrate)
+                if (field === 'duration' || field === 'year' || field === 'bitrate') {
+                    aVal = Number(aVal) || 0;
+                    bVal = Number(bVal) || 0;
+                } else {
+                    // Convert to lowercase for string comparison
+                    if (typeof aVal === 'string') aVal = aVal.toLowerCase();
+                    if (typeof bVal === 'string') bVal = bVal.toLowerCase();
+                }
                 
                 if (aVal < bVal) return direction === 'asc' ? -1 : 1;
                 if (aVal > bVal) return direction === 'asc' ? 1 : -1;
