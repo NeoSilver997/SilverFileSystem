@@ -774,6 +774,87 @@ app.get('/api/music/album/:name', async (req, res) => {
   }
 });
 
+// Music rating endpoints
+app.post('/api/music/rating', async (req, res) => {
+  try {
+    const { fileId, rating } = req.body;
+    
+    if (!fileId || !rating) {
+      return res.status(400).json({ error: 'fileId and rating are required' });
+    }
+    
+    const result = await db.setMusicRating(fileId, rating);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/music/rating/:fileId', async (req, res) => {
+  try {
+    const fileId = parseInt(req.params.fileId);
+    const rating = await db.getMusicRating(fileId);
+    res.json(rating || { rating: 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/music/ratings', async (req, res) => {
+  try {
+    const ratings = await db.getAllMusicRatings();
+    res.json(ratings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Music play history endpoints
+app.post('/api/music/play', async (req, res) => {
+  try {
+    const { fileId } = req.body;
+    
+    if (!fileId) {
+      return res.status(400).json({ error: 'fileId is required' });
+    }
+    
+    const result = await db.recordMusicPlay(fileId);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/music/play-count/:fileId', async (req, res) => {
+  try {
+    const fileId = parseInt(req.params.fileId);
+    const count = await db.getMusicPlayCount(fileId);
+    res.json({ fileId, playCount: count });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/music/play-counts', async (req, res) => {
+  try {
+    const playCounts = await db.getAllMusicPlayCounts();
+    res.json(playCounts);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/music/play-history/:fileId', async (req, res) => {
+  try {
+    const fileId = parseInt(req.params.fileId);
+    const limit = parseInt(req.query.limit) || 10;
+    const history = await db.getMusicPlayHistory(fileId, limit);
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Serve dashboard as homepage
 app.get('/', (req, res) => {
   const html = fs.readFileSync(join(__dirname, 'public', 'dashboard.html'), 'utf8');
