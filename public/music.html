@@ -1111,7 +1111,7 @@
     </div>
 
     <script>
-        const ITEMS_PER_PAGE = 100; // Items per page (default show at least 100)
+        let ITEMS_PER_PAGE = 100; // Items per page (configurable)
         let currentFilter = 'all';
         let currentView = 'all';
         let searchTimeout = null;
@@ -1197,12 +1197,19 @@
         
         // Restore sidebar state on load
         window.addEventListener('DOMContentLoaded', () => {
+            // Restore sidebar state
             const isMinimized = localStorage.getItem('sidebarMinimized') === 'true';
             if (isMinimized) {
                 const sidebar = document.getElementById('sidebar');
                 const mainContent = document.querySelector('.main-content');
                 sidebar.classList.add('minimized');
                 mainContent.classList.add('sidebar-minimized');
+            }
+            
+            // Restore page size preference
+            const savedPageSize = localStorage.getItem('musicPageSize');
+            if (savedPageSize) {
+                ITEMS_PER_PAGE = parseInt(savedPageSize);
             }
         });
 
@@ -1614,7 +1621,7 @@
 
         function getPaginationHTML(tracks, startIdx, endIdx) {
             const totalPages = Math.ceil(tracks.length / ITEMS_PER_PAGE);
-            if (totalPages <= 1) return '';
+            if (totalPages <= 1 && tracks.length <= 100) return '';
             
             return `
                 <div style="grid-column: 1/-1; padding: 1rem;">
@@ -1626,12 +1633,24 @@
                             <button onclick="goToPageMusic(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === totalPages ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Next ›</button>
                             <button onclick="goToPageMusic(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === totalPages ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Last</button>
                         </div>
-                        <div style="color: rgba(255,255,255,0.8); font-size: 0.9rem;">
-                            Showing ${startIdx + 1}-${Math.min(endIdx, tracks.length)} of ${tracks.length} tracks
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <label style="color: rgba(255,255,255,0.8); font-size: 0.9rem;">Items per page:</label>
+                            <select onchange="changePageSize(this.value)" style="padding: 0.3rem 0.5rem; background: rgba(255,255,255,0.2); color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 600;">
+                                <option value="100" ${ITEMS_PER_PAGE === 100 ? 'selected' : ''}>100</option>
+                                <option value="200" ${ITEMS_PER_PAGE === 200 ? 'selected' : ''}>200</option>
+                                <option value="500" ${ITEMS_PER_PAGE === 500 ? 'selected' : ''}>500</option>
+                            </select>
                         </div>
                     </div>
                 </div>
             `;
+        }
+        
+        function changePageSize(newSize) {
+            ITEMS_PER_PAGE = parseInt(newSize);
+            currentPage = 1; // Reset to first page
+            localStorage.setItem('musicPageSize', newSize); // Remember preference
+            refreshTrackList();
         }
         
         function renderTracks(tracks) {
