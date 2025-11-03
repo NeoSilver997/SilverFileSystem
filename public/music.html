@@ -57,7 +57,8 @@
         .filter-btn:hover { background: rgba(255, 255, 255, 0.2); }
         .filter-btn.active { background: rgba(255, 255, 255, 0.3); border-color: rgba(255, 255, 255, 0.5); }
         .container { padding: 0.5rem; max-width: 1400px; margin: 0 auto; }
-        .main-content { display: grid; grid-template-columns: 300px 1fr; gap: 2rem; }
+        .main-content { display: grid; grid-template-columns: 300px 1fr; gap: 2rem; transition: grid-template-columns 0.3s; }
+        .main-content.sidebar-minimized { grid-template-columns: 60px 1fr; }
         .sidebar {
             background: rgba(0, 0, 0, 0.3);
             backdrop-filter: blur(10px);
@@ -66,6 +67,49 @@
             height: fit-content;
             max-height: 70vh;
             overflow-y: auto;
+            transition: all 0.3s;
+            position: relative;
+        }
+        .sidebar.minimized {
+            padding: 0.5rem;
+            overflow: hidden;
+        }
+        .sidebar.minimized .sidebar-content {
+            display: none;
+        }
+        .sidebar.minimized .sidebar-toggle {
+            transform: rotate(180deg);
+        }
+        .sidebar-toggle {
+            position: absolute;
+            top: 0.75rem;
+            right: 0.75rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            z-index: 10;
+        }
+        .sidebar-toggle:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: scale(1.1);
+        }
+        .sidebar-minimized-icon {
+            display: none;
+            font-size: 1.5rem;
+            text-align: center;
+            cursor: pointer;
+            padding: 1rem 0;
+        }
+        .sidebar.minimized .sidebar-minimized-icon {
+            display: block;
         }
         .sidebar h2 {
             font-size: 1.3rem;
@@ -498,11 +542,58 @@
         }
         
         @media (max-width: 1024px) {
+            .main-content {
+                grid-template-columns: 1fr;
+                gap: 1rem;
+            }
+            .main-content.sidebar-minimized {
+                grid-template-columns: 1fr;
+            }
+            .sidebar {
+                max-height: 40vh;
+                order: 2;
+            }
+            .track-list {
+                order: 1;
+            }
             .track-header, .track-item {
                 grid-template-columns: 40px 1fr 80px;
                 font-size: 0.9rem;
             }
             .track-album, .track-year, .track-genre, .track-bitrate, .quality-badge { display: none; }
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .search-box {
+                min-width: 100%;
+            }
+            .filter-group {
+                justify-content: center;
+            }
+            .year-filter {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.5rem;
+            }
+            .stats-bar {
+                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            }
+            .stat-number {
+                font-size: 1.3rem;
+            }
+            .stat-label {
+                font-size: 0.75rem;
+            }
+            .filter-btn {
+                padding: 0.5rem 1rem;
+                font-size: 0.85rem;
+            }
         }
     </style>
 </head>
@@ -542,22 +633,26 @@
 
     <div class="container">
         <div class="main-content">
-            <div class="sidebar">
-                <h2>Browse By</h2>
-                <div class="view-item active" data-view="all">
-                    <div class="view-name">All Tracks</div>
-                    <div class="view-count" id="allCount">Loading...</div>
+            <div class="sidebar" id="sidebar">
+                <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle Sidebar">◀</button>
+                <div class="sidebar-minimized-icon" onclick="toggleSidebar()" title="Expand Sidebar">📚</div>
+                <div class="sidebar-content">
+                    <h2>Browse By</h2>
+                    <div class="view-item active" data-view="all">
+                        <div class="view-name">All Tracks</div>
+                        <div class="view-count" id="allCount">Loading...</div>
+                    </div>
+                    <div class="view-item" data-view="artists">
+                        <div class="view-name">Artists <button class="toggle-btn" onclick="toggleArtists(event)">Hide</button></div>
+                        <div class="view-count" id="artistsCount">Loading...</div>
+                    </div>
+                    <div class="view-item" data-view="albums">
+                        <div class="view-name">Albums <button class="toggle-btn" onclick="toggleAlbums(event)">Hide</button></div>
+                        <div class="view-count" id="albumsCount">Loading...</div>
+                    </div>
+                    
+                    <div id="sidebarContent"></div>
                 </div>
-                <div class="view-item" data-view="artists">
-                    <div class="view-name">Artists <button class="toggle-btn" onclick="toggleArtists(event)">Hide</button></div>
-                    <div class="view-count" id="artistsCount">Loading...</div>
-                </div>
-                <div class="view-item" data-view="albums">
-                    <div class="view-name">Albums <button class="toggle-btn" onclick="toggleAlbums(event)">Hide</button></div>
-                    <div class="view-count" id="albumsCount">Loading...</div>
-                </div>
-                
-                <div id="sidebarContent"></div>
             </div>
 
             <div class="track-list">
@@ -692,6 +787,28 @@
                 }
             }
         }
+        
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const mainContent = document.querySelector('.main-content');
+            sidebar.classList.toggle('minimized');
+            mainContent.classList.toggle('sidebar-minimized');
+            
+            // Save state to localStorage
+            const isMinimized = sidebar.classList.contains('minimized');
+            localStorage.setItem('sidebarMinimized', isMinimized);
+        }
+        
+        // Restore sidebar state on load
+        window.addEventListener('DOMContentLoaded', () => {
+            const isMinimized = localStorage.getItem('sidebarMinimized') === 'true';
+            if (isMinimized) {
+                const sidebar = document.getElementById('sidebar');
+                const mainContent = document.querySelector('.main-content');
+                sidebar.classList.add('minimized');
+                mainContent.classList.add('sidebar-minimized');
+            }
+        });
 
         async function loadTracks() {
             const container = document.getElementById('trackContainer');
@@ -930,6 +1047,16 @@
             }
         }
 
+        // Helper function to refresh the track list with current filters and sort
+        function refreshTrackList() {
+            let filtered = applyFilters(allTracksData);
+            if (currentSort.field) {
+                filtered = sortTracks(filtered, currentSort.field, currentSort.direction);
+            }
+            currentPage = 1;
+            renderTracks(filtered);
+        }
+        
         // Event listeners
         document.getElementById('searchInput').addEventListener('input', () => {
             clearTimeout(searchTimeout);
@@ -938,6 +1065,9 @@
 
         document.querySelectorAll('.filter-btn').forEach(btn => {
             btn.addEventListener('click', function() {
+                // Skip if it's the Queue button
+                if (this.onclick) return;
+                
                 document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
                 this.classList.add('active');
                 currentFilter = this.dataset.filter;
@@ -985,11 +1115,8 @@
                 });
                 this.classList.add(currentSort.direction === 'asc' ? 'sorted-asc' : 'sorted-desc');
                 
-                // Apply sort
-                let filtered = applyFilters(allTracksData);
-                filtered = sortTracks(filtered, currentSort.field, currentSort.direction);
-                currentPage = 1;
-                renderTracks(filtered);
+                // Apply sort with current filters
+                refreshTrackList();
             });
         });
 
@@ -1046,21 +1173,11 @@
 
         // Year range filter listeners
         document.getElementById('yearFrom').addEventListener('input', function() {
-            let filtered = applyFilters(allTracksData);
-            if (currentSort.field) {
-                filtered = sortTracks(filtered, currentSort.field, currentSort.direction);
-            }
-            currentPage = 1;
-            renderTracks(filtered);
+            refreshTrackList();
         });
         
         document.getElementById('yearTo').addEventListener('input', function() {
-            let filtered = applyFilters(allTracksData);
-            if (currentSort.field) {
-                filtered = sortTracks(filtered, currentSort.field, currentSort.direction);
-            }
-            currentPage = 1;
-            renderTracks(filtered);
+            refreshTrackList();
         });
 
         // Context Menu functions
