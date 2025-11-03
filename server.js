@@ -10,6 +10,8 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
 import path from 'path';
+import { OAuth2Client } from 'google-auth-library';
+import jwt from 'jsonwebtoken';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -48,6 +50,29 @@ app.use('/api/', apiLimiter);
 
 // Database connection
 let db = null;
+
+// Google OAuth setup
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || ''; // Set in .env file
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+
+// Authentication middleware
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Access token required' });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
+    req.user = user;
+    next();
+  });
+}
 
 // Initialize database
 async function initDatabase(dbConfig = {}) {
@@ -778,26 +803,91 @@ app.get('/api/music/album/:name', async (req, res) => {
   }
 });
 
+// Google OAuth authentication endpoint
+app.post('/api/auth/google', strictLimiter, async (req, res) => {
+  try {
+    const { token } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({ error: 'Google token required' });
+    }
+
+    // Verify the Google token
+    const ticket = await googleClient.verifyIdToken({
+      idToken: token,
+      audience: GOOGLE_CLIENT_ID
+    });
+    
+    const payload = ticket.getPayload();
+    const { sub: googleId, email, name, picture } = payload;
+
+    // Create or update user in database
+    const user = await db.createOrUpdateUser(googleId, email, name, picture);
+
+    // Generate JWT token for session
+    const jwtToken = jwt.sign(
+      { userId: user.id, googleId: user.google_id, email: user.email },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      success: true,
+      token: jwtToken,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        picture: user.picture
+      }
+    });
+  } catch (err) {
+    console.error('Google auth error:', err);
+    res.status(401).json({ error: 'Invalid Google token' });
+  }
+});
+
+// Verify JWT token endpoint
+app.get('/api/auth/verify', authenticateToken, (req, res) => {
+  res.json({ success: true, user: req.user });
+});
+
 // Music rating endpoints
-app.post('/api/music/rating', async (req, res) => {
+app.post('/api/music/rating', authenticateToken, async (req, res) => {
   try {
     const { fileId, rating } = req.body;
     
     if (!fileId || !rating) {
       return res.status(400).json({ error: 'fileId and rating are required' });
     }
+
+    // Validate input
+    const validFileId = parseInt(fileId);
+    const validRating = parseInt(rating);
     
-    const result = await db.setMusicRating(fileId, rating);
+    if (isNaN(validFileId) || validFileId <= 0) {
+      return res.status(400).json({ error: 'Invalid fileId' });
+    }
+    
+    if (isNaN(validRating) || validRating < 1 || validRating > 5) {
+      return res.status(400).json({ error: 'Rating must be between 1 and 5' });
+    }
+    
+    const result = await db.setMusicRating(validFileId, validRating, req.user.userId);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get('/api/music/rating/:fileId', async (req, res) => {
+app.get('/api/music/rating/:fileId', authenticateToken, async (req, res) => {
   try {
     const fileId = parseInt(req.params.fileId);
-    const rating = await db.getMusicRating(fileId);
+    if (isNaN(fileId) || fileId <= 0) {
+      return res.status(400).json({ error: 'Invalid fileId' });
+    }
+    
+    const rating = await db.getUserTrackRating(fileId, req.user.userId);
     res.json(rating || { rating: 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -813,16 +903,31 @@ app.get('/api/music/ratings', async (req, res) => {
   }
 });
 
+// Get user-specific ratings
+app.get('/api/music/my-ratings', authenticateToken, async (req, res) => {
+  try {
+    const ratings = await db.getUserRatings(req.user.userId);
+    res.json(ratings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Music play history endpoints
-app.post('/api/music/play', async (req, res) => {
+app.post('/api/music/play', authenticateToken, async (req, res) => {
   try {
     const { fileId } = req.body;
     
     if (!fileId) {
       return res.status(400).json({ error: 'fileId is required' });
     }
+
+    const validFileId = parseInt(fileId);
+    if (isNaN(validFileId) || validFileId <= 0) {
+      return res.status(400).json({ error: 'Invalid fileId' });
+    }
     
-    const result = await db.recordMusicPlay(fileId);
+    const result = await db.recordMusicPlay(validFileId, req.user.userId);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -851,8 +956,31 @@ app.get('/api/music/play-counts', async (req, res) => {
 app.get('/api/music/play-history/:fileId', async (req, res) => {
   try {
     const fileId = parseInt(req.params.fileId);
+    if (isNaN(fileId) || fileId <= 0) {
+      return res.status(400).json({ error: 'Invalid fileId' });
+    }
+    
     const limit = parseInt(req.query.limit) || 10;
+    if (isNaN(limit) || limit <= 0 || limit > 1000) {
+      return res.status(400).json({ error: 'Invalid limit (must be 1-1000)' });
+    }
+    
     const history = await db.getMusicPlayHistory(fileId, limit);
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get user's own play history
+app.get('/api/music/my-plays', authenticateToken, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    if (isNaN(limit) || limit <= 0 || limit > 1000) {
+      return res.status(400).json({ error: 'Invalid limit (must be 1-1000)' });
+    }
+    
+    const history = await db.getUserPlayHistory(req.user.userId, limit);
     res.json(history);
   } catch (err) {
     res.status(500).json({ error: err.message });
