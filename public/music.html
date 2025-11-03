@@ -557,10 +557,10 @@
                 order: 1;
             }
             .track-header, .track-item {
-                grid-template-columns: 40px 1fr 1fr 80px;
+                grid-template-columns: 1fr 1fr 80px;
                 font-size: 0.9rem;
             }
-            .track-year, .track-genre, .track-bitrate, .quality-badge { display: none; }
+            .track-number, .track-year, .track-genre, .track-bitrate, .quality-badge { display: none; }
             .controls {
                 flex-direction: column;
                 align-items: stretch;
@@ -927,7 +927,17 @@
                 
                 if (data.error) throw new Error(data.error);
                 
-                renderTracks(data.tracks);
+                // Store tracks and apply filters/sorting
+                allTracksData = filterHiddenTracks(data.tracks);
+                currentPage = 1;
+                
+                // Apply client-side filters and sorting
+                let filteredTracks = applyFilters(allTracksData);
+                if (currentSort.field) {
+                    filteredTracks = sortTracks(filteredTracks, currentSort.field, currentSort.direction);
+                }
+                
+                renderTracks(filteredTracks);
             } catch (err) {
                 container.innerHTML = `<div class="error"><h2>Error loading tracks</h2><p>${err.message}</p></div>`;
             }
@@ -941,7 +951,17 @@
                 
                 if (data.error) throw new Error(data.error);
                 
-                renderTracks(data.tracks);
+                // Store tracks and apply filters/sorting
+                allTracksData = filterHiddenTracks(data.tracks);
+                currentPage = 1;
+                
+                // Apply client-side filters and sorting
+                let filteredTracks = applyFilters(allTracksData);
+                if (currentSort.field) {
+                    filteredTracks = sortTracks(filteredTracks, currentSort.field, currentSort.direction);
+                }
+                
+                renderTracks(filteredTracks);
             } catch (err) {
                 container.innerHTML = `<div class="error"><h2>Error loading tracks</h2><p>${err.message}</p></div>`;
             }
@@ -986,6 +1006,26 @@
             document.getElementById('audioPlayer').classList.remove('active');
         }
 
+        function getPaginationHTML(tracks, startIdx, endIdx) {
+            const totalPages = Math.ceil(tracks.length / ITEMS_PER_PAGE);
+            if (totalPages <= 1) return '';
+            
+            return `
+                <div style="grid-column: 1/-1; text-align: center; padding: 1rem;">
+                    <div style="display: inline-flex; gap: 0.5rem; align-items: center; background: rgba(0,0,0,0.3); padding: 0.5rem; border-radius: 8px;">
+                        <button onclick="goToPageMusic(1)" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === 1 ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === 1 ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === 1 ? 'not-allowed' : 'pointer'}; font-weight: 600;">First</button>
+                        <button onclick="goToPageMusic(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === 1 ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === 1 ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === 1 ? 'not-allowed' : 'pointer'}; font-weight: 600;">‹ Prev</button>
+                        <span style="padding: 0.5rem 1rem; color: white; font-weight: 600;">Page ${currentPage} of ${totalPages}</span>
+                        <button onclick="goToPageMusic(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === totalPages ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Next ›</button>
+                        <button onclick="goToPageMusic(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === totalPages ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Last</button>
+                    </div>
+                    <div style="margin-top: 0.5rem; color: rgba(255,255,255,0.7); font-size: 0.9rem;">
+                        Showing ${startIdx + 1}-${Math.min(endIdx, tracks.length)} of ${tracks.length} tracks
+                    </div>
+                </div>
+            `;
+        }
+        
         function renderTracks(tracks) {
             const container = document.getElementById('trackContainer');
             
@@ -1000,7 +1040,11 @@
             
             allTracks = tracks; // Keep all for playing
             
-            container.innerHTML = tracksToShow.map((track, index) => {
+            // Add pagination at top
+            let html = getPaginationHTML(tracks, startIdx, endIdx);
+            
+            // Add tracks
+            html += tracksToShow.map((track, index) => {
                 const globalIndex = startIdx + index;
                 return `
                 <div class="track-item" onclick="playTrackByIndex(${globalIndex})" oncontextmenu="showContextMenu(event, ${globalIndex}); return false;">
@@ -1017,24 +1061,10 @@
                 </div>
             `}).join('');
             
-            // Add pagination controls if needed
-            const totalPages = Math.ceil(tracks.length / ITEMS_PER_PAGE);
-            if (totalPages > 1) {
-                container.innerHTML += `
-                    <div style="grid-column: 1/-1; text-align: center; padding: 1rem;">
-                        <div style="display: inline-flex; gap: 0.5rem; align-items: center; background: rgba(0,0,0,0.3); padding: 0.5rem; border-radius: 8px;">
-                            <button onclick="goToPageMusic(1)" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === 1 ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === 1 ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === 1 ? 'not-allowed' : 'pointer'}; font-weight: 600;">First</button>
-                            <button onclick="goToPageMusic(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === 1 ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === 1 ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === 1 ? 'not-allowed' : 'pointer'}; font-weight: 600;">‹ Prev</button>
-                            <span style="padding: 0.5rem 1rem; color: white; font-weight: 600;">Page ${currentPage} of ${totalPages}</span>
-                            <button onclick="goToPageMusic(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === totalPages ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Next ›</button>
-                            <button onclick="goToPageMusic(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)'}; color: ${currentPage === totalPages ? 'rgba(255,255,255,0.4)' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Last</button>
-                        </div>
-                        <div style="margin-top: 0.5rem; color: rgba(255,255,255,0.7); font-size: 0.9rem;">
-                            Showing ${startIdx + 1}-${Math.min(endIdx, tracks.length)} of ${tracks.length} tracks
-                        </div>
-                    </div>
-                `;
-            }
+            // Add pagination at bottom
+            html += getPaginationHTML(tracks, startIdx, endIdx);
+            
+            container.innerHTML = html;
         }
         
         function goToPageMusic(page) {
