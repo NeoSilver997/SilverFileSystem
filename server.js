@@ -586,9 +586,7 @@ app.get('/api/music', async (req, res) => {
     }
     
     // Apply filters
-    if (filter === 'flac') {
-      tracks = tracks.filter(track => track.codec === 'FLAC');
-    } else if (filter === 'hq') {
+    if (filter === 'hq') {
       tracks = tracks.filter(track => track.bitrate >= 320000);
     }
     
