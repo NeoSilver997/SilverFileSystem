@@ -12,9 +12,69 @@
             color: white;
             min-height: 100vh;
         }
-        .header { padding: 0.5rem 1rem; text-align: center; }
+        .header { padding: 0.5rem 1rem; text-align: center; position: relative; }
         .header h1 { font-size: 2rem; margin-bottom: 0.25rem; font-weight: 700; }
         .header p { font-size: 1rem; opacity: 0.9; }
+        .auth-section {
+            position: absolute;
+            top: 0.5rem;
+            right: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .auth-btn {
+            padding: 0.5rem 1rem;
+            background: white;
+            color: #1e3c72;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: all 0.3s;
+        }
+        .auth-btn:hover { transform: scale(1.05); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+        .user-profile {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 0.25rem 0.5rem 0.25rem 0.25rem;
+            border-radius: 25px;
+            cursor: pointer;
+            position: relative;
+        }
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: 2px solid white;
+        }
+        .user-name { font-size: 0.9rem; font-weight: 600; }
+        .user-menu {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 0.5rem;
+            background: white;
+            color: #1e3c72;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            min-width: 200px;
+            display: none;
+            z-index: 1000;
+        }
+        .user-menu.show { display: block; }
+        .user-menu-item {
+            padding: 0.75rem 1rem;
+            cursor: pointer;
+            border-bottom: 1px solid rgba(0,0,0,0.1);
+        }
+        .user-menu-item:last-child { border-bottom: none; }
+        .user-menu-item:hover { background: rgba(0,0,0,0.05); }
         .stats-bar {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -920,6 +980,9 @@
     <div class="header">
         <h1>🎵 Music Player</h1>
         <p>Your complete music collection</p>
+        <div class="auth-section" id="authSection">
+            <!-- Auth UI will be inserted here by JavaScript -->
+        </div>
     </div>
 
     <div class="stats-bar">
@@ -1131,12 +1194,143 @@
         let selectedYearFilter = '';
         let currentSort = { field: null, direction: 'asc' };
         
+        // Authentication state
+        let currentUser = null;
+        let authToken = null;
+        const GOOGLE_CLIENT_ID = ''; // Set this to your Google Client ID from .env
+        
         // Enhanced player state
         let isPlayerMinimized = false;
         let isShuffleOn = false;
         let repeatMode = 'off'; // 'off', 'one', 'all'
         let isMuted = false;
         let previousVolume = 80;
+        
+        // Authentication Functions
+        function initAuth() {
+            // Check for stored auth token
+            const storedToken = localStorage.getItem('authToken');
+            const storedUser = localStorage.getItem('currentUser');
+            
+            if (storedToken && storedUser) {
+                authToken = storedToken;
+                currentUser = JSON.parse(storedUser);
+                renderAuthUI();
+                verifyToken();
+            } else {
+                renderAuthUI();
+            }
+        }
+        
+        function renderAuthUI() {
+            const authSection = document.getElementById('authSection');
+            
+            if (currentUser) {
+                authSection.innerHTML = `
+                    <div class="user-profile" onclick="toggleUserMenu()">
+                        <img src="${currentUser.picture}" alt="${currentUser.name}" class="user-avatar">
+                        <span class="user-name">${currentUser.name}</span>
+                        <div class="user-menu" id="userMenu">
+                            <div class="user-menu-item" style="font-weight: bold; border-bottom: 2px solid rgba(0,0,0,0.1);">
+                                ${currentUser.email}
+                            </div>
+                            <div class="user-menu-item" onclick="signOut()">Sign Out</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                authSection.innerHTML = `
+                    <div id="googleSignInButton"></div>
+                    <p style="font-size:0.75rem; margin-top:0.25rem; opacity:0.8;">Sign in to rate tracks and track history</p>
+                `;
+                
+                // Initialize Google Sign-In button
+                setTimeout(() => {
+                    if (window.google && GOOGLE_CLIENT_ID) {
+                        google.accounts.id.initialize({
+                            client_id: GOOGLE_CLIENT_ID,
+                            callback: handleGoogleSignIn
+                        });
+                        
+                        google.accounts.id.renderButton(
+                            document.getElementById('googleSignInButton'),
+                            {
+                                theme: 'filled_blue',
+                                size: 'medium',
+                                text: 'signin_with',
+                                shape: 'rectangular'
+                            }
+                        );
+                    }
+                }, 500);
+            }
+        }
+        
+        async function handleGoogleSignIn(response) {
+            try {
+                const res = await fetch('/api/auth/google', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: response.credential })
+                });
+                
+                const data = await res.json();
+                
+                if (data.success) {
+                    authToken = data.token;
+                    currentUser = data.user;
+                    
+                    localStorage.setItem('authToken', authToken);
+                    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                    
+                    renderAuthUI();
+                    alert(`Welcome, ${currentUser.name}!`);
+                } else {
+                    alert('Authentication failed. Please try again.');
+                }
+            } catch (error) {
+                console.error('Authentication error:', error);
+                alert('Authentication error. Please try again.');
+            }
+        }
+        
+        async function verifyToken() {
+            try {
+                const res = await fetch('/api/auth/verify', {
+                    headers: { 'Authorization': `Bearer ${authToken}` }
+                });
+                
+                if (!res.ok) {
+                    // Token is invalid, clear auth
+                    signOut();
+                }
+            } catch (error) {
+                console.error('Token verification error:', error);
+            }
+        }
+        
+        function toggleUserMenu() {
+            const menu = document.getElementById('userMenu');
+            if (menu) menu.classList.toggle('show');
+        }
+        
+        function signOut() {
+            authToken = null;
+            currentUser = null;
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('currentUser');
+            renderAuthUI();
+            alert('You have been signed out.');
+        }
+        
+        // Close user menu when clicking outside
+        document.addEventListener('click', (e) => {
+            const userProfile = document.querySelector('.user-profile');
+            const userMenu = document.getElementById('userMenu');
+            if (userProfile && userMenu && !userProfile.contains(e.target)) {
+                userMenu.classList.remove('show');
+            }
+        });
         let isPlaylistPanelOpen = false;
 
         function formatDuration(seconds) {
@@ -2039,12 +2233,22 @@
         }
         
         async function loadTrackRating(fileId) {
+            if (!authToken) {
+                updateRatingDisplay(fileId, 0);
+                return;
+            }
+            
             try {
-                const response = await fetch(`/api/music/rating/${fileId}`);
+                const response = await fetch(`/api/music/rating/${fileId}`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
                 const data = await response.json();
                 updateRatingDisplay(fileId, data.rating || 0);
             } catch (err) {
                 console.error('Error loading rating:', err);
+                updateRatingDisplay(fileId, 0);
             }
         }
         
@@ -2066,18 +2270,30 @@
         }
         
         async function setRating(fileId, rating) {
+            if (!authToken) {
+                alert('Please sign in to rate tracks');
+                return;
+            }
+            
             try {
                 const response = await fetch('/api/music/rating', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
                     body: JSON.stringify({ fileId, rating })
                 });
                 
                 if (response.ok) {
                     updateRatingDisplay(fileId, rating);
+                } else {
+                    const error = await response.json();
+                    alert(`Error setting rating: ${error.error}`);
                 }
             } catch (err) {
                 console.error('Error setting rating:', err);
+                alert('Error setting rating. Please try again.');
             }
         }
         
@@ -2098,10 +2314,18 @@
         }
         
         async function recordPlay(fileId) {
+            if (!authToken) {
+                console.log('Play not recorded: User not authenticated');
+                return;
+            }
+            
             try {
                 await fetch('/api/music/play', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
                     body: JSON.stringify({ fileId })
                 });
             } catch (err) {
@@ -2212,7 +2436,13 @@
             document.getElementById('allCount').textContent = `${visibleTracks.length} tracks`;
         }
         
+        // Initialize auth on page load
+        initAuth();
+        
         init();
     </script>
+    
+    <!-- Google Sign-In Library -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
 </body>
 </html>
