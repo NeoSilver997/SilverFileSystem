@@ -461,6 +461,31 @@
             background: rgba(255, 100, 100, 1);
         }
         
+        /* Rating Stars */
+        .rating-stars {
+            display: flex;
+            gap: 0.25rem;
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+        
+        .rating-stars .star {
+            transition: all 0.2s;
+            user-select: none;
+        }
+        
+        .rating-stars .star:hover {
+            transform: scale(1.2);
+        }
+        
+        .rating-stars .star.filled {
+            color: #FFD700;
+        }
+        
+        .rating-stars .star:not(.filled) {
+            color: rgba(255, 255, 255, 0.3);
+        }
+        
         /* Year Range Filter */
         .year-filter {
             display: flex;
@@ -988,6 +1013,9 @@
             document.getElementById('playerTitle').textContent = track.title || track.name;
             document.getElementById('playerArtist').textContent = track.artist || 'Unknown Artist';
             audioPlayer.classList.add('active');
+            
+            // Record play history
+            recordPlay(track.id);
         }
 
         function playPause() {
@@ -1337,6 +1365,26 @@
                 </div>
                 
                 <div class="detail-section">
+                    <div class="detail-section-title">⭐ Rating & Stats</div>
+                    <div class="detail-row">
+                        <div class="detail-field">
+                            <label>Rating</label>
+                            <div class="rating-stars" id="rating-stars-${track.id}">
+                                <span class="star" data-rating="1" onclick="setRating(${track.id}, 1)">☆</span>
+                                <span class="star" data-rating="2" onclick="setRating(${track.id}, 2)">☆</span>
+                                <span class="star" data-rating="3" onclick="setRating(${track.id}, 3)">☆</span>
+                                <span class="star" data-rating="4" onclick="setRating(${track.id}, 4)">☆</span>
+                                <span class="star" data-rating="5" onclick="setRating(${track.id}, 5)">☆</span>
+                            </div>
+                        </div>
+                        <div class="detail-field">
+                            <label>Play Count</label>
+                            <input type="text" id="play-count-${track.id}" value="Loading..." readonly />
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="detail-section">
                     <div class="detail-section-title">📊 File Information</div>
                     <div class="detail-row">
                         <div class="detail-field">
@@ -1382,6 +1430,81 @@
             `;
             
             modal.classList.add('active');
+            
+            // Load rating and play count
+            loadTrackRating(track.id);
+            loadTrackPlayCount(track.id);
+        }
+        
+        async function loadTrackRating(fileId) {
+            try {
+                const response = await fetch(`/api/music/rating/${fileId}`);
+                const data = await response.json();
+                updateRatingDisplay(fileId, data.rating || 0);
+            } catch (err) {
+                console.error('Error loading rating:', err);
+            }
+        }
+        
+        async function loadTrackPlayCount(fileId) {
+            try {
+                const response = await fetch(`/api/music/play-count/${fileId}`);
+                const data = await response.json();
+                const playCountInput = document.getElementById(`play-count-${fileId}`);
+                if (playCountInput) {
+                    playCountInput.value = data.playCount + ' plays';
+                }
+            } catch (err) {
+                console.error('Error loading play count:', err);
+                const playCountInput = document.getElementById(`play-count-${fileId}`);
+                if (playCountInput) {
+                    playCountInput.value = '0 plays';
+                }
+            }
+        }
+        
+        async function setRating(fileId, rating) {
+            try {
+                const response = await fetch('/api/music/rating', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fileId, rating })
+                });
+                
+                if (response.ok) {
+                    updateRatingDisplay(fileId, rating);
+                }
+            } catch (err) {
+                console.error('Error setting rating:', err);
+            }
+        }
+        
+        function updateRatingDisplay(fileId, rating) {
+            const container = document.getElementById(`rating-stars-${fileId}`);
+            if (!container) return;
+            
+            const stars = container.querySelectorAll('.star');
+            stars.forEach((star, index) => {
+                if (index < rating) {
+                    star.classList.add('filled');
+                    star.textContent = '★';
+                } else {
+                    star.classList.remove('filled');
+                    star.textContent = '☆';
+                }
+            });
+        }
+        
+        async function recordPlay(fileId) {
+            try {
+                await fetch('/api/music/play', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fileId })
+                });
+            } catch (err) {
+                console.error('Error recording play:', err);
+            }
         }
         
         function formatBytes(bytes) {
