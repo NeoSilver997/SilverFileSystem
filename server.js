@@ -3,6 +3,7 @@
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+import morgan from 'morgan';
 import { DatabaseManager } from './lib/database.js';
 import { loadConfig } from './lib/utils.js';
 import { fileURLToPath } from 'url';
@@ -15,6 +16,9 @@ const __dirname = dirname(__filename);
 
 const app = express();
 const config = loadConfig();
+
+// Enable access logging
+app.use(morgan('combined', { stream: fs.createWriteStream('access.log', { flags: 'a' }) }));
 
 // Rate limiting middleware
 const apiLimiter = rateLimit({

@@ -31,6 +31,7 @@
     "express-rate-limit": "^8.2.1",
     "glob": "^11.0.3",
     "iconv-lite": "^0.7.0",
+    "morgan": "^1.10.1",
     "music-metadata": "^11.9.0",
     "mysql2": "^3.15.3",
     "ora": "^9.0.0",
