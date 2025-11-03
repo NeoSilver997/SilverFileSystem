@@ -557,10 +557,10 @@
                 order: 1;
             }
             .track-header, .track-item {
-                grid-template-columns: 40px 1fr 80px;
+                grid-template-columns: 40px 1fr 1fr 80px;
                 font-size: 0.9rem;
             }
-            .track-album, .track-year, .track-genre, .track-bitrate, .quality-badge { display: none; }
+            .track-year, .track-genre, .track-bitrate, .quality-badge { display: none; }
             .controls {
                 flex-direction: column;
                 align-items: stretch;
@@ -617,7 +617,6 @@
         </div>
         <div class="filter-group">
             <button class="filter-btn active" data-filter="all">All</button>
-            <button class="filter-btn" data-filter="flac">FLAC</button>
             <button class="filter-btn" data-filter="hq">High Quality (>256k)</button>
             <button class="filter-btn" data-filter="recent">Recent (2020+)</button>
             <button class="filter-btn" data-filter="long">Long (>5min)</button>
@@ -1086,7 +1085,12 @@
                     
                     if (currentView === 'all') {
                         sidebarContent.innerHTML = '';
-                        loadTracks();
+                        // Preserve sort state by using refreshTrackList instead of loadTracks
+                        if (allTracksData.length > 0) {
+                            refreshTrackList();
+                        } else {
+                            loadTracks();
+                        }
                     } else if (currentView === 'artists') {
                         loadArtists();
                     } else if (currentView === 'albums') {
