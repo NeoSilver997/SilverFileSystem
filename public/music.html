@@ -790,7 +790,7 @@
             }
         }
 
-        function playTrack(track) {
+        function playTrack(track, playType = 'click') {
             currentTrack = track;
             const audioElement = document.getElementById('audioElement');
             const audioPlayer = document.getElementById('audioPlayer');
@@ -802,6 +802,22 @@
             document.getElementById('playerTitle').textContent = track.title || track.name;
             document.getElementById('playerArtist').textContent = track.artist || 'Unknown Artist';
             audioPlayer.classList.add('active');
+            
+            // Record play history
+            recordPlayHistory(track.id, playType);
+        }
+        
+        // Record play history
+        async function recordPlayHistory(fileId, playType = 'click') {
+            try {
+                await authFetch('/api/history/play', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fileId, playType })
+                });
+            } catch (err) {
+                console.error('Failed to record play history:', err);
+            }
         }
 
         function playPause() {
@@ -1158,17 +1174,27 @@
 
         function playFromQueue(index) {
             currentQueueIndex = index;
-            playTrack(playQueue[index]);
+            playTrack(playQueue[index], 'queue');
             updateQueueDisplay();
         }
 
         function playNext() {
+            // If there's a queue, play next from queue
             if (playQueue.length > 0 && currentQueueIndex < playQueue.length - 1) {
                 currentQueueIndex++;
-                playTrack(playQueue[currentQueueIndex]);
+                playTrack(playQueue[currentQueueIndex], 'queue');
                 updateQueueDisplay();
+            } 
+            // If no queue, play next track from current list
+            else if (currentTrack && allTracks.length > 0) {
+                const currentIndex = allTracks.findIndex(t => t.id === currentTrack.id);
+                if (currentIndex >= 0 && currentIndex < allTracks.length - 1) {
+                    playTrack(allTracks[currentIndex + 1], 'auto_next');
+                } else {
+                    console.log('No more tracks to play');
+                }
             } else {
-                alert('No more tracks in queue');
+                console.log('No tracks available');
             }
         }
 
@@ -1182,9 +1208,7 @@
 
         // Auto-play next track when current ends
         document.getElementById('audioElement').addEventListener('ended', function() {
-            if (playQueue.length > 0 && currentQueueIndex < playQueue.length - 1) {
-                playNext();
-            }
+            playNext();
         });
 
         // Filter hidden tracks on load
