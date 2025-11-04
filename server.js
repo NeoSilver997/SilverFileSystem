@@ -83,27 +83,8 @@ let db = null;
 let authManager = null;
 
 // Google OAuth setup
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || ''; // Set in .env file
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
-
-// Authentication middleware
-function authenticateToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: 'Access token required' });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      return res.status(403).json({ error: 'Invalid or expired token' });
-    }
-    req.user = user;
-    next();
-  });
-}
 
 // Initialize database
 async function initDatabase(dbConfig = {}) {
@@ -993,7 +974,12 @@ app.post('/api/history/play', authMiddleware, async (req, res) => {
     
     await authManager.recordPlayHistory(userId, fileId, ip, type);
     res.json({ success: true, message: 'Play history recorded' });
-// Google OAuth authentication endpoint
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Google OAuth authentication endpoint (alternative method for client-side auth)
 app.post('/api/auth/google', strictLimiter, async (req, res) => {
   try {
     const { token } = req.body;
@@ -1009,41 +995,34 @@ app.post('/api/auth/google', strictLimiter, async (req, res) => {
     });
     
     const payload = ticket.getPayload();
-    const { sub: googleId, email, name, picture } = payload;
+    
+    // Convert Google profile format to match passport profile format
+    const profile = {
+      id: payload.sub,
+      displayName: payload.name,
+      emails: payload.email ? [{ value: payload.email }] : [],
+      photos: payload.picture ? [{ value: payload.picture }] : []
+    };
 
-    // Create or update user in database
-    const user = await db.createOrUpdateUser(googleId, email, name, picture);
+    // Create or update user using authManager
+    const user = await authManager.findOrCreateGoogleUser(profile);
 
-    // Generate JWT token for session
-    const jwtToken = jwt.sign(
-      { userId: user.id, googleId: user.google_id, email: user.email },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    // Generate JWT token using authManager
+    const result = authManager.generateTokenForUser(user);
+    
+    // Record login history
+    const ip = req.ip || req.connection.remoteAddress;
+    await authManager.recordLoginHistory(user.id, ip, 'google');
 
-    res.json({
-      success: true,
-      token: jwtToken,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        picture: user.picture
-      }
-    });
+    res.json(result);
   } catch (err) {
     console.error('Google auth error:', err);
     res.status(401).json({ error: 'Invalid Google token' });
   }
 });
 
-// Verify JWT token endpoint
-app.get('/api/auth/verify', authenticateToken, (req, res) => {
-  res.json({ success: true, user: req.user });
-});
-
 // Music rating endpoints
-app.post('/api/music/rating', authenticateToken, async (req, res) => {
+app.post('/api/music/rating', authMiddleware, async (req, res) => {
   try {
     const { fileId, rating } = req.body;
     
@@ -1063,7 +1042,7 @@ app.post('/api/music/rating', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Rating must be between 1 and 5' });
     }
     
-    const result = await db.setMusicRating(validFileId, validRating, req.user.userId);
+    const result = await db.setMusicRating(validFileId, validRating, req.user.id);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1078,14 +1057,19 @@ app.get('/api/history/play', authMiddleware, async (req, res) => {
     
     const history = await authManager.getPlayHistory(userId, limit);
     res.json({ history });
-app.get('/api/music/rating/:fileId', authenticateToken, async (req, res) => {
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/music/rating/:fileId', authMiddleware, async (req, res) => {
   try {
     const fileId = parseInt(req.params.fileId);
     if (isNaN(fileId) || fileId <= 0) {
       return res.status(400).json({ error: 'Invalid fileId' });
     }
     
-    const rating = await db.getUserTrackRating(fileId, req.user.userId);
+    const rating = await db.getUserTrackRating(fileId, req.user.id);
     res.json(rating || { rating: 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1109,10 +1093,15 @@ app.get('/api/history/login', authMiddleware, async (req, res) => {
     
     const history = await authManager.getLoginHistory(userId, limit);
     res.json({ history });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get user-specific ratings
-app.get('/api/music/my-ratings', authenticateToken, async (req, res) => {
+app.get('/api/music/my-ratings', authMiddleware, async (req, res) => {
   try {
-    const ratings = await db.getUserRatings(req.user.userId);
+    const ratings = await db.getUserRatings(req.user.id);
     res.json(ratings);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1120,7 +1109,7 @@ app.get('/api/music/my-ratings', authenticateToken, async (req, res) => {
 });
 
 // Music play history endpoints
-app.post('/api/music/play', authenticateToken, async (req, res) => {
+app.post('/api/music/play', authMiddleware, async (req, res) => {
   try {
     const { fileId } = req.body;
     
@@ -1133,7 +1122,7 @@ app.post('/api/music/play', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Invalid fileId' });
     }
     
-    const result = await db.recordMusicPlay(validFileId, req.user.userId);
+    const result = await db.recordMusicPlay(validFileId, req.user.id);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1179,14 +1168,14 @@ app.get('/api/music/play-history/:fileId', async (req, res) => {
 });
 
 // Get user's own play history
-app.get('/api/music/my-plays', authenticateToken, async (req, res) => {
+app.get('/api/music/my-plays', authMiddleware, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
     if (isNaN(limit) || limit <= 0 || limit > 1000) {
       return res.status(400).json({ error: 'Invalid limit (must be 1-1000)' });
     }
     
-    const history = await db.getUserPlayHistory(req.user.userId, limit);
+    const history = await db.getUserPlayHistory(req.user.id, limit);
     res.json(history);
   } catch (err) {
     res.status(500).json({ error: err.message });
