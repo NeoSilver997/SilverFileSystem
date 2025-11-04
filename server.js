@@ -82,6 +82,10 @@ app.use(passport.session());
 let db = null;
 let authManager = null;
 
+// Authentication middleware (initialized after database connection)
+let requireAuth = null;
+let requireAdmin = null;
+
 // Google OAuth setup
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || ''; // Set in .env file
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
@@ -106,8 +110,8 @@ async function initDatabase(dbConfig = {}) {
   await authManager.createDefaultUser();
 
   // Create middleware instances with authManager
-  const requireAuth = authMiddleware(authManager);
-  const requireAdmin = adminMiddleware(authManager);
+  requireAuth = authMiddleware(authManager);
+  requireAdmin = adminMiddleware(authManager);
 
   // Configure Google OAuth Strategy
   const googleClientId = process.env.GOOGLE_CLIENT_ID;
