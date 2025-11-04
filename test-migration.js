@@ -117,9 +117,7 @@ async function demonstrateMigrationSystem() {
 
     // Test 5: Query version history
     console.log('Test 5: Version history');
-    const [rows] = await db.connection.execute(
-      'SELECT version, description, applied_at FROM db_version ORDER BY version'
-    );
+    const rows = await db.getVersionHistory();
     
     console.log('Applied migrations:');
     rows.forEach(row => {
