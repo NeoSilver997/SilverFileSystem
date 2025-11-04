@@ -9,6 +9,9 @@ The database feature allows you to store all scanned file information in a MySQL
 - Historical tracking of file changes
 - Advanced querying and reporting
 - Integration with other data analysis tools
+- **Version-tracked schema migrations** for safe database updates
+
+> **Note:** SilverFileSystem now includes a robust version tracking system for database migrations. See [DATABASE_MIGRATIONS.md](./DATABASE_MIGRATIONS.md) for details on the migration system and how to add new migrations.
 
 ## Prerequisites
 
@@ -95,6 +98,22 @@ node bin/cli.js duplicates /path/to/folder --db
 ## Database Schema
 
 The system automatically creates the following tables:
+
+### db_version
+
+**NEW**: Tracks database schema version for safe migrations.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INT | Primary key |
+| version | INT | Schema version number (unique) |
+| description | VARCHAR(255) | Description of the migration |
+| applied_at | TIMESTAMP | When the migration was applied |
+
+Indexes:
+- version (unique)
+
+This table enables version-tracked migrations, ensuring schema updates can be applied safely and incrementally. See [DATABASE_MIGRATIONS.md](./DATABASE_MIGRATIONS.md) for details.
 
 ### scanned_files
 
