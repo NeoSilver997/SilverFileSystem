@@ -12,9 +12,22 @@
             color: white;
             min-height: 100vh;
         }
-        .header { padding: 0.5rem 1rem; text-align: center; }
+        .header { padding: 0.5rem 1rem; text-align: center; position: relative; }
         .header h1 { font-size: 2rem; margin-bottom: 0.25rem; font-weight: 700; }
         .header p { font-size: 1rem; opacity: 0.9; }
+        .logout-btn {
+            position: absolute;
+            top: 0.5rem;
+            right: 1rem;
+            padding: 0.5rem 1rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .logout-btn:hover { background: rgba(255, 255, 255, 0.2); }
         .stats-bar {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -451,6 +464,7 @@
 </head>
 <body>
     <div class="header">
+        <button class="logout-btn" onclick="logout()">Logout</button>
         <h1>🎵 Music Player</h1>
         <p>Your complete music collection</p>
     </div>
@@ -565,6 +579,7 @@
         </div>
     </div>
 
+    <script src="/auth.js"></script>
     <script>
         const ITEMS_PER_PAGE = 100; // Items per page (default show at least 100)
         let currentFilter = 'all';
@@ -639,7 +654,7 @@
                 if (searchTerm) params.append('search', searchTerm);
                 if (currentFilter !== 'all') params.append('filter', currentFilter);
                 
-                const response = await fetch(`/api/music?${params}`);
+                const response = await authFetch(`/api/music?${params}`);
                 const data = await response.json();
                 
                 if (data.error) throw new Error(data.error);
@@ -676,7 +691,7 @@
 
         async function loadArtists() {
             try {
-                const response = await fetch('/api/music/artists');
+                const response = await authFetch('/api/music/artists');
                 const data = await response.json();
                 artists = data.artists || [];
                 
@@ -708,7 +723,7 @@
 
         async function loadAlbums() {
             try {
-                const response = await fetch('/api/music/albums');
+                const response = await authFetch('/api/music/albums');
                 const data = await response.json();
                 albums = data.albums || [];
                 
@@ -741,7 +756,7 @@
         async function loadArtistTracks(artistName) {
             const container = document.getElementById('trackContainer');
             try {
-                const response = await fetch(`/api/music/artist/${encodeURIComponent(artistName)}`);
+                const response = await authFetch(`/api/music/artist/${encodeURIComponent(artistName)}`);
                 const data = await response.json();
                 
                 if (data.error) throw new Error(data.error);
@@ -755,7 +770,7 @@
         async function loadAlbumTracks(albumName) {
             const container = document.getElementById('trackContainer');
             try {
-                const response = await fetch(`/api/music/album/${encodeURIComponent(albumName)}`);
+                const response = await authFetch(`/api/music/album/${encodeURIComponent(albumName)}`);
                 const data = await response.json();
                 
                 if (data.error) throw new Error(data.error);
@@ -1185,7 +1200,7 @@
             await loadAlbums();
             
             // Update all tracks count
-            const response = await fetch('/api/music');
+            const response = await authFetch('/api/music');
             const data = await response.json();
             const visibleTracks = filterHiddenTracks(data.tracks);
             document.getElementById('allCount').textContent = `${visibleTracks.length} tracks`;

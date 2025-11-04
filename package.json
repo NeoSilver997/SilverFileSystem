@@ -21,6 +21,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "bcrypt": "^6.0.0",
     "chalk": "^5.6.2",
     "cld3-asm": "^4.0.0",
     "commander": "^14.0.2",
@@ -31,6 +32,7 @@
     "express-rate-limit": "^8.2.1",
     "glob": "^11.0.3",
     "iconv-lite": "^0.7.0",
+    "jsonwebtoken": "^9.0.2",
     "music-metadata": "^11.9.0",
     "mysql2": "^3.15.3",
     "ora": "^9.0.0",

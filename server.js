@@ -4,6 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { DatabaseManager } from './lib/database.js';
+import { AuthManager, authMiddleware } from './lib/auth.js';
 import { loadConfig } from './lib/utils.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -44,6 +45,7 @@ app.use('/api/', apiLimiter);
 
 // Database connection
 let db = null;
+let authManager = null;
 
 // Initialize database
 async function initDatabase(dbConfig = {}) {
@@ -59,8 +61,13 @@ async function initDatabase(dbConfig = {}) {
   await db.connect();
   console.log('✓ Connected to database');
 
+  // Initialize authentication
+  authManager = new AuthManager(db);
+  await authManager.initializeUsersTable();
+  await authManager.createDefaultUser();
+
   // Serve image files (after database is initialized)
-  app.get('/images/:id', mediaLimiter, async (req, res) => {
+  app.get('/images/:id', authMiddleware, mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -114,7 +121,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Serve audio files
-  app.get('/audio/:id', mediaLimiter, async (req, res) => {
+  app.get('/audio/:id', authMiddleware, mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -192,7 +199,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Serve video files
-  app.get('/video/:id', mediaLimiter, async (req, res) => {
+  app.get('/video/:id', authMiddleware, mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -280,9 +287,54 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+// ==================== AUTHENTICATION ROUTES ====================
+
+// Login endpoint
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const result = await authManager.login(username, password);
+    res.json(result);
+  } catch (err) {
+    res.status(401).json({ error: err.message });
+  }
+});
+
+// Register endpoint
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const result = await authManager.register(username, password);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Verify token endpoint
+app.get('/api/auth/verify', (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.json({ valid: false });
+    }
+
+    const parts = authHeader.split(' ');
+    if (parts.length !== 2 || parts[0] !== 'Bearer') {
+      return res.json({ valid: false });
+    }
+
+    const token = parts[1];
+    const result = authManager.verifyToken(token);
+    res.json(result);
+  } catch (err) {
+    res.json({ valid: false });
+  }
+});
+
 // ==================== API ROUTES ====================
 
-// Health check
+// Health check (no auth required)
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', database: db ? 'connected' : 'disconnected' });
 });
@@ -293,7 +345,7 @@ let summaryCacheTime = 0;
 const SUMMARY_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 // Get cached summary statistics for dashboard header
-app.get('/api/summary', async (req, res) => {
+app.get('/api/summary', authMiddleware, async (req, res) => {
   try {
     const now = Date.now();
     
@@ -392,7 +444,7 @@ app.get('/api/summary', async (req, res) => {
 });
 
 // Get all photos with optional search and filters
-app.get('/api/photos', async (req, res) => {
+app.get('/api/photos', authMiddleware, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -454,7 +506,7 @@ app.get('/api/photos', async (req, res) => {
 });
 
 // Get all music tracks with optional search and filters
-app.get('/api/music', async (req, res) => {
+app.get('/api/music', authMiddleware, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -504,7 +556,7 @@ app.get('/api/music', async (req, res) => {
 });
 
 // Get all movies with optional search and filters
-app.get('/api/movies', async (req, res) => {
+app.get('/api/movies', authMiddleware, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -556,7 +608,7 @@ app.get('/api/movies', async (req, res) => {
 });
 
 // Get artists
-app.get('/api/music/artists', async (req, res) => {
+app.get('/api/music/artists', authMiddleware, async (req, res) => {
   try {
     const tracks = await db.getMusicWithMetadata();
     const artistMap = {};
@@ -590,7 +642,7 @@ app.get('/api/music/artists', async (req, res) => {
 });
 
 // Get albums
-app.get('/api/music/albums', async (req, res) => {
+app.get('/api/music/albums', authMiddleware, async (req, res) => {
   try {
     const tracks = await db.getMusicWithMetadata();
     const albumMap = {};
@@ -626,7 +678,7 @@ app.get('/api/music/albums', async (req, res) => {
 });
 
 // Get tracks by artist
-app.get('/api/music/artist/:name', async (req, res) => {
+app.get('/api/music/artist/:name', authMiddleware, async (req, res) => {
   try {
     const artistName = decodeURIComponent(req.params.name);
     
@@ -645,7 +697,7 @@ app.get('/api/music/artist/:name', async (req, res) => {
 });
 
 // Get tracks by album
-app.get('/api/music/album/:name', async (req, res) => {
+app.get('/api/music/album/:name', authMiddleware, async (req, res) => {
   try {
     const albumName = decodeURIComponent(req.params.name);
     
