@@ -8,7 +8,7 @@ import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import morgan from 'morgan';
 import { DatabaseManager } from './lib/database.js';
-import { AuthManager, authMiddleware } from './lib/auth.js';
+import { AuthManager, authMiddleware, adminMiddleware } from './lib/auth.js';
 import { loadConfig } from './lib/utils.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -104,6 +104,9 @@ async function initDatabase(dbConfig = {}) {
   authManager = new AuthManager(db);
   await authManager.initializeUsersTable();
   await authManager.createDefaultUser();
+
+  // Create admin middleware with authManager instance
+  const requireAdmin = adminMiddleware(authManager);
 
   // Configure Google OAuth Strategy
   const googleClientId = process.env.GOOGLE_CLIENT_ID;
@@ -371,6 +374,58 @@ async function initDatabase(dbConfig = {}) {
     } catch (err) {
       console.error('Error serving video:', err);
       res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // ==================== ADMIN ROUTES ====================
+
+  // Get all users (admin only)
+  app.get('/api/admin/users', authMiddleware, requireAdmin, async (req, res) => {
+    try {
+      const users = await authManager.getAllUsers();
+      res.json({ users });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get pending users (admin only)
+  app.get('/api/admin/users/pending', authMiddleware, requireAdmin, async (req, res) => {
+    try {
+      const users = await authManager.getPendingUsers();
+      res.json({ users });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Enable a user (admin only)
+  app.post('/api/admin/users/:id/enable', authMiddleware, requireAdmin, async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      if (isNaN(userId)) {
+        return res.status(400).json({ error: 'Invalid user ID' });
+      }
+      
+      const result = await authManager.enableUser(userId);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Disable a user (admin only)
+  app.post('/api/admin/users/:id/disable', authMiddleware, requireAdmin, async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      if (isNaN(userId)) {
+        return res.status(400).json({ error: 'Invalid user ID' });
+      }
+      
+      const result = await authManager.disableUser(userId);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
   });
 }
