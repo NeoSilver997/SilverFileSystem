@@ -102,6 +102,17 @@ await db.connect();
 await db.updateSchema();
 ```
 
+#### `getVersionHistory()`
+Returns an array of all applied migrations with their details.
+
+```javascript
+const history = await db.getVersionHistory();
+history.forEach(row => {
+  console.log(`Version ${row.version}: ${row.description}`);
+  console.log(`  Applied at: ${row.applied_at}`);
+});
+```
+
 ## Usage Examples
 
 ### Initial Setup (New Database)
