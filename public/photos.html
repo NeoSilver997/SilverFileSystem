@@ -608,7 +608,7 @@
                         <span class="photo-icon" style="display: none;">📷</span>
                     </div>
                     <div class="photo-info">
-                        <div class="photo-name" title="${photo.name}">${photo.name}</div>
+                        <div class="photo-name" title="${photo.path || photo.name}">${photo.name}</div>
                         <div class="photo-meta">
                             <div>${photo.width || 0}×${photo.height || 0} • ${photo.size ? formatBytes(photo.size) : '0 B'}</div>
                             ${photo.camera_make ? `<div>📸 ${photo.camera_make} ${photo.camera_model || ''}</div>` : ''}

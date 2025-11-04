@@ -361,7 +361,7 @@
                             <span class="quality-badge ${quality.class}">${quality.text}</span>
                         </div>
                         <div class="movie-info">
-                            <div class="movie-title">${movie.title || movie.name}</div>
+                            <div class="movie-title" title="${movie.path || (movie.title || movie.name)}">${movie.title || movie.name}</div>
                             <div class="movie-meta">
                                 <span>${movie.width || 0}×${movie.height || 0}</span>
                                 <span>⏱ ${formatDuration(movie.duration)}</span>
