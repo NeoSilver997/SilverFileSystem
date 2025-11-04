@@ -105,7 +105,8 @@ async function initDatabase(dbConfig = {}) {
   await authManager.initializeUsersTable();
   await authManager.createDefaultUser();
 
-  // Create admin middleware with authManager instance
+  // Create middleware instances with authManager
+  const requireAuth = authMiddleware(authManager);
   const requireAdmin = adminMiddleware(authManager);
 
   // Configure Google OAuth Strategy
@@ -155,7 +156,7 @@ async function initDatabase(dbConfig = {}) {
   }
 
   // Serve image files (after database is initialized)
-  app.get('/images/:id', authMiddleware, requirePhotoPermission, mediaLimiter, async (req, res) => {
+  app.get('/images/:id', requireAuth, requirePhotoPermission, mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -209,7 +210,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Serve audio files
-  app.get('/audio/:id', authMiddleware, requireMusicPermission, mediaLimiter, async (req, res) => {
+  app.get('/audio/:id', requireAuth, requireMusicPermission, mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -293,7 +294,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Serve video files
-  app.get('/video/:id', authMiddleware, requireVideoPermission, mediaLimiter, async (req, res) => {
+  app.get('/video/:id', requireAuth, requireVideoPermission, mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -380,7 +381,7 @@ async function initDatabase(dbConfig = {}) {
   // ==================== ADMIN ROUTES ====================
 
   // Get all users (admin only)
-  app.get('/api/admin/users', authMiddleware, requireAdmin, async (req, res) => {
+  app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
     try {
       const users = await authManager.getAllUsers();
       res.json({ users });
@@ -390,7 +391,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Get pending users (admin only)
-  app.get('/api/admin/users/pending', authMiddleware, requireAdmin, async (req, res) => {
+  app.get('/api/admin/users/pending', requireAuth, requireAdmin, async (req, res) => {
     try {
       const users = await authManager.getPendingUsers();
       res.json({ users });
@@ -400,7 +401,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Enable a user (admin only)
-  app.post('/api/admin/users/:id/enable', authMiddleware, requireAdmin, async (req, res) => {
+  app.post('/api/admin/users/:id/enable', requireAuth, requireAdmin, async (req, res) => {
     try {
       const userId = parseInt(req.params.id);
       if (isNaN(userId)) {
@@ -415,7 +416,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Disable a user (admin only)
-  app.post('/api/admin/users/:id/disable', authMiddleware, requireAdmin, async (req, res) => {
+  app.post('/api/admin/users/:id/disable', requireAuth, requireAdmin, async (req, res) => {
     try {
       const userId = parseInt(req.params.id);
       if (isNaN(userId)) {
@@ -430,7 +431,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Get user permissions (admin only)
-  app.get('/api/admin/users/:id/permissions', authMiddleware, requireAdmin, async (req, res) => {
+  app.get('/api/admin/users/:id/permissions', requireAuth, requireAdmin, async (req, res) => {
     try {
       const userId = parseInt(req.params.id);
       if (isNaN(userId)) {
@@ -445,7 +446,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Update user permissions (admin only)
-  app.post('/api/admin/users/:id/permissions', authMiddleware, requireAdmin, async (req, res) => {
+  app.post('/api/admin/users/:id/permissions', requireAuth, requireAdmin, async (req, res) => {
     try {
       const userId = parseInt(req.params.id);
       if (isNaN(userId)) {
@@ -568,7 +569,7 @@ let summaryCacheTime = 0;
 const SUMMARY_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 // Get cached summary statistics for dashboard header
-app.get('/api/summary', authMiddleware, async (req, res) => {
+app.get('/api/summary', requireAuth, async (req, res) => {
   try {
     const now = Date.now();
     
@@ -780,7 +781,7 @@ app.get('/api/file-type-breakdown', async (req, res) => {
 });
 
 // Get all photos with optional search and filters
-app.get('/api/photos', authMiddleware, requirePhotoPermission, async (req, res) => {
+app.get('/api/photos', requireAuth, requirePhotoPermission, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -842,7 +843,7 @@ app.get('/api/photos', authMiddleware, requirePhotoPermission, async (req, res) 
 });
 
 // Get all music tracks with optional search and filters
-app.get('/api/music', authMiddleware, requireMusicPermission, async (req, res) => {
+app.get('/api/music', requireAuth, requireMusicPermission, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -890,7 +891,7 @@ app.get('/api/music', authMiddleware, requireMusicPermission, async (req, res) =
 });
 
 // Get all movies with optional search and filters
-app.get('/api/movies', authMiddleware, requireVideoPermission, async (req, res) => {
+app.get('/api/movies', requireAuth, requireVideoPermission, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -942,7 +943,7 @@ app.get('/api/movies', authMiddleware, requireVideoPermission, async (req, res) 
 });
 
 // Get artists
-app.get('/api/music/artists', authMiddleware, async (req, res) => {
+app.get('/api/music/artists', requireAuth, async (req, res) => {
   try {
     const tracks = await db.getMusicWithMetadata();
     const artistMap = {};
@@ -976,7 +977,7 @@ app.get('/api/music/artists', authMiddleware, async (req, res) => {
 });
 
 // Get albums
-app.get('/api/music/albums', authMiddleware, async (req, res) => {
+app.get('/api/music/albums', requireAuth, async (req, res) => {
   try {
     const tracks = await db.getMusicWithMetadata();
     const albumMap = {};
@@ -1012,7 +1013,7 @@ app.get('/api/music/albums', authMiddleware, async (req, res) => {
 });
 
 // Get tracks by artist
-app.get('/api/music/artist/:name', authMiddleware, async (req, res) => {
+app.get('/api/music/artist/:name', requireAuth, async (req, res) => {
   try {
     const artistName = decodeURIComponent(req.params.name);
     
@@ -1031,7 +1032,7 @@ app.get('/api/music/artist/:name', authMiddleware, async (req, res) => {
 });
 
 // Get tracks by album
-app.get('/api/music/album/:name', authMiddleware, async (req, res) => {
+app.get('/api/music/album/:name', requireAuth, async (req, res) => {
   try {
     const albumName = decodeURIComponent(req.params.name);
     
@@ -1050,7 +1051,7 @@ app.get('/api/music/album/:name', authMiddleware, async (req, res) => {
 });
 
 // Record play history
-app.post('/api/history/play', authMiddleware, async (req, res) => {
+app.post('/api/history/play', requireAuth, async (req, res) => {
   try {
     const { fileId, playType } = req.body;
     const userId = req.user.id;
@@ -1114,7 +1115,7 @@ app.post('/api/auth/google', strictLimiter, async (req, res) => {
 });
 
 // Music rating endpoints
-app.post('/api/music/rating', authMiddleware, async (req, res) => {
+app.post('/api/music/rating', requireAuth, async (req, res) => {
   try {
     const { fileId, rating } = req.body;
     
@@ -1142,7 +1143,7 @@ app.post('/api/music/rating', authMiddleware, async (req, res) => {
 });
 
 // Get user's play history
-app.get('/api/history/play', authMiddleware, async (req, res) => {
+app.get('/api/history/play', requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
     const limit = parseInt(req.query.limit) || 100;
@@ -1154,7 +1155,7 @@ app.get('/api/history/play', authMiddleware, async (req, res) => {
   }
 });
 
-app.get('/api/music/rating/:fileId', authMiddleware, async (req, res) => {
+app.get('/api/music/rating/:fileId', requireAuth, async (req, res) => {
   try {
     const fileId = parseInt(req.params.fileId);
     if (isNaN(fileId) || fileId <= 0) {
@@ -1178,7 +1179,7 @@ app.get('/api/music/ratings', async (req, res) => {
 });
 
 // Get user's login history
-app.get('/api/history/login', authMiddleware, async (req, res) => {
+app.get('/api/history/login', requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
     const limit = parseInt(req.query.limit) || 50;
@@ -1191,7 +1192,7 @@ app.get('/api/history/login', authMiddleware, async (req, res) => {
 });
 
 // Get user-specific ratings
-app.get('/api/music/my-ratings', authMiddleware, async (req, res) => {
+app.get('/api/music/my-ratings', requireAuth, async (req, res) => {
   try {
     const ratings = await db.getUserRatings(req.user.id);
     res.json(ratings);
@@ -1201,7 +1202,7 @@ app.get('/api/music/my-ratings', authMiddleware, async (req, res) => {
 });
 
 // Music play history endpoints
-app.post('/api/music/play', authMiddleware, async (req, res) => {
+app.post('/api/music/play', requireAuth, async (req, res) => {
   try {
     const { fileId } = req.body;
     
@@ -1260,7 +1261,7 @@ app.get('/api/music/play-history/:fileId', async (req, res) => {
 });
 
 // Get user's own play history
-app.get('/api/music/my-plays', authMiddleware, async (req, res) => {
+app.get('/api/music/my-plays', requireAuth, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
     if (isNaN(limit) || limit <= 0 || limit > 1000) {
