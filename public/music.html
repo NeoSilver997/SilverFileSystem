@@ -15,6 +15,19 @@
         .header { padding: 0.5rem 1rem; text-align: center; position: relative; }
         .header h1 { font-size: 2rem; margin-bottom: 0.25rem; font-weight: 700; }
         .header p { font-size: 1rem; opacity: 0.9; }
+        .logout-btn {
+            position: absolute;
+            top: 0.5rem;
+            right: 1rem;
+            padding: 0.5rem 1rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .logout-btn:hover { background: rgba(255, 255, 255, 0.2); }
         .auth-section {
             position: absolute;
             top: 0.5rem;
@@ -978,6 +991,7 @@
 </head>
 <body>
     <div class="header">
+        <button class="logout-btn" onclick="logout()">Logout</button>
         <h1>🎵 Music Player</h1>
         <p>Your complete music collection</p>
         <div class="auth-section" id="authSection">
@@ -1177,6 +1191,7 @@
         <audio id="audioElement" controls style="display: none;"></audio>
     </div>
 
+    <script src="/auth.js"></script>
     <script>
         let ITEMS_PER_PAGE = 100; // Items per page (configurable)
         let currentFilter = 'all';
@@ -1420,7 +1435,7 @@
                 if (searchTerm) params.append('search', searchTerm);
                 if (currentFilter !== 'all') params.append('filter', currentFilter);
                 
-                const response = await fetch(`/api/music?${params}`);
+                const response = await authFetch(`/api/music?${params}`);
                 const data = await response.json();
                 
                 if (data.error) throw new Error(data.error);
@@ -1459,7 +1474,7 @@
 
         async function loadArtists() {
             try {
-                const response = await fetch('/api/music/artists');
+                const response = await authFetch('/api/music/artists');
                 const data = await response.json();
                 artists = data.artists || [];
                 
@@ -1491,7 +1506,7 @@
 
         async function loadAlbums() {
             try {
-                const response = await fetch('/api/music/albums');
+                const response = await authFetch('/api/music/albums');
                 const data = await response.json();
                 albums = data.albums || [];
                 
@@ -1524,7 +1539,7 @@
         async function loadArtistTracks(artistName) {
             const container = document.getElementById('trackContainer');
             try {
-                const response = await fetch(`/api/music/artist/${encodeURIComponent(artistName)}`);
+                const response = await authFetch(`/api/music/artist/${encodeURIComponent(artistName)}`);
                 const data = await response.json();
                 
                 if (data.error) throw new Error(data.error);
@@ -1548,7 +1563,7 @@
         async function loadAlbumTracks(albumName) {
             const container = document.getElementById('trackContainer');
             try {
-                const response = await fetch(`/api/music/album/${encodeURIComponent(albumName)}`);
+                const response = await authFetch(`/api/music/album/${encodeURIComponent(albumName)}`);
                 const data = await response.json();
                 
                 if (data.error) throw new Error(data.error);
@@ -1578,7 +1593,7 @@
             }
         }
 
-        function playTrack(track) {
+        function playTrack(track, playType = 'click') {
             currentTrack = track;
             const audioElement = document.getElementById('audioElement');
             const audioPlayer = document.getElementById('audioPlayer');
@@ -1592,6 +1607,22 @@
             document.getElementById('playerAlbumArt').textContent = (track.title || track.name).charAt(0).toUpperCase();
             
             audioPlayer.classList.add('active');
+            
+            // Record play history
+            recordPlayHistory(track.id, playType);
+        }
+        
+        // Record play history
+        async function recordPlayHistory(fileId, playType = 'click') {
+            try {
+                await authFetch('/api/history/play', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fileId, playType })
+                });
+            } catch (err) {
+                console.error('Failed to record play history:', err);
+            }
             document.getElementById('playPauseIcon').textContent = '⏸️';
             document.getElementById('playPauseIconMin').textContent = '⏸️';
             
@@ -2387,11 +2418,13 @@
 
         function playFromQueue(index) {
             currentQueueIndex = index;
-            playTrack(playQueue[index]);
+            playTrack(playQueue[index], 'queue');
             updateQueueDisplay();
         }
 
         function playNext() {
+            // If there's a queue, play next from queue
+            if (playQueue.length > 0 && currentQueueIndex < playQueue.length - 1) {
             let nextIndex;
             
             if (isShuffleOn && playQueue.length > 0) {
@@ -2406,8 +2439,35 @@
             } else if (playQueue.length > 0 && currentQueueIndex < playQueue.length - 1) {
                 // Normal: play next in queue
                 currentQueueIndex++;
-                playTrack(playQueue[currentQueueIndex]);
+                playTrack(playQueue[currentQueueIndex], 'queue');
                 updateQueueDisplay();
+            } 
+            // If no queue, play next track from current list
+            else if (currentTrack && allTracks.length > 0) {
+                const currentIndex = allTracks.findIndex(t => t.id === currentTrack.id);
+                if (currentIndex >= 0 && currentIndex < allTracks.length - 1) {
+                    playTrack(allTracks[currentIndex + 1], 'auto_next');
+                } else {
+                    console.log('No more tracks to play');
+                }
+            } else {
+                console.log('No tracks available');
+            }
+        }
+
+        function clearQueue() {
+            if (confirm('Clear all tracks from queue?')) {
+                playQueue = [];
+                currentQueueIndex = -1;
+                updateQueueDisplay();
+            }
+        }
+
+        // Auto-play next track when current ends
+        document.getElementById('audioElement').addEventListener('ended', function() {
+            playNext();
+        });
+
             } else if (allTracks && allTracks.length > 0) {
                 // Play next from main list if no queue
                 const currentIndex = allTracks.findIndex(t => t.id === currentTrack?.id);
@@ -2430,7 +2490,7 @@
             await loadAlbums();
             
             // Update all tracks count
-            const response = await fetch('/api/music');
+            const response = await authFetch('/api/music');
             const data = await response.json();
             const visibleTracks = filterHiddenTracks(data.tracks);
             document.getElementById('allCount').textContent = `${visibleTracks.length} tracks`;

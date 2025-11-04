@@ -16,7 +16,22 @@
             padding: 0.5rem 1rem;
             text-align: center;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            position: relative;
         }
+        
+        .logout-btn {
+            position: absolute;
+            top: 0.5rem;
+            right: 1rem;
+            padding: 0.5rem 1rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .logout-btn:hover { background: rgba(255, 255, 255, 0.2); }
         .header h1 { font-size: 2rem; margin-bottom: 0.25rem; font-weight: 700; }
         .header p { font-size: 1rem; opacity: 0.8; }
         .stats-bar {
@@ -179,6 +194,7 @@
 </head>
 <body>
     <div class="header">
+        <button class="logout-btn" onclick="logout()">Logout</button>
         <h1>🎬 Movie Player</h1>
         <p>Your personal cinema collection</p>
     </div>
@@ -218,6 +234,7 @@
         </div>
     </div>
 
+    <script src="/auth.js"></script>
     <script>
         const ITEMS_PER_PAGE = 100; // Items per page
         let currentFilter = 'all';
@@ -300,7 +317,7 @@
                 if (searchTerm) params.append('search', searchTerm);
                 if (currentFilter !== 'all') params.append('filter', currentFilter);
                 
-                const response = await fetch(`/api/movies?${params}`);
+                const response = await authFetch(`/api/movies?${params}`);
                 const data = await response.json();
                 
                 if (data.error) throw new Error(data.error);

@@ -3,8 +3,12 @@
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+import session from 'express-session';
+import passport from 'passport';
+import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import morgan from 'morgan';
 import { DatabaseManager } from './lib/database.js';
+import { AuthManager, authMiddleware } from './lib/auth.js';
 import { loadConfig } from './lib/utils.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -42,14 +46,41 @@ const mediaLimiter = rateLimit({
   message: 'Too many media requests from this IP, please try again later.'
 });
 
+// Very strict rate limiting for authentication endpoints to prevent brute force
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Only 10 login attempts per 15 minutes
+  message: 'Too many login attempts from this IP, please try again later.',
+  skipSuccessfulRequests: false // Count both successful and failed attempts
+});
+
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:4000',
+  credentials: true
+}));
 app.use(express.json());
 app.use(express.static('public'));
 app.use('/api/', apiLimiter);
 
+// Session configuration for OAuth
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'silverfilesystem-session-secret-change-in-production',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
+}));
+
+// Initialize Passport
+app.use(passport.initialize());
+app.use(passport.session());
+
 // Database connection
 let db = null;
+let authManager = null;
 
 // Google OAuth setup
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
@@ -88,8 +119,59 @@ async function initDatabase(dbConfig = {}) {
   await db.connect();
   console.log('✓ Connected to database');
 
+  // Initialize authentication
+  authManager = new AuthManager(db);
+  await authManager.initializeUsersTable();
+  await authManager.createDefaultUser();
+
+  // Configure Google OAuth Strategy
+  const googleClientId = process.env.GOOGLE_CLIENT_ID;
+  const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const callbackURL = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:4000/api/auth/google/callback';
+
+  if (googleClientId && googleClientSecret) {
+    passport.use(new GoogleStrategy({
+      clientID: googleClientId,
+      clientSecret: googleClientSecret,
+      callbackURL: callbackURL
+    },
+    async (accessToken, refreshToken, profile, done) => {
+      try {
+        const user = await authManager.findOrCreateGoogleUser(profile);
+        return done(null, user);
+      } catch (err) {
+        return done(err, null);
+      }
+    }));
+
+    // Passport serialization
+    passport.serializeUser((user, done) => {
+      done(null, user.id);
+    });
+
+    passport.deserializeUser(async (id, done) => {
+      try {
+        const [users] = await db.connection.query(
+          'SELECT id, username, email, profile_picture FROM users WHERE id = ?',
+          [id]
+        );
+        if (users.length > 0) {
+          done(null, users[0]);
+        } else {
+          done(new Error('User not found'), null);
+        }
+      } catch (err) {
+        done(err, null);
+      }
+    });
+
+    console.log('✓ Google OAuth configured');
+  } else {
+    console.log('ℹ️  Google OAuth not configured (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable)');
+  }
+
   // Serve image files (after database is initialized)
-  app.get('/images/:id', mediaLimiter, async (req, res) => {
+  app.get('/images/:id', authMiddleware, mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -143,7 +225,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Serve audio files
-  app.get('/audio/:id', mediaLimiter, async (req, res) => {
+  app.get('/audio/:id', authMiddleware, mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -180,6 +262,12 @@ async function initDatabase(dbConfig = {}) {
       const contentType = contentTypes[ext] || 'audio/mpeg';
       res.setHeader('Content-Type', contentType);
       res.setHeader('Accept-Ranges', 'bytes');
+
+      // Record play history (async, don't wait)
+      const ip = req.ip || req.connection.remoteAddress;
+      authManager.recordPlayHistory(req.user.id, fileId, ip).catch(err => 
+        console.error('Failed to record play history:', err)
+      );
 
       // Get file stats
       const stat = fs.statSync(filePath);
@@ -221,7 +309,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Serve video files
-  app.get('/video/:id', mediaLimiter, async (req, res) => {
+  app.get('/video/:id', authMiddleware, mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -259,6 +347,12 @@ async function initDatabase(dbConfig = {}) {
       const contentType = contentTypes[ext] || 'video/mp4';
       res.setHeader('Content-Type', contentType);
       res.setHeader('Accept-Ranges', 'bytes');
+
+      // Record play history (async, don't wait)
+      const ip = req.ip || req.connection.remoteAddress;
+      authManager.recordPlayHistory(req.user.id, fileId, ip).catch(err => 
+        console.error('Failed to record play history:', err)
+      );
 
       // Get file stats
       const stat = fs.statSync(filePath);
@@ -309,9 +403,88 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+// ==================== AUTHENTICATION ROUTES ====================
+
+// Login endpoint - rate limited to prevent brute force attacks
+app.post('/api/auth/login', authLimiter, async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const result = await authManager.login(username, password);
+    
+    // Record login history
+    const ip = req.ip || req.connection.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    await authManager.recordLoginHistory(result.user.id, ip, 'local', userAgent);
+    
+    res.json(result);
+  } catch (err) {
+    res.status(401).json({ error: err.message });
+  }
+});
+
+// Register endpoint - rate limited to prevent abuse
+app.post('/api/auth/register', authLimiter, async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const result = await authManager.register(username, password);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Verify token endpoint
+app.get('/api/auth/verify', (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.json({ valid: false });
+    }
+
+    const parts = authHeader.split(' ');
+    if (parts.length !== 2 || parts[0] !== 'Bearer') {
+      return res.json({ valid: false });
+    }
+
+    const token = parts[1];
+    const result = authManager.verifyToken(token);
+    res.json(result);
+  } catch (err) {
+    res.json({ valid: false });
+  }
+});
+
+// Google OAuth routes
+app.get('/api/auth/google',
+  passport.authenticate('google', { scope: ['profile', 'email'] })
+);
+
+app.get('/api/auth/google/callback',
+  passport.authenticate('google', { 
+    failureRedirect: '/login.html?error=google_auth_failed',
+    session: true
+  }),
+  async (req, res) => {
+    try {
+      // Generate JWT token for the authenticated user
+      const result = authManager.generateTokenForUser(req.user);
+      
+      // Record login history
+      const ip = req.ip || req.connection.remoteAddress;
+      await authManager.recordLoginHistory(req.user.id, ip, 'google');
+      
+      // Redirect to frontend with token
+      res.redirect(`/login.html?token=${result.token}&user=${encodeURIComponent(JSON.stringify(result.user))}`);
+    } catch (err) {
+      console.error('Google OAuth callback error:', err);
+      res.redirect('/login.html?error=auth_failed');
+    }
+  }
+);
+
 // ==================== API ROUTES ====================
 
-// Health check
+// Health check (no auth required)
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', database: db ? 'connected' : 'disconnected' });
 });
@@ -322,7 +495,7 @@ let summaryCacheTime = 0;
 const SUMMARY_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 // Get cached summary statistics for dashboard header
-app.get('/api/summary', async (req, res) => {
+app.get('/api/summary', authMiddleware, async (req, res) => {
   try {
     const now = Date.now();
     
@@ -534,7 +707,7 @@ app.get('/api/file-type-breakdown', async (req, res) => {
 });
 
 // Get all photos with optional search and filters
-app.get('/api/photos', async (req, res) => {
+app.get('/api/photos', authMiddleware, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -596,7 +769,7 @@ app.get('/api/photos', async (req, res) => {
 });
 
 // Get all music tracks with optional search and filters
-app.get('/api/music', async (req, res) => {
+app.get('/api/music', authMiddleware, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -644,7 +817,7 @@ app.get('/api/music', async (req, res) => {
 });
 
 // Get all movies with optional search and filters
-app.get('/api/movies', async (req, res) => {
+app.get('/api/movies', authMiddleware, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -696,7 +869,7 @@ app.get('/api/movies', async (req, res) => {
 });
 
 // Get artists
-app.get('/api/music/artists', async (req, res) => {
+app.get('/api/music/artists', authMiddleware, async (req, res) => {
   try {
     const tracks = await db.getMusicWithMetadata();
     const artistMap = {};
@@ -730,7 +903,7 @@ app.get('/api/music/artists', async (req, res) => {
 });
 
 // Get albums
-app.get('/api/music/albums', async (req, res) => {
+app.get('/api/music/albums', authMiddleware, async (req, res) => {
   try {
     const tracks = await db.getMusicWithMetadata();
     const albumMap = {};
@@ -766,7 +939,7 @@ app.get('/api/music/albums', async (req, res) => {
 });
 
 // Get tracks by artist
-app.get('/api/music/artist/:name', async (req, res) => {
+app.get('/api/music/artist/:name', authMiddleware, async (req, res) => {
   try {
     const artistName = decodeURIComponent(req.params.name);
     
@@ -785,7 +958,7 @@ app.get('/api/music/artist/:name', async (req, res) => {
 });
 
 // Get tracks by album
-app.get('/api/music/album/:name', async (req, res) => {
+app.get('/api/music/album/:name', authMiddleware, async (req, res) => {
   try {
     const albumName = decodeURIComponent(req.params.name);
     
@@ -803,6 +976,23 @@ app.get('/api/music/album/:name', async (req, res) => {
   }
 });
 
+// Record play history
+app.post('/api/history/play', authMiddleware, async (req, res) => {
+  try {
+    const { fileId, playType } = req.body;
+    const userId = req.user.id;
+    const ip = req.ip || req.connection.remoteAddress;
+    
+    if (!fileId) {
+      return res.status(400).json({ error: 'File ID is required' });
+    }
+    
+    // Validate playType
+    const validPlayTypes = ['click', 'queue', 'auto_next', 'random'];
+    const type = validPlayTypes.includes(playType) ? playType : 'click';
+    
+    await authManager.recordPlayHistory(userId, fileId, ip, type);
+    res.json({ success: true, message: 'Play history recorded' });
 // Google OAuth authentication endpoint
 app.post('/api/auth/google', strictLimiter, async (req, res) => {
   try {
@@ -880,6 +1070,14 @@ app.post('/api/music/rating', authenticateToken, async (req, res) => {
   }
 });
 
+// Get user's play history
+app.get('/api/history/play', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const limit = parseInt(req.query.limit) || 100;
+    
+    const history = await authManager.getPlayHistory(userId, limit);
+    res.json({ history });
 app.get('/api/music/rating/:fileId', authenticateToken, async (req, res) => {
   try {
     const fileId = parseInt(req.params.fileId);
@@ -903,6 +1101,14 @@ app.get('/api/music/ratings', async (req, res) => {
   }
 });
 
+// Get user's login history
+app.get('/api/history/login', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const limit = parseInt(req.query.limit) || 50;
+    
+    const history = await authManager.getLoginHistory(userId, limit);
+    res.json({ history });
 // Get user-specific ratings
 app.get('/api/music/my-ratings', authenticateToken, async (req, res) => {
   try {
