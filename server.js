@@ -37,6 +37,14 @@ const mediaLimiter = rateLimit({
   message: 'Too many media requests from this IP, please try again later.'
 });
 
+// Very strict rate limiting for authentication endpoints to prevent brute force
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Only 10 login attempts per 15 minutes
+  message: 'Too many login attempts from this IP, please try again later.',
+  skipSuccessfulRequests: false // Count both successful and failed attempts
+});
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -289,8 +297,8 @@ function formatBytes(bytes) {
 
 // ==================== AUTHENTICATION ROUTES ====================
 
-// Login endpoint
-app.post('/api/auth/login', async (req, res) => {
+// Login endpoint - rate limited to prevent brute force attacks
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
     const result = await authManager.login(username, password);
@@ -300,8 +308,8 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// Register endpoint
-app.post('/api/auth/register', async (req, res) => {
+// Register endpoint - rate limited to prevent abuse
+app.post('/api/auth/register', authLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
     const result = await authManager.register(username, password);
