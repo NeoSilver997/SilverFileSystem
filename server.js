@@ -8,7 +8,7 @@ import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import morgan from 'morgan';
 import { DatabaseManager } from './lib/database.js';
-import { AuthManager, authMiddleware, adminMiddleware } from './lib/auth.js';
+import { AuthManager, authMiddleware, adminMiddleware, requirePhotoPermission, requireMusicPermission, requireVideoPermission } from './lib/auth.js';
 import { loadConfig } from './lib/utils.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -155,7 +155,7 @@ async function initDatabase(dbConfig = {}) {
   }
 
   // Serve image files (after database is initialized)
-  app.get('/images/:id', authMiddleware, mediaLimiter, async (req, res) => {
+  app.get('/images/:id', authMiddleware, requirePhotoPermission, mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -209,7 +209,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Serve audio files
-  app.get('/audio/:id', authMiddleware, mediaLimiter, async (req, res) => {
+  app.get('/audio/:id', authMiddleware, requireMusicPermission, mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -293,7 +293,7 @@ async function initDatabase(dbConfig = {}) {
   });
 
   // Serve video files
-  app.get('/video/:id', authMiddleware, mediaLimiter, async (req, res) => {
+  app.get('/video/:id', authMiddleware, requireVideoPermission, mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
@@ -423,6 +423,43 @@ async function initDatabase(dbConfig = {}) {
       }
       
       const result = await authManager.disableUser(userId);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get user permissions (admin only)
+  app.get('/api/admin/users/:id/permissions', authMiddleware, requireAdmin, async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      if (isNaN(userId)) {
+        return res.status(400).json({ error: 'Invalid user ID' });
+      }
+      
+      const permissions = await authManager.getUserPermissions(userId);
+      res.json({ permissions });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Update user permissions (admin only)
+  app.post('/api/admin/users/:id/permissions', authMiddleware, requireAdmin, async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      if (isNaN(userId)) {
+        return res.status(400).json({ error: 'Invalid user ID' });
+      }
+      
+      const { photos, music, videos } = req.body;
+      const permissions = {};
+      
+      if (photos !== undefined) permissions.photos = photos;
+      if (music !== undefined) permissions.music = music;
+      if (videos !== undefined) permissions.videos = videos;
+      
+      const result = await authManager.updateUserPermissions(userId, permissions);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -743,7 +780,7 @@ app.get('/api/file-type-breakdown', async (req, res) => {
 });
 
 // Get all photos with optional search and filters
-app.get('/api/photos', authMiddleware, async (req, res) => {
+app.get('/api/photos', authMiddleware, requirePhotoPermission, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -805,7 +842,7 @@ app.get('/api/photos', authMiddleware, async (req, res) => {
 });
 
 // Get all music tracks with optional search and filters
-app.get('/api/music', authMiddleware, async (req, res) => {
+app.get('/api/music', authMiddleware, requireMusicPermission, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -853,7 +890,7 @@ app.get('/api/music', authMiddleware, async (req, res) => {
 });
 
 // Get all movies with optional search and filters
-app.get('/api/movies', authMiddleware, async (req, res) => {
+app.get('/api/movies', authMiddleware, requireVideoPermission, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
