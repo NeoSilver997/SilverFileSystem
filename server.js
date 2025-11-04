@@ -82,6 +82,25 @@ app.use(passport.session());
 let db = null;
 let authManager = null;
 
+// Authentication middleware (initialized after database connection)
+let requireAuth = null;
+let requireAdmin = null;
+
+// Wrapper functions that will use the initialized middleware
+const requireAuthWrapper = (req, res, next) => {
+  if (!requireAuth) {
+    return res.status(500).json({ error: 'Authentication not initialized' });
+  }
+  return requireAuth(req, res, next);
+};
+
+const requireAdminWrapper = (req, res, next) => {
+  if (!requireAdmin) {
+    return res.status(500).json({ error: 'Authentication not initialized' });
+  }
+  return requireAdmin(req, res, next);
+};
+
 // Google OAuth setup
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || ''; // Set in .env file
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
@@ -106,8 +125,8 @@ async function initDatabase(dbConfig = {}) {
   await authManager.createDefaultUser();
 
   // Create middleware instances with authManager
-  const requireAuth = authMiddleware(authManager);
-  const requireAdmin = adminMiddleware(authManager);
+  requireAuth = authMiddleware(authManager);
+  requireAdmin = adminMiddleware(authManager);
 
   // Configure Google OAuth Strategy
   const googleClientId = process.env.GOOGLE_CLIENT_ID;
@@ -569,7 +588,7 @@ let summaryCacheTime = 0;
 const SUMMARY_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 // Get cached summary statistics for dashboard header
-app.get('/api/summary', requireAuth, async (req, res) => {
+app.get('/api/summary', requireAuthWrapper, async (req, res) => {
   try {
     const now = Date.now();
     
@@ -781,7 +800,7 @@ app.get('/api/file-type-breakdown', async (req, res) => {
 });
 
 // Get all photos with optional search and filters
-app.get('/api/photos', requireAuth, requirePhotoPermission, async (req, res) => {
+app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -843,7 +862,7 @@ app.get('/api/photos', requireAuth, requirePhotoPermission, async (req, res) => 
 });
 
 // Get all music tracks with optional search and filters
-app.get('/api/music', requireAuth, requireMusicPermission, async (req, res) => {
+app.get('/api/music', requireAuthWrapper, requireMusicPermission, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -891,7 +910,7 @@ app.get('/api/music', requireAuth, requireMusicPermission, async (req, res) => {
 });
 
 // Get all movies with optional search and filters
-app.get('/api/movies', requireAuth, requireVideoPermission, async (req, res) => {
+app.get('/api/movies', requireAuthWrapper, requireVideoPermission, async (req, res) => {
   try {
     const { search, filter } = req.query;
     
@@ -943,7 +962,7 @@ app.get('/api/movies', requireAuth, requireVideoPermission, async (req, res) => 
 });
 
 // Get artists
-app.get('/api/music/artists', requireAuth, async (req, res) => {
+app.get('/api/music/artists', requireAuthWrapper, async (req, res) => {
   try {
     const tracks = await db.getMusicWithMetadata();
     const artistMap = {};
@@ -977,7 +996,7 @@ app.get('/api/music/artists', requireAuth, async (req, res) => {
 });
 
 // Get albums
-app.get('/api/music/albums', requireAuth, async (req, res) => {
+app.get('/api/music/albums', requireAuthWrapper, async (req, res) => {
   try {
     const tracks = await db.getMusicWithMetadata();
     const albumMap = {};
@@ -1013,7 +1032,7 @@ app.get('/api/music/albums', requireAuth, async (req, res) => {
 });
 
 // Get tracks by artist
-app.get('/api/music/artist/:name', requireAuth, async (req, res) => {
+app.get('/api/music/artist/:name', requireAuthWrapper, async (req, res) => {
   try {
     const artistName = decodeURIComponent(req.params.name);
     
@@ -1032,7 +1051,7 @@ app.get('/api/music/artist/:name', requireAuth, async (req, res) => {
 });
 
 // Get tracks by album
-app.get('/api/music/album/:name', requireAuth, async (req, res) => {
+app.get('/api/music/album/:name', requireAuthWrapper, async (req, res) => {
   try {
     const albumName = decodeURIComponent(req.params.name);
     
@@ -1051,7 +1070,7 @@ app.get('/api/music/album/:name', requireAuth, async (req, res) => {
 });
 
 // Record play history
-app.post('/api/history/play', requireAuth, async (req, res) => {
+app.post('/api/history/play', requireAuthWrapper, async (req, res) => {
   try {
     const { fileId, playType } = req.body;
     const userId = req.user.id;
@@ -1115,7 +1134,7 @@ app.post('/api/auth/google', strictLimiter, async (req, res) => {
 });
 
 // Music rating endpoints
-app.post('/api/music/rating', requireAuth, async (req, res) => {
+app.post('/api/music/rating', requireAuthWrapper, async (req, res) => {
   try {
     const { fileId, rating } = req.body;
     
@@ -1143,7 +1162,7 @@ app.post('/api/music/rating', requireAuth, async (req, res) => {
 });
 
 // Get user's play history
-app.get('/api/history/play', requireAuth, async (req, res) => {
+app.get('/api/history/play', requireAuthWrapper, async (req, res) => {
   try {
     const userId = req.user.id;
     const limit = parseInt(req.query.limit) || 100;
@@ -1155,7 +1174,7 @@ app.get('/api/history/play', requireAuth, async (req, res) => {
   }
 });
 
-app.get('/api/music/rating/:fileId', requireAuth, async (req, res) => {
+app.get('/api/music/rating/:fileId', requireAuthWrapper, async (req, res) => {
   try {
     const fileId = parseInt(req.params.fileId);
     if (isNaN(fileId) || fileId <= 0) {
@@ -1179,7 +1198,7 @@ app.get('/api/music/ratings', async (req, res) => {
 });
 
 // Get user's login history
-app.get('/api/history/login', requireAuth, async (req, res) => {
+app.get('/api/history/login', requireAuthWrapper, async (req, res) => {
   try {
     const userId = req.user.id;
     const limit = parseInt(req.query.limit) || 50;
@@ -1192,7 +1211,7 @@ app.get('/api/history/login', requireAuth, async (req, res) => {
 });
 
 // Get user-specific ratings
-app.get('/api/music/my-ratings', requireAuth, async (req, res) => {
+app.get('/api/music/my-ratings', requireAuthWrapper, async (req, res) => {
   try {
     const ratings = await db.getUserRatings(req.user.id);
     res.json(ratings);
@@ -1202,7 +1221,7 @@ app.get('/api/music/my-ratings', requireAuth, async (req, res) => {
 });
 
 // Music play history endpoints
-app.post('/api/music/play', requireAuth, async (req, res) => {
+app.post('/api/music/play', requireAuthWrapper, async (req, res) => {
   try {
     const { fileId } = req.body;
     
@@ -1261,7 +1280,7 @@ app.get('/api/music/play-history/:fileId', async (req, res) => {
 });
 
 // Get user's own play history
-app.get('/api/music/my-plays', requireAuth, async (req, res) => {
+app.get('/api/music/my-plays', requireAuthWrapper, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
     if (isNaN(limit) || limit <= 0 || limit > 1000) {
