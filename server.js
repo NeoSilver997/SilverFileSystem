@@ -43,6 +43,29 @@ function computeQuickHash(filePath) {
   }
 }
 
+async function fileExists(filePath, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    fs.access(filePath, fs.constants.F_OK, (err) => {
+      clearTimeout(timer);
+      resolve(!err);
+    });
+  });
+}
+
+async function getFileHashWithTimeout(db, fileId, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), timeoutMs);
+    getFileHash(db, fileId).then(result => {
+      clearTimeout(timer);
+      resolve(result);
+    }).catch(() => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+  });
+}
+
 async function getFileHash(db, fileId) {
   const info = await db.computeQuickHash(fileId);
   if (info && info.hash) return info;
@@ -285,13 +308,9 @@ async function initDatabase(dbConfig = {}) {
 
       const filePath = photo[0][0].path;
 
-      // Check if file exists
-      if (!fs.existsSync(filePath)) {
+      if (!(await fileExists(filePath))) {
         return res.status(404).json({ error: 'File not found on disk' });
       }
-
-      const ext = path.extname(filePath).toLowerCase();
-      const heicFormats = ['.heic', '.heif'];
 
       // Convert HEIC to JPEG for browser compatibility
       if (heicFormats.includes(ext)) {
@@ -384,8 +403,8 @@ async function initDatabase(dbConfig = {}) {
         return res.send(cached);
       }
 
-      // Check DB cache
-      const fileInfo = await getFileHash(db, fileId);
+      // Check DB cache (with timeout)
+      const fileInfo = await getFileHashWithTimeout(db, fileId, 3000);
       if (fileInfo && fileInfo.hash) {
         const dbCached = await db.getThumbnail(fileInfo.hash, fileInfo.size, 'image');
         if (dbCached) {
@@ -413,7 +432,7 @@ async function initDatabase(dbConfig = {}) {
 
       const filePath = photo[0][0].path;
 
-      if (!fs.existsSync(filePath)) {
+      if (!(await fileExists(filePath))) {
         return res.status(404).json({ error: 'File not found on disk' });
       }
 
@@ -462,8 +481,7 @@ async function initDatabase(dbConfig = {}) {
 
       const filePath = audio[0][0].path;
 
-      // Check if file exists
-      if (!fs.existsSync(filePath)) {
+      if (!(await fileExists(filePath))) {
         return res.status(404).json({ error: 'File not found on disk' });
       }
 
@@ -546,8 +564,7 @@ async function initDatabase(dbConfig = {}) {
 
       const filePath = video[0][0].path;
 
-      // Check if file exists
-      if (!fs.existsSync(filePath)) {
+      if (!(await fileExists(filePath))) {
         return res.status(404).json({ error: 'File not found on disk' });
       }
 
@@ -669,8 +686,8 @@ async function initDatabase(dbConfig = {}) {
         return res.send(cached);
       }
 
-      // Check DB cache
-      const fileInfo = await getFileHash(db, fileId);
+      // Check DB cache (with timeout)
+      const fileInfo = await getFileHashWithTimeout(db, fileId, 3000);
       if (fileInfo && fileInfo.hash) {
         const dbCached = await db.getThumbnail(fileInfo.hash, fileInfo.size, 'video');
         if (dbCached) {
@@ -697,7 +714,7 @@ async function initDatabase(dbConfig = {}) {
 
       const filePath = video[0][0].path;
 
-      if (!fs.existsSync(filePath)) {
+      if (!(await fileExists(filePath))) {
         return res.status(404).json({ error: 'File not found on disk' });
       }
 
@@ -775,7 +792,7 @@ async function initDatabase(dbConfig = {}) {
 
       const filePath = video[0][0].path;
 
-      if (!fs.existsSync(filePath)) {
+      if (!(await fileExists(filePath))) {
         return res.status(404).json({ error: 'File not found on disk' });
       }
 
@@ -1202,27 +1219,42 @@ app.get('/api/summary', requireAuthWrapper, async (req, res) => {
 });
 
 // Get file type breakdown statistics
+let fileTypeBreakdownCache = null;
+let fileTypeBreakdownCacheHash = null;
+
 app.get('/api/file-type-breakdown', async (req, res) => {
   try {
+    // Check if cache is still valid by comparing file count + total size as a fingerprint
+    const [stats] = await db.connection.query('SELECT COUNT(*) as cnt, COALESCE(SUM(size),0) as total_size FROM scanned_files');
+    const cacheKey = `${stats[0].cnt}_${stats[0].total_size}`;
+    
+    if (fileTypeBreakdownCache && fileTypeBreakdownCacheHash === cacheKey) {
+      return res.json(fileTypeBreakdownCache);
+    }
     const connection = db.connection;
     if (!connection) {
       throw new Error('Database not connected');
     }
     
-    // Define file type categories with their extensions
     const fileTypeCategories = {
-      script: ['.js', '.py', '.sh', '.bat', '.cmd', '.ps1', '.rb', '.pl', '.php', '.java', '.c', '.cpp', '.cs', '.go', '.rs', '.ts', '.jsx', '.tsx', '.vue', '.swift', '.kt'],
-      document: ['.pdf', '.doc', '.docx', '.txt', '.rtf', '.odt', '.xls', '.xlsx', '.ppt', '.pptx', '.csv', '.md', '.tex'],
-      image: ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.ico', '.tiff', '.tif', '.heic', '.raw', '.cr2', '.nef'],
-      music: ['.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a', '.wma', '.opus', '.ape'],
-      video: ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'],
-      log: ['.log', '.out', '.err'],
-      game: ['.exe', '.apk', '.ipa', '.app', '.dmg', '.iso', '.rom', '.sav'],
-      system: ['.dll', '.sys', '.so', '.dylib', '.ini', '.cfg', '.conf', '.config'],
-      program: ['.exe', '.msi', '.deb', '.rpm', '.pkg', '.appimage', '.snap']
+      script: ['.js', '.py', '.sh', '.bat', '.cmd', '.ps1', '.rb', '.pl', '.php', '.java', '.c', '.cpp', '.cs', '.go', '.rs', '.ts', '.jsx', '.tsx', '.vue', '.swift', '.kt', '.m', '.r', '.lua', '.dart', '.zig', '.hs', '.scala', '.ex', '.exs', '.clj'],
+      document: ['.pdf', '.doc', '.docx', '.txt', '.rtf', '.odt', '.xls', '.xlsx', '.ppt', '.pptx', '.csv', '.md', '.tex', '.epub', '.mobi', '.pages', '.numbers', '.key', '.odp', '.ods', '.html', '.htm'],
+      image: ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.ico', '.tiff', '.tif', '.heic', '.heif', '.raw', '.cr2', '.nef', '.arw', '.dng', '.orf', '.rw2', '.pef', '.avif', '.jxl'],
+      music: ['.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a', '.wma', '.opus', '.ape', '.alac', '.aiff', '.mid', '.midi'],
+      video: ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp', '.ts', '.mts', '.vob', '.ogv'],
+      ai: ['.safetensors', '.gguf', '.ggml', '.bin', '.onnx', '.pt', '.pth', '.ckpt', '.lora', '.loha', '.locon', '.lycoris', '.gguf', '.npz', '.npy', '.h5', '.hdf5', '.pb', '.tflite', '.mlmodel', '.coreml', '.model', '.weights'],
+      archive: ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.tar.gz', '.tar.bz2', '.tar.xz', '.zst', '.lz4', '.cab', '.iso', '.dmg'],
+      design: ['.psd', '.ai', '.sketch', '.fig', '.xd', '.indd', '.afdesign', '.afphoto', '.kra', '.xcf', '.blend', '.ma', '.mb'],
+      cad: ['.dwg', '.dxf', '.step', '.stp', '.iges', '.igs', '.stl', '.obj', '.fbx', '.3ds', '.dae', '.3mf', '.amf'],
+      data: ['.db', '.sqlite', '.sqlite3', '.sql', '.json', '.xml', '.yaml', '.yml', '.toml', '.parquet', '.arrow', '.avro', '.hdf5'],
+      font: ['.ttf', '.otf', '.woff', '.woff2', '.eot', '.fon'],
+      log: ['.log', '.out', '.err', '.trace', '.dmp'],
+      game: ['.exe', '.apk', '.ipa', '.app', '.dmg', '.rom', '.sav', '.nes', '.snes', '.gba', '.nds', '.psp', '.ps2', '.ps3', '.xbox'],
+      system: ['.dll', '.sys', '.so', '.dylib', '.ini', '.cfg', '.conf', '.config', '.plist', '.reg', '.inf', '.cat'],
+      program: ['.exe', '.msi', '.deb', '.rpm', '.pkg', '.appimage', '.snap', '.flatpak', '.app', '.dmg', '.apk', '.ipa'],
+      other: []
     };
     
-    // Query to get size breakdown by extension
     const [rows] = await connection.query(`
       SELECT 
         LOWER(extension) as ext,
@@ -1234,21 +1266,12 @@ app.get('/api/file-type-breakdown', async (req, res) => {
       ORDER BY total_size DESC
     `);
     
-    // Categorize files
-    const breakdown = {
-      script: { count: 0, size: 0, extensions: [] },
-      document: { count: 0, size: 0, extensions: [] },
-      image: { count: 0, size: 0, extensions: [] },
-      music: { count: 0, size: 0, extensions: [] },
-      video: { count: 0, size: 0, extensions: [] },
-      log: { count: 0, size: 0, extensions: [] },
-      game: { count: 0, size: 0, extensions: [] },
-      system: { count: 0, size: 0, extensions: [] },
-      program: { count: 0, size: 0, extensions: [] },
-      other: { count: 0, size: 0, extensions: [] }
-    };
+    const breakdown = {};
+    for (const cat of Object.keys(fileTypeCategories)) {
+      breakdown[cat] = { count: 0, size: 0, extensions: [] };
+    }
+    breakdown.other = { count: 0, size: 0, extensions: [] };
     
-    // Categorize each extension
     rows.forEach(row => {
       const ext = row.ext.toLowerCase();
       const extWithDot = ext.startsWith('.') ? ext : '.' + ext;
@@ -1273,7 +1296,6 @@ app.get('/api/file-type-breakdown', async (req, res) => {
       }
     });
     
-    // Calculate total
     let totalFiles = 0;
     let totalSize = 0;
     Object.values(breakdown).forEach(category => {
@@ -1281,7 +1303,105 @@ app.get('/api/file-type-breakdown', async (req, res) => {
       totalSize += category.size;
     });
     
-    // Format the response
+    // Build extension-to-category lookup for top folders query
+    const extToCategory = {};
+    for (const [category, extensions] of Object.entries(fileTypeCategories)) {
+      for (const ext of extensions) {
+        extToCategory[ext] = category;
+      }
+    }
+
+    // Get top 5 folders per category
+    const topFolders = {};
+    const activeCategories = Object.entries(breakdown).filter(([_, d]) => d.count > 0);
+    
+    for (const [category] of activeCategories) {
+      if (category === 'other') {
+        const exts = fileTypeCategories[category] || [];
+        if (exts.length > 0) {
+          const placeholders = exts.map(() => '?').join(',');
+          const [folderRows] = await connection.query(`
+            SELECT 
+              SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', -2) as folder_path,
+              COUNT(*) as file_count,
+              SUM(size) as total_size
+            FROM scanned_files
+            WHERE LOWER(extension) IN (${placeholders})
+            GROUP BY folder_path
+            ORDER BY total_size DESC
+            LIMIT 5
+          `, exts.map(e => e.replace('.', '')));
+          topFolders[category] = folderRows.map(r => ({
+            path: r.folder_path,
+            count: parseInt(r.file_count),
+            size: parseInt(r.total_size),
+            sizeFormatted: formatBytes(parseInt(r.total_size))
+          }));
+        }
+      } else {
+        const exts = fileTypeCategories[category] || [];
+        if (exts.length === 0) continue;
+        const placeholders = exts.map(() => '?').join(',');
+        const [folderRows] = await connection.query(`
+          SELECT 
+            SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', -2) as folder_path,
+            COUNT(*) as file_count,
+            SUM(size) as total_size
+          FROM scanned_files
+          WHERE LOWER(extension) IN (${placeholders})
+          GROUP BY folder_path
+          ORDER BY total_size DESC
+          LIMIT 5
+        `, exts.map(e => e.replace('.', '')));
+        topFolders[category] = folderRows.map(r => ({
+          path: r.folder_path,
+          count: parseInt(r.file_count),
+          size: parseInt(r.total_size),
+          sizeFormatted: formatBytes(parseInt(r.total_size))
+        }));
+      }
+    }
+
+    // Per-extension top 5 folders for AI category
+    const aiExtensions = fileTypeCategories.ai || [];
+    const aiPerExtFolders = {};
+    try {
+      if (aiExtensions.length > 0) {
+        const placeholders = aiExtensions.map(() => '?').join(',');
+        const [aiRows] = await connection.query(
+          `SELECT 
+            LOWER(extension) as ext,
+            SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', -2) as folder_path,
+            COUNT(*) as file_count,
+            SUM(size) as total_size
+          FROM scanned_files
+          WHERE LOWER(extension) IN (${placeholders})
+          GROUP BY ext, folder_path
+          ORDER BY ext, total_size DESC`,
+          aiExtensions.map(e => e.replace('.', ''))
+        );
+        
+        const extFolderMap = {};
+        for (const row of aiRows) {
+          const ext = '.' + row.ext;
+          if (!extFolderMap[ext]) extFolderMap[ext] = [];
+          if (extFolderMap[ext].length < 5) {
+            extFolderMap[ext].push({
+              path: row.folder_path,
+              count: parseInt(row.file_count),
+              size: parseInt(row.total_size),
+              sizeFormatted: formatBytes(parseInt(row.total_size))
+            });
+          }
+        }
+        for (const ext of aiExtensions) {
+          if (extFolderMap[ext]) aiPerExtFolders[ext] = extFolderMap[ext];
+        }
+      }
+    } catch (aiErr) {
+      console.warn('AI per-extension query failed:', aiErr.message);
+    }
+
     const response = {
       total: {
         files: totalFiles,
@@ -1291,7 +1411,6 @@ app.get('/api/file-type-breakdown', async (req, res) => {
       categories: {}
     };
     
-    // Add formatted data for each category
     Object.entries(breakdown).forEach(([category, data]) => {
       response.categories[category] = {
         count: data.count,
@@ -1303,10 +1422,17 @@ app.get('/api/file-type-breakdown', async (req, res) => {
           count: e.count,
           size: e.size,
           sizeFormatted: formatBytes(e.size)
-        }))
+        })),
+        topFolders: topFolders[category] || []
       };
     });
+
+    if (response.categories.ai) {
+      response.categories.ai.perExtFolders = aiPerExtFolders;
+    }
     
+    fileTypeBreakdownCache = response;
+    fileTypeBreakdownCacheHash = cacheKey;
     res.json(response);
   } catch (err) {
     console.error('Error getting file type breakdown:', err);

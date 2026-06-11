@@ -371,6 +371,73 @@
             font-style: italic;
         }
 
+        .file-type-folders {
+            margin-top: 0.75rem;
+        }
+
+        .file-type-folders-title {
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            opacity: 0.8;
+        }
+
+        .folder-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.75rem;
+            padding: 0.2rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .folder-item:last-child {
+            border-bottom: none;
+        }
+
+        .folder-path {
+            opacity: 0.7;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 60%;
+        }
+
+        .folder-size {
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .ai-ext-section {
+            margin-top: 0.75rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            padding-top: 0.5rem;
+        }
+
+        .ai-ext-item {
+            margin-bottom: 0.5rem;
+            padding: 0.4rem;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 6px;
+        }
+
+        .ai-ext-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .ai-ext-name {
+            color: #a78bfa;
+        }
+
+        .ai-ext-folders {
+            margin-top: 0.25rem;
+            padding-left: 0.5rem;
+        }
+
         .action-buttons {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -709,7 +776,7 @@
         
         async function loadFileTypeBreakdown() {
             try {
-                const response = await fetch('/api/file-type-breakdown');
+                const response = await authFetch('/api/file-type-breakdown');
                 const data = await response.json();
                 
                 if (data.error) {
@@ -723,11 +790,17 @@
                     image: '🖼️',
                     music: '🎵',
                     video: '🎬',
+                    ai: '🤖',
+                    archive: '📦',
+                    design: '🎨',
+                    cad: '📐',
+                    data: '🗃️',
+                    font: '🔤',
                     log: '📋',
                     game: '🎮',
                     system: '⚙️',
                     program: '💻',
-                    other: '📦'
+                    other: '📁'
                 };
                 
                 // Sort categories by size (descending)
@@ -747,10 +820,44 @@
                         ? cat.topExtensions.map(e => e.ext).join(', ')
                         : 'various';
                     
+                    const foldersHtml = cat.topFolders && cat.topFolders.length > 0
+                        ? `<div class="file-type-folders">
+                             <div class="file-type-folders-title">Top Folders:</div>
+                             ${cat.topFolders.map(f => `
+                               <div class="folder-item">
+                                 <span class="folder-path" title="${f.path}">📁 ${f.path}</span>
+                                 <span class="folder-size">${f.sizeFormatted} (${f.count})</span>
+                               </div>
+                             `).join('')}
+                           </div>`
+                        : '';
+
+                    const aiExtHtml = category === 'ai' && cat.perExtFolders && Object.keys(cat.perExtFolders).length > 0
+                        ? `<div class="ai-ext-section">
+                             <div class="file-type-folders-title">By File Type:</div>
+                             ${Object.entries(cat.perExtFolders).map(([ext, folders]) => `
+                               <div class="ai-ext-item">
+                                 <div class="ai-ext-header">
+                                   <span class="ai-ext-name">${ext}</span>
+                                   <span>${folders.reduce((s, f) => s + f.count, 0)} files</span>
+                                 </div>
+                                 <div class="ai-ext-folders">
+                                   ${folders.map(f => `
+                                     <div class="folder-item">
+                                       <span class="folder-path" title="${f.path}">📁 ${f.path}</span>
+                                       <span class="folder-size">${f.sizeFormatted} (${f.count})</span>
+                                     </div>
+                                   `).join('')}
+                                 </div>
+                               </div>
+                             `).join('')}
+                           </div>`
+                        : '';
+                    
                     return `
                         <div class="file-type-card">
                             <div class="file-type-header">
-                                <div class="file-type-icon">${categoryIcons[category]}</div>
+                                <div class="file-type-icon">${categoryIcons[category] || '📁'}</div>
                                 <div class="file-type-name">${category}</div>
                             </div>
                             <div class="file-type-stats">
@@ -771,6 +878,8 @@
                                 <div class="file-type-bar-fill" style="width: ${cat.percentage}%"></div>
                             </div>
                             <div class="file-type-extensions">Top: ${topExt}</div>
+                            ${foldersHtml}
+                            ${aiExtHtml}
                         </div>
                     `;
                 }).join('');
