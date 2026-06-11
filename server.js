@@ -14,6 +14,8 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
 import path from 'path';
+import sharp from 'sharp';
+import heicConvert from 'heic-convert';
 import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import cookieParser from 'cookie-parser';
@@ -201,8 +203,24 @@ async function initDatabase(dbConfig = {}) {
         return res.status(404).json({ error: 'File not found on disk' });
       }
 
-      // Set appropriate content type based on file extension
       const ext = path.extname(filePath).toLowerCase();
+      const heicFormats = ['.heic', '.heif'];
+
+      // Convert HEIC to JPEG for browser compatibility
+      if (heicFormats.includes(ext)) {
+        try {
+          const inputBuffer = fs.readFileSync(filePath);
+          const jpegBuffer = await heicConvert({ buffer: inputBuffer, format: 'JPEG', quality: 0.9 });
+          res.setHeader('Content-Type', 'image/jpeg');
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          return res.send(jpegBuffer);
+        } catch (err) {
+          console.warn(`HEIC conversion failed for ${filePath}: ${err.message}`);
+          return res.status(415).json({ error: 'Cannot convert this image format' });
+        }
+      }
+
+      // Set appropriate content type based on file extension
       const contentTypes = {
         '.jpg': 'image/jpeg',
         '.jpeg': 'image/jpeg',
@@ -210,9 +228,7 @@ async function initDatabase(dbConfig = {}) {
         '.gif': 'image/gif',
         '.bmp': 'image/bmp',
         '.tiff': 'image/tiff',
-        '.webp': 'image/webp',
-        '.heic': 'image/heic',
-        '.heif': 'image/heif'
+        '.webp': 'image/webp'
       };
 
       const contentType = contentTypes[ext] || 'application/octet-stream';
@@ -230,6 +246,94 @@ async function initDatabase(dbConfig = {}) {
     } catch (err) {
       console.error('Error serving image:', err);
       res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // Serve thumbnail images (resized via sharp)
+  const thumbnailCache = new Map();
+  const THUMBNAIL_MAX_SIZE = 400;
+  const THUMBNAIL_CACHE_MAX = 500;
+
+  async function serveResizedImage(filePath, maxSize, quality = 80) {
+    const ext = path.extname(filePath).toLowerCase();
+    const heicFormats = ['.heic', '.heif'];
+    const sharpFormats = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.tiff', '.tif', '.bmp'];
+
+    if (heicFormats.includes(ext)) {
+      try {
+        const inputBuffer = fs.readFileSync(filePath);
+        const jpegBuffer = await heicConvert({ buffer: inputBuffer, format: 'JPEG', quality: quality / 100 });
+        const resized = await sharp(jpegBuffer)
+          .resize({ width: maxSize, height: maxSize, fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality })
+          .toBuffer();
+        return { buffer: resized, contentType: 'image/jpeg' };
+      } catch (heicErr) {
+        console.warn(`HEIC conversion failed for ${filePath}: ${heicErr.message}`);
+        return null;
+      }
+    }
+
+    if (sharpFormats.includes(ext)) {
+      const buffer = await sharp(filePath)
+        .resize({ width: maxSize, height: maxSize, fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality })
+        .toBuffer();
+      return { buffer, contentType: 'image/jpeg' };
+    }
+
+    return null;
+  }
+
+  app.get('/images/:id/thumb', requireAuth, requirePhotoPermission, mediaLimiter, async (req, res) => {
+    try {
+      const fileId = req.params.id;
+
+      // Check thumbnail cache first
+      const cached = thumbnailCache.get(fileId);
+      if (cached) {
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(cached);
+      }
+
+      // Get file path from database
+      const photo = await db.connection.query(
+        'SELECT path FROM scanned_files WHERE id = ?',
+        [fileId]
+      );
+
+      if (photo[0].length === 0) {
+        return res.status(404).json({ error: 'Image not found' });
+      }
+
+      const filePath = photo[0][0].path;
+
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'File not found on disk' });
+      }
+
+      const result = await serveResizedImage(filePath, THUMBNAIL_MAX_SIZE, 75);
+
+      if (!result) {
+        // Can't resize this format — return 415 Unsupported Media Type
+        return res.status(415).json({ error: 'Image format not supported for thumbnails' });
+      }
+
+      // Cache the result
+      if (thumbnailCache.size >= THUMBNAIL_CACHE_MAX) {
+        const firstKey = thumbnailCache.keys().next().value;
+        thumbnailCache.delete(firstKey);
+      }
+      thumbnailCache.set(fileId, result.buffer);
+
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.send(result.buffer);
+
+    } catch (err) {
+      console.error('Error serving thumbnail:', err.message);
+      res.status(500).json({ error: 'Error serving thumbnail' });
     }
   });
 

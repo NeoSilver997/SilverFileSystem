@@ -694,8 +694,7 @@
                 return `
                 <div class="photo-card" onclick="openLightbox(${globalIndex})">
                     <div class="photo-thumbnail">
-                        <img src="/images/${photo.id}" alt="${photo.name}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
-                        <span class="photo-icon" style="display: none;">📷</span>
+                        <img src="/images/${photo.id}/thumb" alt="${photo.name}" loading="lazy" onerror="this.src='/images/${photo.id}'; this.onerror=null;">
                     </div>
                     <div class="photo-info">
                         <div class="photo-name" title="${photo.path || photo.name}">${photo.name}</div>
@@ -855,7 +854,7 @@
             const mapList = document.getElementById('mapList');
             mapList.innerHTML = photosWithGPS.map((photo, index) => `
                 <div class="map-photo-card" onclick="selectMapPhoto(${index}, ${photo.latitude}, ${photo.longitude})" id="map-photo-${index}">
-                    <img src="/images/${photo.id}" class="map-photo-thumbnail" alt="${photo.name}">
+                    <img src="/images/${photo.id}/thumb" class="map-photo-thumbnail" alt="${photo.name}" loading="lazy" onerror="this.src='/images/${photo.id}'; this.onerror=null;">
                     <div class="map-photo-name">${photo.name}</div>
                     <div class="map-photo-location">📍 ${photo.latitude.toFixed(4)}, ${photo.longitude.toFixed(4)}</div>
                 </div>
@@ -890,7 +889,7 @@
                         </div>
                     </div>
                     <div style="padding: 1rem;">
-                        <img src="/images/${photo.id}" style="width: 100%; max-height: 200px; object-fit: contain; border-radius: 8px;" onclick="openLightbox(${allPhotos.findIndex(p => p.id === photo.id)})">
+                        <img src="/images/${photo.id}/thumb" style="width: 100%; max-height: 200px; object-fit: contain; border-radius: 8px;" onclick="openLightbox(${allPhotos.findIndex(p => p.id === photo.id)})" onerror="this.src='/images/${photo.id}'; this.onerror=null;">
                     </div>
                 </div>
             `;
