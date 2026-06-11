@@ -16,7 +16,94 @@ import fs from 'fs';
 import path from 'path';
 import sharp from 'sharp';
 import heicConvert from 'heic-convert';
+import ffmpegPath from 'ffmpeg-static';
+import { execFile, spawn } from 'child_process';
+import { promisify } from 'util';
+import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
+const execFileAsync = promisify(execFile);
+
+function computeQuickHash(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    const size = stat.size;
+    const fd = fs.openSync(filePath, 'r');
+    const bufSize = Math.min(65536, size);
+    const head = Buffer.alloc(bufSize);
+    const tail = Buffer.alloc(bufSize);
+    fs.readSync(fd, head, 0, bufSize, 0);
+    if (size > bufSize) {
+      fs.readSync(fd, tail, 0, bufSize, size - bufSize);
+    }
+    fs.closeSync(fd);
+    const hash = crypto.createHash('md5').update(head).update(tail).update(String(size)).digest('hex');
+    return { hash, size };
+  } catch (err) {
+    return null;
+  }
+}
+
+async function getFileHash(db, fileId) {
+  const info = await db.computeQuickHash(fileId);
+  if (info && info.hash) return info;
+  if (info && info.path) {
+    const computed = computeQuickHash(info.path);
+    if (computed) {
+      db.connection.execute('UPDATE scanned_files SET quick_hash = ? WHERE id = ? AND quick_hash IS NULL', [computed.hash, fileId]).catch(() => {});
+      return computed;
+    }
+  }
+  return null;
+}
+
+function getVideoDuration(filePath) {
+  return new Promise((resolve) => {
+    let stderr = '';
+    const p = spawn(ffmpegPath, ['-i', filePath, '-f', 'null', '-']);
+    const timer = setTimeout(() => { try { p.kill(); } catch (_) {} resolve(0); }, 8000);
+    p.stderr.on('data', d => { stderr += d.toString(); });
+    p.on('close', () => {
+      clearTimeout(timer);
+      const match = stderr.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
+      if (match) resolve(parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseFloat(match[3]));
+      else resolve(0);
+    });
+    p.on('error', () => { clearTimeout(timer); resolve(0); });
+  });
+}
+
+function ffmpegExtractFrame(filePath, seekTime, outputPath, timeoutMs = 12000) {
+  return new Promise((resolve) => {
+    const h = String(Math.floor(seekTime / 3600)).padStart(2, '0');
+    const m = String(Math.floor((seekTime % 3600) / 60)).padStart(2, '0');
+    const s = (seekTime % 60).toFixed(2).padStart(5, '0');
+    const ts = `${h}:${m}:${s}`;
+
+    const p = spawn(ffmpegPath, [
+      '-y', '-i', filePath,
+      '-ss', ts,
+      '-vframes', '1',
+      '-vf', 'scale=320:-1',
+      '-q:v', '5',
+      outputPath
+    ]);
+
+    const timer = setTimeout(() => {
+      try { p.kill('SIGKILL'); } catch (_) {}
+      resolve(false);
+    }, timeoutMs);
+
+    p.on('close', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0 && fs.existsSync(outputPath));
+    });
+
+    p.on('error', () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  });
+}
 import jwt from 'jsonwebtoken';
 import cookieParser from 'cookie-parser';
 
@@ -289,12 +376,29 @@ async function initDatabase(dbConfig = {}) {
     try {
       const fileId = req.params.id;
 
-      // Check thumbnail cache first
+      // Check in-memory cache first
       const cached = thumbnailCache.get(fileId);
       if (cached) {
         res.setHeader('Content-Type', 'image/jpeg');
         res.setHeader('Cache-Control', 'public, max-age=86400');
         return res.send(cached);
+      }
+
+      // Check DB cache
+      const fileInfo = await getFileHash(db, fileId);
+      if (fileInfo && fileInfo.hash) {
+        const dbCached = await db.getThumbnail(fileInfo.hash, fileInfo.size, 'image');
+        if (dbCached) {
+          const buf = Buffer.isBuffer(dbCached.thumb_data) ? dbCached.thumb_data : Buffer.from(dbCached.thumb_data);
+          if (thumbnailCache.size >= THUMBNAIL_CACHE_MAX) {
+            const firstKey = thumbnailCache.keys().next().value;
+            thumbnailCache.delete(firstKey);
+          }
+          thumbnailCache.set(fileId, buf);
+          res.setHeader('Content-Type', dbCached.content_type || 'image/jpeg');
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          return res.send(buf);
+        }
       }
 
       // Get file path from database
@@ -316,7 +420,6 @@ async function initDatabase(dbConfig = {}) {
       const result = await serveResizedImage(filePath, THUMBNAIL_MAX_SIZE, 75);
 
       if (!result) {
-        // Can't resize this format — return 415 Unsupported Media Type
         return res.status(415).json({ error: 'Image format not supported for thumbnails' });
       }
 
@@ -326,6 +429,11 @@ async function initDatabase(dbConfig = {}) {
         thumbnailCache.delete(firstKey);
       }
       thumbnailCache.set(fileId, result.buffer);
+
+      // Save to DB cache (async, don't block response)
+      if (fileInfo && fileInfo.hash) {
+        db.saveThumbnail(fileInfo.hash, fileInfo.size, 'image', result.buffer, result.contentType || 'image/jpeg').catch(() => {});
+      }
 
       res.setHeader('Content-Type', 'image/jpeg');
       res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -505,6 +613,249 @@ async function initDatabase(dbConfig = {}) {
       res.status(500).json({ error: 'Internal server error' });
     }
   });
+
+  // Serve video thumbnails (extract frame via ffmpeg)
+  const videoThumbnailCache = new Map();
+  const VIDEO_THUMB_CACHE_MAX = 500;
+
+  function ffmpegExtractFrameToBuffer(filePath, seekSec, width, timeoutMs = 12000) {
+    return new Promise((resolve) => {
+      const tmpPath = path.join(__dirname, `tmp-frame-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`);
+      const ts = String(Math.floor(seekSec / 3600)).padStart(2, '0') + ':' +
+                 String(Math.floor((seekSec % 3600) / 60)).padStart(2, '0') + ':' +
+                 (seekSec % 60).toFixed(2).padStart(5, '0');
+
+      const p = spawn(ffmpegPath, [
+        '-y', '-i', filePath,
+        '-ss', ts,
+        '-vframes', '1',
+        '-vf', `scale=${width}:-1`,
+        '-q:v', '3',
+        tmpPath
+      ]);
+
+      const timer = setTimeout(() => {
+        try { p.kill('SIGKILL'); } catch (_) {}
+        try { fs.unlinkSync(tmpPath); } catch (_) {}
+        resolve(null);
+      }, timeoutMs);
+
+      p.on('close', (code) => {
+        clearTimeout(timer);
+        if (code === 0 && fs.existsSync(tmpPath)) {
+          try {
+            const buf = fs.readFileSync(tmpPath);
+            fs.unlinkSync(tmpPath);
+            resolve(buf);
+          } catch (_) { resolve(null); }
+        } else {
+          try { fs.unlinkSync(tmpPath); } catch (_) {}
+          resolve(null);
+        }
+      });
+
+      p.on('error', () => { clearTimeout(timer); resolve(null); });
+    });
+  }
+
+  app.get('/video/:id/thumb', requireAuth, requireVideoPermission, mediaLimiter, async (req, res) => {
+    try {
+      const fileId = req.params.id;
+
+      const cached = videoThumbnailCache.get(fileId);
+      if (cached) {
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(cached);
+      }
+
+      // Check DB cache
+      const fileInfo = await getFileHash(db, fileId);
+      if (fileInfo && fileInfo.hash) {
+        const dbCached = await db.getThumbnail(fileInfo.hash, fileInfo.size, 'video');
+        if (dbCached) {
+          const buf = Buffer.isBuffer(dbCached.thumb_data) ? dbCached.thumb_data : Buffer.from(dbCached.thumb_data);
+          if (videoThumbnailCache.size >= VIDEO_THUMB_CACHE_MAX) {
+            const firstKey = videoThumbnailCache.keys().next().value;
+            videoThumbnailCache.delete(firstKey);
+          }
+          videoThumbnailCache.set(fileId, buf);
+          res.setHeader('Content-Type', dbCached.content_type || 'image/jpeg');
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          return res.send(buf);
+        }
+      }
+
+      const video = await db.connection.query(
+        'SELECT path FROM scanned_files WHERE id = ?',
+        [fileId]
+      );
+
+      if (video[0].length === 0) {
+        return res.status(404).json({ error: 'Video not found' });
+      }
+
+      const filePath = video[0][0].path;
+
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'File not found on disk' });
+      }
+
+      const duration = await getVideoDuration(filePath);
+      const seekSec = duration > 2 ? Math.min(1, duration * 0.1) : 0.5;
+      const buffer = await ffmpegExtractFrameToBuffer(filePath, seekSec, 400);
+
+      if (!buffer) {
+        return res.status(415).json({ error: 'Cannot generate video thumbnail' });
+      }
+
+      if (videoThumbnailCache.size >= VIDEO_THUMB_CACHE_MAX) {
+        const firstKey = videoThumbnailCache.keys().next().value;
+        videoThumbnailCache.delete(firstKey);
+      }
+      videoThumbnailCache.set(fileId, buffer);
+
+      // Save to DB cache (async)
+      if (fileInfo && fileInfo.hash) {
+        db.saveThumbnail(fileInfo.hash, fileInfo.size, 'video', buffer, 'image/jpeg').catch(() => {});
+      }
+
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.send(buffer);
+
+    } catch (err) {
+      console.error('Error serving video thumbnail:', err.message);
+      res.status(500).json({ error: 'Error serving video thumbnail' });
+    }
+  });
+
+  // Serve video preview GIF (3 frames at 20%, 50%, 80% of duration)
+  const videoGifCache = new Map();
+  const VIDEO_GIF_CACHE_MAX = 300;
+  let gifQueueActive = 0;
+  const GIF_MAX_CONCURRENT = 2;
+
+  function gifQueue(fn) {
+    return new Promise((resolve, reject) => {
+      const run = async () => {
+        gifQueueActive++;
+        try { resolve(await fn()); }
+        catch (e) { reject(e); }
+        finally {
+          gifQueueActive--;
+          if (gifQueuePending.length > 0) gifQueuePending.shift()();
+        }
+      };
+      if (gifQueueActive < GIF_MAX_CONCURRENT) run();
+      else gifQueuePending.push(run);
+    });
+  }
+  const gifQueuePending = [];
+
+  app.get('/video/:id/preview', requireAuth, requireVideoPermission, mediaLimiter, async (req, res) => {
+    try {
+      const fileId = req.params.id;
+
+      const cached = videoGifCache.get(fileId);
+      if (cached) {
+        res.setHeader('Content-Type', 'image/gif');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(cached);
+      }
+
+      const video = await db.connection.query(
+        'SELECT path FROM scanned_files WHERE id = ?',
+        [fileId]
+      );
+
+      if (video[0].length === 0) {
+        return res.status(404).json({ error: 'Video not found' });
+      }
+
+      const filePath = video[0][0].path;
+
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'File not found on disk' });
+      }
+
+      const tmpGif = path.join(__dirname, `tmp-preview-${fileId}-${Date.now()}.gif`);
+
+      try {
+        const gifBuffer = await gifQueue(() => generateVideoGif(filePath, tmpGif, fileId));
+
+        if (!gifBuffer) {
+          return res.status(415).json({ error: 'Cannot generate video preview' });
+        }
+
+        if (videoGifCache.size >= VIDEO_GIF_CACHE_MAX) {
+          const firstKey = videoGifCache.keys().next().value;
+          videoGifCache.delete(firstKey);
+        }
+        videoGifCache.set(fileId, gifBuffer);
+
+        res.setHeader('Content-Type', 'image/gif');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.send(gifBuffer);
+
+      } catch (ffErr) {
+        console.warn(`ffmpeg preview failed for ${filePath}: ${ffErr.message}`);
+        return res.status(415).json({ error: 'Cannot generate video preview' });
+      } finally {
+        try { fs.unlinkSync(tmpGif); } catch (_) {}
+      }
+
+    } catch (err) {
+      console.error('Error serving video preview:', err.message);
+      res.status(500).json({ error: 'Error serving video preview' });
+    }
+  });
+
+  async function generateVideoGif(filePath, tmpGif, fileId) {
+    const duration = await getVideoDuration(filePath);
+    if (duration <= 0) return null;
+
+    const positions = [0.2, 0.5, 0.8];
+    const seekTimes = positions.map(p => Math.max(0.5, duration * p));
+
+    // Single ffmpeg call: extract 3 frames and concat into GIF
+    const filterInputs = seekTimes.map((t, i) => {
+      const endTime = Math.min(t + 0.5, duration);
+      return `[0:v]trim=start=${t}:end=${endTime},setpts=PTS-STARTPTS,scale=320:-1:flags=lanczos,setsar=1,fps=2[v${i}]`;
+    });
+
+    const concatInputs = seekTimes.map((_, i) => `[v${i}]`).join('');
+    const filterComplex = filterInputs.join(';') + `;${concatInputs}concat=n=3:v=1:a=0[out]`;
+
+    return new Promise((resolve) => {
+      const p = spawn(ffmpegPath, [
+        '-y', '-i', filePath,
+        '-filter_complex', filterComplex,
+        '-map', '[out]',
+        '-loop', '0',
+        tmpGif
+      ]);
+
+      const timer = setTimeout(() => {
+        try { p.kill('SIGKILL'); } catch (_) {}
+        resolve(null);
+      }, 30000);
+
+      p.on('close', (code) => {
+        clearTimeout(timer);
+        if (code === 0 && fs.existsSync(tmpGif)) {
+          try {
+            const buf = fs.readFileSync(tmpGif);
+            resolve(buf);
+          } catch (_) { resolve(null); }
+        } else {
+          resolve(null);
+        }
+      });
+
+      p.on('error', () => { clearTimeout(timer); resolve(null); });
+    });
+  }
 
   // ==================== ADMIN ROUTES ====================
 
