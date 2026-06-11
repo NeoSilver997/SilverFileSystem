@@ -8,7 +8,7 @@ import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import morgan from 'morgan';
 import { DatabaseManager } from './lib/database.js';
-import { AuthManager, authMiddleware, adminMiddleware, requirePhotoPermission, requireMusicPermission, requireVideoPermission } from './lib/auth.js';
+import { AuthManager, authMiddleware, adminMiddleware, requirePhotoPermission, requireMusicPermission, requireVideoPermission, clearPermissionsCache } from './lib/auth.js';
 import { loadConfig } from './lib/utils.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -16,12 +16,16 @@ import fs from 'fs';
 import path from 'path';
 import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
+import cookieParser from 'cookie-parser';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
 const config = loadConfig();
+
+// Trust proxy for proper HTTPS detection behind reverse proxies
+app.set('trust proxy', 1);
 
 // Enable access logging
 app.use(morgan('combined', { stream: fs.createWriteStream('access.log', { flags: 'a' }) }));
@@ -60,6 +64,7 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+app.use(cookieParser());
 app.use(express.static('public'));
 app.use('/api/', apiLimiter);
 
@@ -428,6 +433,7 @@ async function initDatabase(dbConfig = {}) {
       }
       
       const result = await authManager.enableUser(userId);
+      clearPermissionsCache(userId);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -443,6 +449,7 @@ async function initDatabase(dbConfig = {}) {
       }
       
       const result = await authManager.disableUser(userId);
+      clearPermissionsCache(userId);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -480,6 +487,7 @@ async function initDatabase(dbConfig = {}) {
       if (videos !== undefined) permissions.videos = videos;
       
       const result = await authManager.updateUserPermissions(userId, permissions);
+      clearPermissionsCache(userId);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -509,6 +517,14 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     const userAgent = req.headers['user-agent'];
     await authManager.recordLoginHistory(result.user.id, ip, 'local', userAgent);
     
+    // Set cookie so img tags can authenticate automatically
+    res.cookie('silverfs_token', result.token, {
+      httpOnly: false,
+      secure: true,
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000
+    });
+    
     res.json(result);
   } catch (err) {
     res.status(401).json({ error: err.message });
@@ -531,19 +547,19 @@ app.get('/api/auth/verify', (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
-      return res.json({ valid: false });
+      return res.status(401).json({ valid: false });
     }
 
     const parts = authHeader.split(' ');
     if (parts.length !== 2 || parts[0] !== 'Bearer') {
-      return res.json({ valid: false });
+      return res.status(401).json({ valid: false });
     }
 
     const token = parts[1];
     const result = authManager.verifyToken(token);
-    res.json(result);
+    res.status(result.valid ? 200 : 401).json(result);
   } catch (err) {
-    res.json({ valid: false });
+    res.status(401).json({ valid: false, error: 'Invalid token' });
   }
 });
 
@@ -566,6 +582,14 @@ app.get('/api/auth/google/callback',
       const ip = req.ip || req.connection.remoteAddress;
       await authManager.recordLoginHistory(req.user.id, ip, 'google');
       
+      // Set cookie so img tags can authenticate automatically
+      res.cookie('silverfs_token', result.token, {
+        httpOnly: false,
+        secure: true,
+        sameSite: 'lax',
+        maxAge: 24 * 60 * 60 * 1000
+      });
+      
       // Redirect to frontend with token
       res.redirect(`/login.html?token=${result.token}&user=${encodeURIComponent(JSON.stringify(result.user))}`);
     } catch (err) {
@@ -587,6 +611,21 @@ let summaryCache = null;
 let summaryCacheTime = 0;
 const SUMMARY_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
+// Cached photos data
+let photosCache = null;
+let photosCacheTime = 0;
+const PHOTOS_CACHE_DURATION = 2 * 60 * 1000; // 2 minutes
+
+// Cached music data
+let musicCache = null;
+let musicCacheTime = 0;
+const MUSIC_CACHE_DURATION = 2 * 60 * 1000;
+
+// Cached movies data
+let moviesCache = null;
+let moviesCacheTime = 0;
+const MOVIES_CACHE_DURATION = 2 * 60 * 1000;
+
 // Get cached summary statistics for dashboard header
 app.get('/api/summary', requireAuthWrapper, async (req, res) => {
   try {
@@ -597,12 +636,33 @@ app.get('/api/summary', requireAuthWrapper, async (req, res) => {
       return res.json(summaryCache);
     }
     
-    // Fetch fresh data from all APIs
-    const [photosData, musicData, moviesData] = await Promise.all([
-      db.getPhotosWithMetadata(),
-      db.getMusicWithMetadata(),
-      db.getVideosWithMetadata()
-    ]);
+    // Use cached media data if available, otherwise fetch fresh
+    const cacheNow = Date.now();
+    let photosData, musicData, moviesData;
+    
+    if (photosCache && (cacheNow - photosCacheTime) < PHOTOS_CACHE_DURATION) {
+      photosData = photosCache;
+    } else {
+      photosData = await db.getPhotosWithMetadata();
+      photosCache = photosData;
+      photosCacheTime = cacheNow;
+    }
+    
+    if (musicCache && (cacheNow - musicCacheTime) < MUSIC_CACHE_DURATION) {
+      musicData = musicCache;
+    } else {
+      musicData = await db.getMusicWithMetadata();
+      musicCache = musicData;
+      musicCacheTime = cacheNow;
+    }
+    
+    if (moviesCache && (cacheNow - moviesCacheTime) < MOVIES_CACHE_DURATION) {
+      moviesData = moviesCache;
+    } else {
+      moviesData = await db.getVideosWithMetadata();
+      moviesCache = moviesData;
+      moviesCacheTime = cacheNow;
+    }
     
     // Calculate totals
     const totalFiles = photosData.length + musicData.length + moviesData.length;
@@ -804,16 +864,24 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
   try {
     const { search, filter } = req.query;
     
-    let photos = await db.getPhotosWithMetadata();
+    // Use cached data if available
+    const now = Date.now();
+    let photos;
+    if (photosCache && (now - photosCacheTime) < PHOTOS_CACHE_DURATION) {
+      photos = photosCache;
+    } else {
+      photos = await db.getPhotosWithMetadata();
+      photosCache = photos;
+      photosCacheTime = now;
+    }
     
     // Filter out photos with future dates
-    const now = new Date();
+    const today = new Date();
     photos = photos.filter(photo => {
-      if (!photo.date_taken) return true; // Keep photos without dates
+      if (!photo.date_taken) return true;
       const photoDate = new Date(photo.date_taken);
-      return photoDate <= now;
+      return photoDate <= today;
     });
-    
     
     // Apply search
     if (search) {
@@ -834,7 +902,6 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
     } else if (filter === 'landscape') {
       photos = photos.filter(photo => photo.width > photo.height);
     } else if (filter && ['jpg', 'jpeg', 'png', 'heic', 'gif'].includes(filter.toLowerCase())) {
-      // Extension filter
       const ext = filter.toLowerCase();
       photos = photos.filter(photo => {
         const photoExt = photo.name.split('.').pop().toLowerCase();
@@ -866,7 +933,15 @@ app.get('/api/music', requireAuthWrapper, requireMusicPermission, async (req, re
   try {
     const { search, filter } = req.query;
     
-    let tracks = await db.getMusicWithMetadata();
+    const now = Date.now();
+    let tracks;
+    if (musicCache && (now - musicCacheTime) < MUSIC_CACHE_DURATION) {
+      tracks = musicCache;
+    } else {
+      tracks = await db.getMusicWithMetadata();
+      musicCache = tracks;
+      musicCacheTime = now;
+    }
     
     // Apply search
     if (search) {
@@ -914,7 +989,15 @@ app.get('/api/movies', requireAuthWrapper, requireVideoPermission, async (req, r
   try {
     const { search, filter } = req.query;
     
-    let movies = await db.getVideosWithMetadata();
+    const now = Date.now();
+    let movies;
+    if (moviesCache && (now - moviesCacheTime) < MOVIES_CACHE_DURATION) {
+      movies = moviesCache;
+    } else {
+      movies = await db.getVideosWithMetadata();
+      moviesCache = movies;
+      moviesCacheTime = now;
+    }
     
     // Apply search
     if (search) {

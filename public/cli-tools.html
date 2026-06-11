@@ -222,13 +222,34 @@
                     <select id="scan-options">
                         <option value="">Basic Scan</option>
                         <option value="--db">With Database</option>
-                        <option value="--db --extract-media">With Database + Media Extraction</option>
+                        <option value="With Database</option>
+                        <option value="With Database + Media Extraction">With Database + Media Extraction</option>
                     </select>
                 </div>
                 <button class="run-btn" onclick="runCommand('scan')">Run Scan</button>
             </div>
-
+            
+            <!-- Extract Media Metadata -->
+            <div class="cli-card">
+                <h3>✨ Extract Media Metadata</h3>
+                <p>Extract metadata from files already in the database</p>
+                <div class="input-group">
+                    <label>Skip Existing (Recommended)</label>
+                    <input type="checkbox" id="extract-skip-existing" checked>
+                </div>
+                <div class="input-group">
+                    <label>Threads</label>
+                    <input type="number" id="extract-threads" value="4">
+                </div>
+                <div class="input-group">
+                    <label>Batch Size</label>
+                    <input type="number" id="extract-batch-size" value="50">
+                </div>
+                <button class="run-btn" onclick="runCommand('extract-metadata')">Run Extraction</button>
+            </div>
+            
             <!-- Find Duplicates -->
+            <div class="cli-card">
             <div class="cli-card">
                 <h3>🔍 Find Duplicates</h3>
                 <p>Find duplicate files by comparing content hashes</p>
@@ -244,13 +265,34 @@
                     <label>Options</label>
                     <select id="duplicates-options">
                         <option value="">Console Output</option>
-                        <option value="--db">Store in Database</option>
+                        <option value="With Database</option>
+                        <option value="With Database + Media Extraction">With Database + Media Extraction</option>
                     </select>
                 </div>
-                <button class="run-btn" onclick="runCommand('duplicates')">Find Duplicates</button>
+                <button class="run-btn" onclick="runCommand('scan')">Run Scan</button>
             </div>
-
-            <!-- Find from Database -->
+            
+            <!-- Extract Media Metadata -->
+            <div class="cli-card">
+                <h3>✨ Extract Media Metadata</h3>
+                <p>Extract metadata from files already in the database</p>
+                <div class="input-group">
+                    <label>Skip Existing (Recommended)</label>
+                    <input type="checkbox" id="extract-skip-existing" checked>
+                </div>
+                <div class="input-group">
+                    <label>Threads</label>
+                    <input type="number" id="extract-threads" value="4">
+                </div>
+                <div class="input-group">
+                    <label>Batch Size</label>
+                    <input type="number" id="extract-batch-size" value="50">
+                </div>
+                <button class="run-btn" onclick="runCommand('extract-metadata')">Run Extraction</button>
+            </div>
+            
+            <!-- Find Duplicates -->
+            <div class="cli-card">
             <div class="cli-card">
                 <h3>💾 Find Duplicates (DB)</h3>
                 <p>Query duplicates from existing database (no filesystem scan)</p>

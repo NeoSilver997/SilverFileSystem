@@ -532,6 +532,22 @@
     </div>
 
     <script src="/auth.js"></script>
+    <!-- Login Overlay -->
+    <div id="loginOverlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
+        <div style="background:white; padding:2rem; border-radius:12px; box-shadow:0 8px 32px rgba(0,0,0,0.3); width:360px; max-width:90%;">
+            <h2 style="text-align:center; margin-bottom:1.5rem; color:#333;">📷 Photo Library Login</h2>
+            <form id="loginForm">
+                <input type="text" id="loginUsername" placeholder="Username" required style="width:100%; padding:0.75rem; margin-bottom:0.75rem; border:1px solid #ddd; border-radius:6px; font-size:1rem; box-sizing:border-box;">
+                <input type="password" id="loginPassword" placeholder="Password" required style="width:100%; padding:0.75rem; margin-bottom:1rem; border:1px solid #ddd; border-radius:6px; font-size:1rem; box-sizing:border-box;">
+                <button type="submit" style="width:100%; padding:0.75rem; background:#667eea; color:white; border:none; border-radius:6px; font-size:1.1rem; cursor:pointer;">Login</button>
+                <div id="loginError" style="color:red; text-align:center; margin-top:0.75rem; display:none;"></div>
+            </form>
+            <div style="text-align:center; margin-top:1rem;">
+                <a href="/api/auth/google" style="color:#667eea; text-decoration:none;">Sign in with Google</a>
+            </div>
+        </div>
+    </div>
+
     <script>
         const ITEMS_PER_PAGE = 100; // Items per page
         let currentFilter = 'all';
@@ -541,6 +557,80 @@
         let allPhotosData = [];
         let currentLightboxIndex = 0;
         let currentPage = 1;
+
+        function getCookie(name) {
+            const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+            return m ? m.pop() : null;
+        }
+
+        function setCookie(name, val, days) {
+            const d = new Date();
+            d.setTime(d.getTime() + days * 86400000);
+            document.cookie = name + '=' + val + ';expires=' + d.toUTCString() + ';path=/;SameSite=Lax';
+        }
+
+        async function checkAuth() {
+            // Check URL for token (from OAuth callback)
+            const params = new URLSearchParams(window.location.search);
+            const urlToken = params.get('token');
+            if (urlToken) {
+                setCookie('silverfs_token', urlToken, 1);
+                window.history.replaceState({}, '', '/photos');
+                return true;
+            }
+            return !!getCookie('silverfs_token');
+        }
+
+        function showLogin() {
+            document.getElementById('loginOverlay').style.display = 'flex';
+        }
+
+        function hideLogin() {
+            document.getElementById('loginOverlay').style.display = 'none';
+        }
+
+        async function authFetch(url, options = {}) {
+            const token = getCookie('silverfs_token');
+            if (!token) {
+                showLogin();
+                throw new Error('Not authenticated');
+            }
+            options.headers = options.headers || {};
+            options.headers['Authorization'] = 'Bearer ' + token;
+            const res = await fetch(url, options);
+            if (res.status === 401) {
+                showLogin();
+                throw new Error('Session expired');
+            }
+            return res;
+        }
+
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('loginUsername').value;
+            const password = document.getElementById('loginPassword').value;
+            const errDiv = document.getElementById('loginError');
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+                if (data.success && data.token) {
+                    setCookie('silverfs_token', data.token, 1);
+                    hideLogin();
+                    loadPhotos();
+                } else {
+                    errDiv.textContent = data.error || 'Login failed';
+                    errDiv.style.display = 'block';
+                }
+            } catch (err) {
+                errDiv.textContent = 'Connection error';
+                errDiv.style.display = 'block';
+            }
+        });
 
         function formatDate(dateString) {
             if (!dateString) return 'N/A';
@@ -828,8 +918,15 @@
             });
         });
 
-        // Initial load
-        loadPhotos();
+        // Initial load - check auth first
+        (async () => {
+            const hasToken = await checkAuth();
+            if (hasToken) {
+                loadPhotos();
+            } else {
+                showLogin();
+            }
+        })();
     </script>
 </body>
 </html>

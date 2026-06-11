@@ -337,6 +337,7 @@ program
   .option('--db-user <user>', `Database user (default: ${config.database.user})`)
   .option('--db-password <password>', 'Database password')
   .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .option('--extract-media', 'Extract media metadata', false)
   .action(async (dirPath, options) => {
     const spinner = ora('Scanning directory...').start();
     let scanId = null;
