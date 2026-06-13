@@ -427,6 +427,10 @@ program
         
         const totalSize = files.reduce((sum, file) => sum + file.size, 0);
         await db.completeScanSession(scanId, files.length, totalSize);
+        
+        // Rebuild folder tree
+        spinner.start('Rebuilding folder tree...');
+        await db.rebuildFolderTree();
       }
       
       spinner.succeed('Scan complete!');
@@ -1569,6 +1573,43 @@ program
       console.error(chalk.red(`Error: ${err.message}`));
       await closeDatabase();
       process.exit(1);
+    }
+  });
+
+// Rebuild folder tree command
+program
+  .command('rebuild-folder-tree')
+  .description('Rebuild the folder_tree table from scanned_files')
+  .option('--db', 'Use database')
+  .option('--db-host <host>', 'Database host')
+  .option('--db-port <port>', 'Database port')
+  .option('--db-user <user>', 'Database user')
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', 'Database name')
+  .action(async (options) => {
+    await initDatabase(options);
+    
+    if (!dbManager) {
+      console.error(chalk.red('Database connection required. Use --db flag.'));
+      process.exit(1);
+    }
+    
+    const spinner = ora('Rebuilding folder tree...').start();
+    
+    try {
+      await dbManager.rebuildFolderTree();
+      spinner.succeed('Folder tree rebuilt successfully!');
+      
+      const [count] = await dbManager.connection.query('SELECT COUNT(*) as c FROM folder_tree');
+      const [drives] = await dbManager.connection.query('SELECT COUNT(*) as c FROM folder_tree WHERE depth = 1');
+      console.log(chalk.cyan(`  📁 ${count[0].c.toLocaleString()} folders indexed`));
+      console.log(chalk.cyan(`  💾 ${drives[0].c} drives`));
+      
+      await dbManager.close();
+    } catch (err) {
+      spinner.fail('Rebuild failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      await closeDatabase();
     }
   });
 

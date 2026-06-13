@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Folder Tree - SilverFileSystem</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+        }
+        .header {
+            background: linear-gradient(135deg, #141e30 0%, #243b55 100%);
+            padding: 0.5rem 1rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        .header h1 { font-size: 1.5rem; font-weight: 700; }
+        .header .back { color: #667eea; cursor: pointer; text-decoration: none; font-size: 0.9rem; }
+        .header .back:hover { text-decoration: underline; }
+        .breadcrumb {
+            background: #1a1a1a;
+            padding: 0.5rem 1rem;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            flex-wrap: wrap;
+            border-bottom: 1px solid #2a2a2a;
+        }
+        .breadcrumb span { cursor: pointer; color: #667eea; }
+        .breadcrumb span:hover { text-decoration: underline; }
+        .breadcrumb .sep { color: #666; cursor: default; }
+        .breadcrumb .current { color: #e0e0e0; cursor: default; }
+        .container { padding: 1rem; max-width: 1400px; margin: 0 auto; }
+        .stats-bar {
+            display: flex; gap: 1.5rem; padding: 0.75rem 1rem;
+            background: #1a1a1a; border-radius: 8px; margin-bottom: 1rem;
+            font-size: 0.9rem;
+        }
+        .stats-bar .stat { display: flex; gap: 0.4rem; }
+        .stats-bar .label { opacity: 0.6; }
+        .stats-bar .value { font-weight: 600; color: #667eea; }
+        .tree-table {
+            width: 100%; border-collapse: collapse; background: #1a1a1a;
+            border-radius: 8px; overflow: hidden;
+        }
+        .tree-table th {
+            text-align: left; padding: 0.6rem 1rem; background: #222;
+            font-weight: 600; font-size: 0.85rem; opacity: 0.7;
+            position: sticky; top: 0; z-index: 1; cursor: pointer;
+        }
+        .tree-table th:hover { opacity: 1; }
+        .tree-table td { padding: 0.5rem 1rem; border-bottom: 1px solid #1f1f1f; font-size: 0.9rem; }
+        .tree-table tr:hover { background: #222; }
+        .tree-table tr.folder { cursor: pointer; }
+        .tree-table tr.folder:hover { background: #252530; }
+        .tree-table .icon { width: 24px; text-align: center; }
+        .tree-table .name { max-width: 500px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .tree-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .tree-table .num-sub { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 0.8rem; opacity: 0.6; }
+        .tree-table .bar-cell { width: 200px; }
+        .size-bar {
+            height: 6px; background: #333; border-radius: 3px; overflow: hidden;
+        }
+        .size-bar-fill {
+            height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            border-radius: 3px;
+        }
+        .loading { text-align: center; padding: 3rem; opacity: 0.5; font-size: 1.1rem; }
+        .empty { text-align: center; padding: 3rem; opacity: 0.4; }
+        .loading-bar {
+            position: fixed; top: 0; left: 0; height: 3px; background: #667eea;
+            z-index: 999; transition: width 0.3s; display: none;
+        }
+        .context-menu {
+            display: none; position: fixed; background: #1a1a1a; border: 1px solid #333;
+            border-radius: 8px; padding: 0.5rem 0; z-index: 1000; min-width: 180px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }
+        .context-menu.show { display: block; }
+        .context-menu-item {
+            padding: 0.5rem 1rem; cursor: pointer; font-size: 0.9rem;
+        }
+        .context-menu-item:hover { background: rgba(102,126,234,0.2); }
+        .modal-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7); z-index: 2000; align-items: center; justify-content: center;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal-box {
+            background: #1a1a1a; border: 1px solid #333; border-radius: 12px;
+            padding: 1.5rem; width: 400px; max-width: 90%;
+        }
+        .modal-box h3 { margin-bottom: 1rem; font-size: 1.1rem; }
+        .modal-box label { display: block; margin-bottom: 0.5rem; font-size: 0.85rem; opacity: 0.7; }
+        .modal-box input, .modal-box textarea {
+            width: 100%; padding: 0.5rem; background: #222; border: 1px solid #444;
+            border-radius: 6px; color: white; font-size: 0.9rem; margin-bottom: 1rem;
+        }
+        .modal-box textarea { height: 60px; resize: vertical; }
+        .modal-box .btn-row { display: flex; gap: 0.5rem; justify-content: flex-end; }
+        .modal-box button {
+            padding: 0.4rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
+            border: 1px solid #444; background: #333; color: white;
+        }
+        .modal-box button.primary { background: #667eea; border-color: #667eea; }
+        @media (max-width: 768px) {
+            .tree-table .bar-cell { display: none; }
+            .tree-table .name { max-width: 200px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-bar" id="loadingBar"></div>
+    <div class="header">
+        <a href="/" class="back">Dashboard</a>
+        <h1>📁 Folder Tree</h1>
+        <div style="margin-left:auto; display:flex; gap:0.5rem; align-items:center;">
+            <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.85rem; cursor:pointer; color:rgba(255,255,255,0.8);">
+                <input type="checkbox" id="showHiddenCb" onchange="toggleHidden()" style="cursor:pointer;"> Show Hidden
+            </label>
+            <button onclick="goUp()" id="backBtn" style="display:none; padding:0.4rem 0.8rem; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">⬅ Back</button>
+            <button onclick="refreshCurrent()" id="refreshBtn" style="display:none; padding:0.4rem 0.8rem; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">🔄 Refresh</button>
+            <button onclick="rebuildTree()" id="rebuildBtn" style="padding:0.4rem 0.8rem; background:rgba(102,126,234,0.3); border:1px solid rgba(102,126,234,0.5); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">🔧 Rebuild</button>
+        </div>
+    </div>
+    <div class="breadcrumb" id="breadcrumb"></div>
+    <div class="container">
+        <div class="stats-bar" id="statsBar"></div>
+        <div id="treeContent"><div class="loading">Loading drives...</div></div>
+    </div>
+
+    <div id="contextMenu" class="context-menu">
+        <div class="context-menu-item" onclick="contextToggleHidden()">👁️ Toggle Hidden</div>
+        <div class="context-menu-item" onclick="contextEditRemark()">✏️ Edit Remark</div>
+        <div class="context-menu-item" onclick="contextSetRelated()">🔗 Set Related Folder</div>
+    </div>
+    <div id="editModal" class="modal-overlay" onclick="if(event.target===this)closeModal()">
+        <div class="modal-box">
+            <h3 id="modalTitle">Edit Folder</h3>
+            <label>Remark</label>
+            <textarea id="modalRemark" placeholder="e.g. Backup of XXX"></textarea>
+            <div class="btn-row">
+                <button onclick="closeModal()">Cancel</button>
+                <button class="primary" onclick="saveModal()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/auth.js"></script>
+    <script>
+        let currentPath = '';
+        let currentData = null;
+        let sortField = 'totalSize';
+        let sortDir = -1;
+        let history = [];
+        let showHidden = false;
+
+        function showLoading() {
+            document.getElementById('loadingBar').style.display = 'block';
+            document.getElementById('loadingBar').style.width = '70%';
+        }
+        function hideLoading() {
+            document.getElementById('loadingBar').style.width = '100%';
+            setTimeout(() => { document.getElementById('loadingBar').style.display = 'none'; }, 300);
+        }
+
+        function updateButtons() {
+            const backBtn = document.getElementById('backBtn');
+            const refreshBtn = document.getElementById('refreshBtn');
+            if (currentPath) {
+                backBtn.style.display = '';
+                refreshBtn.style.display = '';
+            } else {
+                backBtn.style.display = 'none';
+                refreshBtn.style.display = 'none';
+            }
+        }
+
+        function updateBreadcrumb() {
+            const bc = document.getElementById('breadcrumb');
+            if (!currentPath) {
+                bc.innerHTML = '<span class="current">All Drives</span>';
+                return;
+            }
+            const parts = currentPath.replace(/\\/g, '/').split('/').filter(Boolean);
+            let html = '<span onclick="navigateTo(\'\')">Drives</span>';
+            let accumulated = '';
+            for (let i = 0; i < parts.length; i++) {
+                accumulated += parts[i] + (i < parts.length - 1 ? '/' : '');
+                const p = accumulated.endsWith('/') ? accumulated : accumulated + '/';
+                html += `<span class="sep">/</span>`;
+                if (i === parts.length - 1) {
+                    html += `<span class="current">${parts[i]}</span>`;
+                } else {
+                    html += `<span onclick="navigateTo('${p.replace(/'/g, "\\'")}')">${parts[i]}</span>`;
+                }
+            }
+            bc.innerHTML = html;
+        }
+
+        async function loadTree(path) {
+            showLoading();
+            try {
+                let url = path ? `/api/folder-tree?path=${encodeURIComponent(path)}` : '/api/folder-tree';
+                if (showHidden) url += (url.includes('?') ? '&' : '?') + 'showHidden=1';
+                const res = await authFetch(url);
+                const data = await res.json();
+                currentPath = data.path || '';
+                currentData = data;
+                updateBreadcrumb();
+                updateButtons();
+                renderTree();
+            } catch (err) {
+                document.getElementById('treeContent').innerHTML = `<div class="empty">Error: ${err.message}</div>`;
+            }
+            hideLoading();
+        }
+
+        function navigateTo(path) {
+            if (currentPath) history.push(currentPath);
+            currentPath = path;
+            loadTree(path);
+        }
+
+        function goUp() {
+            if (history.length > 0) {
+                const prev = history.pop();
+                currentPath = prev;
+                loadTree(prev);
+            } else if (currentPath) {
+                const parts = currentPath.replace(/\\/g, '/').split('/').filter(Boolean);
+                parts.pop();
+                const upPath = parts.length > 0 ? parts.join('/') + '/' : '';
+                history.push(currentPath);
+                currentPath = upPath;
+                loadTree(upPath);
+            }
+        }
+
+        function refreshCurrent() {
+            loadTree(currentPath);
+        }
+
+        function toggleHidden() {
+            showHidden = document.getElementById('showHiddenCb').checked;
+            loadTree(currentPath);
+        }
+
+        async function rebuildTree() {
+            if (!confirm('Rebuild folder tree? This may take a while.')) return;
+            showLoading();
+            try {
+                const res = await authFetch('/api/rebuild-folder-tree');
+                const data = await res.json();
+                if (data.success) {
+                    loadTree(currentPath);
+                } else {
+                    alert('Rebuild failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch (err) {
+                alert('Rebuild failed: ' + err.message);
+            }
+            hideLoading();
+        }
+
+        function sortData(field) {
+            if (sortField === field) sortDir *= -1;
+            else { sortField = field; sortDir = -1; }
+            renderTree();
+        }
+
+        function renderTree() {
+            if (!currentData || !currentData.children) {
+                document.getElementById('treeContent').innerHTML = '<div class="empty">No data</div>';
+                return;
+            }
+
+            let items = [...currentData.children];
+
+            // Sort folders first, then by chosen field
+            items.sort((a, b) => {
+                if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
+                let va, vb;
+                if (sortField === 'name') {
+                    va = a.name.toLowerCase(); vb = b.name.toLowerCase();
+                    return sortDir * va.localeCompare(vb);
+                } else if (sortField === 'fileCount') {
+                    va = a.fileCount || 0; vb = b.fileCount || 0;
+                } else if (sortField === 'recursiveCount') {
+                    va = a.recursiveCount || 0; vb = b.recursiveCount || 0;
+                } else if (sortField === 'recursiveSize') {
+                    va = a.recursiveSize || 0; vb = b.recursiveSize || 0;
+                } else {
+                    va = a.totalSize || a.size || 0; vb = b.totalSize || b.size || 0;
+                }
+                return sortDir * (vb - va);
+            });
+
+            const maxSize = Math.max(...items.map(i => i.totalSize || i.size || 0), 1);
+
+            // Stats
+            const folders = items.filter(i => i.isFolder);
+            const files = items.filter(i => !i.isFolder);
+            const totalSize = items.reduce((s, i) => s + (i.totalSize || i.size || 0), 0);
+            const totalCount = items.length;
+
+            document.getElementById('statsBar').innerHTML = `
+                <div class="stat"><span class="label">Items:</span><span class="value">${totalCount}</span></div>
+                <div class="stat"><span class="label">Folders:</span><span class="value">${folders.length}</span></div>
+                <div class="stat"><span class="label">Files:</span><span class="value">${files.length}</span></div>
+                <div class="stat"><span class="label">Total Size:</span><span class="value">${formatBytes(totalSize)}</span></div>
+            `;
+
+            const sortIcon = (field) => sortField === field ? (sortDir > 0 ? ' ▲' : ' ▼') : '';
+
+            let html = `<table class="tree-table">
+                <thead><tr>
+                    <th class="icon"></th>
+                    <th onclick="sortData('name')">Name${sortIcon('name')}</th>
+                    <th class="num" onclick="sortData('fileCount')">Files${sortIcon('fileCount')}</th>
+                    <th class="num" onclick="sortData('totalSize')">Size${sortIcon('totalSize')}</th>
+                    <th class="num" onclick="sortData('recursiveCount')">All Files${sortIcon('recursiveCount')}</th>
+                    <th class="num" onclick="sortData('recursiveSize')">All Size${sortIcon('recursiveSize')}</th>
+                    <th class="bar-cell"></th>
+                </tr></thead>
+                <tbody>`;
+
+            // Add "Go Up" row if not at root
+            if (currentPath) {
+                html += `<tr class="folder" onclick="goUp()">
+                    <td class="icon">⬆️</td>
+                    <td class="name">..</td>
+                    <td class="num"></td>
+                    <td class="num"></td>
+                    <td class="num"></td>
+                    <td class="num"></td>
+                    <td class="bar-cell"></td>
+                </tr>`;
+            }
+
+            for (const item of items) {
+                const icon = item.isFolder ? (item.hidden ? '🔒' : '📁') : getFileIcon(item.extension);
+                const size = item.totalSize || item.size || 0;
+                const count = item.isFolder ? (item.fileCount || 0) : 1;
+                const recSize = item.recursiveSize || size;
+                const recCount = item.recursiveCount || count;
+                const pct = maxSize > 0 ? (size / maxSize * 100) : 0;
+                const click = item.isFolder
+                    ? `navigateTo('${item.path.replace(/\\/g, '/').replace(/'/g, "\\'")}')`
+                    : `window.open('/api/search-folder?q=${encodeURIComponent(item.path)}', '_blank')`;
+
+                const nameDisplay = item.remark 
+                    ? `${item.name} <span style="opacity:0.5;font-size:0.8rem;">(${item.remark})</span>`
+                    : item.name;
+                const nameStyle = item.hidden ? 'opacity:0.5;' : '';
+
+                html += `<tr class="${item.isFolder ? 'folder' : ''}" onclick="${click}">
+                    <td class="icon">${icon}</td>
+                    <td class="name" title="${item.path}${item.remark ? ' | ' + item.remark : ''}" style="${nameStyle}">${nameDisplay}</td>
+                    <td class="num">${count.toLocaleString()}</td>
+                    <td class="num">${formatBytes(size)}</td>
+                    <td class="num-sub">${recCount.toLocaleString()}</td>
+                    <td class="num-sub">${formatBytes(recSize)}</td>
+                    <td class="bar-cell"><div class="size-bar"><div class="size-bar-fill" style="width:${pct}%"></div></div></td>
+                </tr>`;
+            }
+
+            html += '</tbody></table>';
+            document.getElementById('treeContent').innerHTML = html;
+        }
+
+        function getFileIcon(ext) {
+            if (!ext) return '📄';
+            ext = ext.toLowerCase();
+            if (['jpg','jpeg','png','gif','bmp','webp','heic','avif'].includes(ext)) return '🖼️';
+            if (['mp3','flac','wav','aac','ogg','m4a'].includes(ext)) return '🎵';
+            if (['mp4','mkv','avi','mov','webm'].includes(ext)) return '🎬';
+            if (['pdf','doc','docx','txt','md'].includes(ext)) return '📄';
+            if (['zip','rar','7z','tar'].includes(ext)) return '📦';
+            if (['safetensors','gguf','pt','ckpt','lora','onnx'].includes(ext)) return '🤖';
+            if (['exe','msi','app'].includes(ext)) return '💻';
+            return '📄';
+        }
+
+        let contextItem = null;
+
+        // Context menu
+        document.addEventListener('contextmenu', (e) => {
+            const row = e.target.closest('tr');
+            if (!row) return;
+            const items = currentData?.children || [];
+            const nameEl = row.querySelector('.name');
+            if (!nameEl) return;
+            const name = nameEl.textContent.split('(')[0].trim();
+            contextItem = items.find(i => i.name === name && i.isFolder);
+            if (!contextItem) return;
+            e.preventDefault();
+            const menu = document.getElementById('contextMenu');
+            menu.style.left = e.pageX + 'px';
+            menu.style.top = e.pageY + 'px';
+            menu.classList.add('show');
+        });
+
+        document.addEventListener('click', () => {
+            document.getElementById('contextMenu').classList.remove('show');
+        });
+
+        async function contextToggleHidden() {
+            if (!contextItem) return;
+            const newHidden = !contextItem.hidden;
+            await authFetch(`/api/folder-tree/${contextItem.id || ''}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ hidden: newHidden })
+            });
+            loadTree(currentPath);
+        }
+
+        function contextEditRemark() {
+            if (!contextItem) return;
+            document.getElementById('modalTitle').textContent = `Edit: ${contextItem.name}`;
+            document.getElementById('modalRemark').value = contextItem.remark || '';
+            document.getElementById('editModal').classList.add('show');
+        }
+
+        async function saveModal() {
+            if (!contextItem) return;
+            const remark = document.getElementById('modalRemark').value.trim();
+            await authFetch(`/api/folder-tree/${contextItem.id || ''}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ remark: remark || null })
+            });
+            closeModal();
+            loadTree(currentPath);
+        }
+
+        function closeModal() {
+            document.getElementById('editModal').classList.remove('show');
+        }
+
+        function contextSetRelated() {
+            if (!contextItem) return;
+            const targetId = prompt('Enter related folder ID:');
+            if (targetId) {
+                authFetch(`/api/folder-tree/${contextItem.id || ''}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ related_folder_id: parseInt(targetId) || null })
+                }).then(() => loadTree(currentPath));
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (!bytes || bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // Load on start
+        loadTree('');
+    </script>
+</body>
+</html>

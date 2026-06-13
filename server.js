@@ -876,6 +876,16 @@ async function initDatabase(dbConfig = {}) {
 
   // ==================== ADMIN ROUTES ====================
 
+  // Rebuild folder tree
+  app.get('/api/rebuild-folder-tree', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      await db.rebuildFolderTree();
+      res.json({ success: true, message: 'Folder tree rebuilt' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Get all users (admin only)
   app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
     try {
@@ -975,6 +985,197 @@ function formatBytes(bytes) {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
+
+// Folder tree API - uses folder_tree table for fast indexed queries
+app.get('/api/folder-tree', requireAuthWrapper, async (req, res) => {
+  try {
+    const { path: reqPath } = req.query;
+
+    if (!reqPath) {
+      // Return root drives — folders whose parent is a root drive (depth=2, parent is the drive letter at depth=1)
+      const [drives] = await db.connection.query(`
+        SELECT p.folder_id as drive, SUM(c.file_count) as file_count, SUM(c.total_size) as total_size,
+               SUM(c.recursive_count) as recursive_count, SUM(c.recursive_size) as recursive_size
+        FROM folder_tree c
+        INNER JOIN folder_tree p ON c.parent_id = p.id
+        WHERE c.depth = 2
+        GROUP BY p.folder_id
+        ORDER BY recursive_size DESC
+      `);
+      return res.json({
+        path: '',
+        children: drives.map(r => ({
+          name: r.drive,
+          path: r.drive,
+          isFolder: true,
+          fileCount: parseInt(r.file_count),
+          totalSize: parseInt(r.total_size),
+          totalSizeFormatted: formatBytes(parseInt(r.total_size)),
+          recursiveCount: parseInt(r.recursive_count),
+          recursiveSize: parseInt(r.recursive_size),
+          recursiveSizeFormatted: formatBytes(parseInt(r.recursive_size))
+        }))
+      });
+    }
+
+    let normalizedPath = reqPath.replace(/\//g, '\\');
+
+    // Get current folder info
+    const [currentInfo] = await db.connection.query(
+      'SELECT file_count, total_size, recursive_count, recursive_size FROM folder_tree WHERE folder_id = ?',
+      [normalizedPath]
+    );
+
+    // Get child folders — only immediate children using indexed parent_id
+    const [parentRow] = await db.connection.query(
+      'SELECT id FROM folder_tree WHERE folder_id = ?',
+      [normalizedPath]
+    );
+    
+    if (parentRow.length === 0) {
+      return res.json({ path: normalizedPath, info: null, children: [] });
+    }
+
+    const showHidden = req.query.showHidden === '1';
+    const hiddenClause = showHidden ? '' : 'AND hidden = 0';
+
+    const [children] = await db.connection.query(`
+      SELECT folder_id, folder_name, file_count, total_size, recursive_count, recursive_size, hidden, remark, related_folder_id
+      FROM folder_tree
+      WHERE parent_id = ? ${hiddenClause}
+      ORDER BY total_size DESC
+      LIMIT 200
+    `, [parentRow[0].id]);
+
+    // Get direct files (files in this exact folder from scanned_files)
+    const [files] = await db.connection.query(`
+      SELECT name, size, extension
+      FROM scanned_files
+      WHERE folder_id = ?
+      ORDER BY size DESC
+      LIMIT 50
+    `, [normalizedPath]);
+
+    res.json({
+      path: normalizedPath,
+      info: currentInfo.length > 0 ? {
+        fileCount: parseInt(currentInfo[0].file_count),
+        totalSize: parseInt(currentInfo[0].total_size),
+        totalSizeFormatted: formatBytes(parseInt(currentInfo[0].total_size)),
+        recursiveCount: parseInt(currentInfo[0].recursive_count),
+        recursiveSize: parseInt(currentInfo[0].recursive_size),
+        recursiveSizeFormatted: formatBytes(parseInt(currentInfo[0].recursive_size))
+      } : null,
+      children: [
+        ...children.map(r => ({
+          id: r.id,
+          name: r.folder_name,
+          path: r.folder_id,
+          isFolder: true,
+          fileCount: parseInt(r.file_count),
+          totalSize: parseInt(r.total_size),
+          totalSizeFormatted: formatBytes(parseInt(r.total_size)),
+          recursiveCount: parseInt(r.recursive_count),
+          recursiveSize: parseInt(r.recursive_size),
+          recursiveSizeFormatted: formatBytes(parseInt(r.recursive_size)),
+          hidden: r.hidden === 1,
+          remark: r.remark || null,
+          relatedFolderId: r.related_folder_id || null
+        })),
+        ...files.map(r => ({
+          name: r.name,
+          path: normalizedPath + '\\' + r.name,
+          isFolder: false,
+          size: parseInt(r.size),
+          sizeFormatted: formatBytes(parseInt(r.size)),
+          extension: r.extension
+        }))
+      ]
+    });
+  } catch (err) {
+    console.error('Folder tree error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+  // Update folder hidden/remark
+  app.put('/api/folder-tree/:id', requireAuthWrapper, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { hidden, remark, related_folder_id } = req.body;
+      
+      const updates = [];
+      const values = [];
+      
+      if (hidden !== undefined) {
+        updates.push('hidden = ?');
+        values.push(hidden ? 1 : 0);
+      }
+      if (remark !== undefined) {
+        updates.push('remark = ?');
+        values.push(remark || null);
+      }
+      if (related_folder_id !== undefined) {
+        updates.push('related_folder_id = ?');
+        values.push(related_folder_id || null);
+      }
+      
+      if (updates.length === 0) {
+        return res.status(400).json({ error: 'No fields to update' });
+      }
+      
+      values.push(id);
+      await db.connection.query(
+        `UPDATE folder_tree SET ${updates.join(', ')} WHERE id = ?`,
+        values
+      );
+      
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+// Serve tree view page
+app.get('/tree', (req, res) => {
+  const html = fs.readFileSync(join(__dirname, 'public', 'tree.html'), 'utf8');
+  res.send(html);
+});
+
+// Search files in a folder path
+app.get('/api/search-folder', requireAuthWrapper, async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q) return res.status(400).json({ error: 'Query required' });
+
+    const normalizedQuery = q.replace(/\//g, '\\');
+    const [rows] = await db.connection.query(
+      `SELECT id, name, path, size, extension 
+       FROM scanned_files 
+       WHERE folder_id = ?
+       ORDER BY size DESC
+       LIMIT 100`,
+      [normalizedQuery]
+    );
+
+    res.json({
+      folder: q,
+      files: rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        path: r.path,
+        size: r.size,
+        sizeFormatted: formatBytes(parseInt(r.size)),
+        extension: r.extension,
+        isImage: ['jpg','jpeg','png','gif','bmp','webp','heic','heif','avif'].includes(r.extension?.toLowerCase()),
+        isAudio: ['mp3','flac','wav','aac','ogg','m4a','wma','opus'].includes(r.extension?.toLowerCase()),
+        isVideo: ['mp4','mkv','avi','mov','wmv','webm','m4v','mpg'].includes(r.extension?.toLowerCase())
+      }))
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ==================== AUTHENTICATION ROUTES ====================
 
@@ -1311,54 +1512,33 @@ app.get('/api/file-type-breakdown', async (req, res) => {
       }
     }
 
-    // Get top 5 folders per category
+    // Get top 10 folders per category
     const topFolders = {};
     const activeCategories = Object.entries(breakdown).filter(([_, d]) => d.count > 0);
     
     for (const [category] of activeCategories) {
-      if (category === 'other') {
-        const exts = fileTypeCategories[category] || [];
-        if (exts.length > 0) {
-          const placeholders = exts.map(() => '?').join(',');
-          const [folderRows] = await connection.query(`
-            SELECT 
-              SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', -2) as folder_path,
-              COUNT(*) as file_count,
-              SUM(size) as total_size
-            FROM scanned_files
-            WHERE LOWER(extension) IN (${placeholders})
-            GROUP BY folder_path
-            ORDER BY total_size DESC
-            LIMIT 5
-          `, exts.map(e => e.replace('.', '')));
-          topFolders[category] = folderRows.map(r => ({
-            path: r.folder_path,
-            count: parseInt(r.file_count),
-            size: parseInt(r.total_size),
-            sizeFormatted: formatBytes(parseInt(r.total_size))
-          }));
-        }
-      } else {
-        const exts = fileTypeCategories[category] || [];
-        if (exts.length === 0) continue;
-        const placeholders = exts.map(() => '?').join(',');
+      const exts = fileTypeCategories[category] || [];
+      if (exts.length === 0) continue;
+      const placeholders = exts.map(() => '?').join(',');
+      try {
         const [folderRows] = await connection.query(`
-          SELECT 
-            SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', -2) as folder_path,
-            COUNT(*) as file_count,
-            SUM(size) as total_size
-          FROM scanned_files
-          WHERE LOWER(extension) IN (${placeholders})
-          GROUP BY folder_path
-          ORDER BY total_size DESC
-          LIMIT 5
+          SELECT folder_path, full_path, COUNT(*) as file_count, SUM(size) as total_size FROM (
+            SELECT 
+              SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
+              SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', ''))) as full_path,
+              size
+            FROM scanned_files WHERE LOWER(extension) IN (${placeholders})
+          ) t GROUP BY full_path, folder_path ORDER BY total_size DESC LIMIT 10
         `, exts.map(e => e.replace('.', '')));
         topFolders[category] = folderRows.map(r => ({
           path: r.folder_path,
+          fullPath: r.full_path,
           count: parseInt(r.file_count),
           size: parseInt(r.total_size),
           sizeFormatted: formatBytes(parseInt(r.total_size))
         }));
+      } catch (err) {
+        console.warn(`Top folders query failed for ${category}:`, err.message);
       }
     }
 
@@ -1369,15 +1549,14 @@ app.get('/api/file-type-breakdown', async (req, res) => {
       if (aiExtensions.length > 0) {
         const placeholders = aiExtensions.map(() => '?').join(',');
         const [aiRows] = await connection.query(
-          `SELECT 
-            LOWER(extension) as ext,
-            SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', -2) as folder_path,
-            COUNT(*) as file_count,
-            SUM(size) as total_size
-          FROM scanned_files
-          WHERE LOWER(extension) IN (${placeholders})
-          GROUP BY ext, folder_path
-          ORDER BY ext, total_size DESC`,
+          `SELECT ext, folder_path, full_path, COUNT(*) as file_count, SUM(size) as total_size FROM (
+            SELECT 
+              LOWER(extension) as ext,
+              SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
+              SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', ''))) as full_path,
+              size
+            FROM scanned_files WHERE LOWER(extension) IN (${placeholders})
+          ) t GROUP BY ext, full_path, folder_path ORDER BY ext, total_size DESC`,
           aiExtensions.map(e => e.replace('.', ''))
         );
         
@@ -1385,9 +1564,10 @@ app.get('/api/file-type-breakdown', async (req, res) => {
         for (const row of aiRows) {
           const ext = '.' + row.ext;
           if (!extFolderMap[ext]) extFolderMap[ext] = [];
-          if (extFolderMap[ext].length < 5) {
+          if (extFolderMap[ext].length < 10) {
             extFolderMap[ext].push({
               path: row.folder_path,
+              fullPath: row.full_path,
               count: parseInt(row.file_count),
               size: parseInt(row.total_size),
               sizeFormatted: formatBytes(parseInt(row.total_size))
@@ -1429,6 +1609,47 @@ app.get('/api/file-type-breakdown', async (req, res) => {
 
     if (response.categories.ai) {
       response.categories.ai.perExtFolders = aiPerExtFolders;
+    }
+
+    // Global top folders (all file types)
+    try {
+      const [topBySize] = await connection.query(`
+        SELECT folder_path, full_path, COUNT(*) as file_count, SUM(size) as total_size FROM (
+          SELECT 
+            SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
+            SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', ''))) as full_path,
+            size
+          FROM scanned_files WHERE extension IS NOT NULL AND extension != ''
+        ) t GROUP BY full_path, folder_path ORDER BY total_size DESC LIMIT 20
+      `);
+
+      const [topByCount] = await connection.query(`
+        SELECT folder_path, full_path, COUNT(*) as file_count, SUM(size) as total_size FROM (
+          SELECT 
+            SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
+            SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', ''))) as full_path,
+            size
+          FROM scanned_files WHERE extension IS NOT NULL AND extension != ''
+        ) t GROUP BY full_path, folder_path ORDER BY file_count DESC LIMIT 10
+      `);
+
+      response.topFoldersBySize = topBySize.map(r => ({
+        path: r.folder_path,
+        fullPath: r.full_path,
+        count: parseInt(r.file_count),
+        size: parseInt(r.total_size),
+        sizeFormatted: formatBytes(parseInt(r.total_size))
+      }));
+
+      response.topFoldersByCount = topByCount.map(r => ({
+        path: r.folder_path,
+        fullPath: r.full_path,
+        count: parseInt(r.file_count),
+        size: parseInt(r.total_size),
+        sizeFormatted: formatBytes(parseInt(r.total_size))
+      }));
+    } catch (folderErr) {
+      console.warn('Global folder query failed:', folderErr.message);
     }
     
     fileTypeBreakdownCache = response;

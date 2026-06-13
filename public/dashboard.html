@@ -409,9 +409,7 @@
         }
 
         .ai-ext-section {
-            margin-top: 0.75rem;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-            padding-top: 0.5rem;
+            display: none;
         }
 
         .ai-ext-item {
@@ -436,6 +434,50 @@
         .ai-ext-folders {
             margin-top: 0.25rem;
             padding-left: 0.5rem;
+        }
+
+        .folder-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        .folder-table th {
+            text-align: left;
+            padding: 0.6rem 0.75rem;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+            font-weight: 600;
+            opacity: 0.8;
+            white-space: nowrap;
+        }
+
+        .folder-table td {
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .folder-table tr:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .folder-table .rank {
+            font-weight: 700;
+            opacity: 0.5;
+            width: 40px;
+        }
+
+        .folder-table .folder-name {
+            cursor: pointer;
+        }
+
+        .folder-table .folder-name:hover {
+            text-decoration: underline;
+            color: #a78bfa;
+        }
+
+        .folder-table .num {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
         }
 
         .action-buttons {
@@ -645,10 +687,25 @@
                 </div>
             </div>
 
+            <div class="file-type-breakdown">
+                <h2>📁 Top Folders by Size</h2>
+                <div id="topFoldersBySize" style="overflow-x: auto;">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+
+            <div class="file-type-breakdown">
+                <h2>📊 Top Folders by File Count</h2>
+                <div id="topFoldersByCount" style="overflow-x: auto;">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+
             <div class="action-buttons">
                 <a href="/photos" class="action-btn">📷 Browse Photos</a>
                 <a href="/music" class="action-btn">🎵 Play Music</a>
                 <a href="/movies" class="action-btn">🎬 Watch Movies</a>
+                <a href="/tree" class="action-btn">📁 Folder Tree</a>
                 <a href="/cli-tools" class="action-btn">🛠️ CLI Tools</a>
             </div>
 
@@ -822,11 +879,11 @@
                     
                     const foldersHtml = cat.topFolders && cat.topFolders.length > 0
                         ? `<div class="file-type-folders">
-                             <div class="file-type-folders-title">Top Folders:</div>
+                             <div class="file-type-folders-title">Top ${cat.topFolders.length} Folders:</div>
                              ${cat.topFolders.map(f => `
-                               <div class="folder-item">
-                                 <span class="folder-path" title="${f.path}">📁 ${f.path}</span>
-                                 <span class="folder-size">${f.sizeFormatted} (${f.count})</span>
+                               <div class="folder-item" title="${f.fullPath || f.path}" onclick="window.open('https://medialib2.tcghk.trade/api/search-folder?q=${encodeURIComponent(f.fullPath || f.path)}', '_blank')" style="cursor:pointer;">
+                                 <span class="folder-path">📁 ${f.path}</span>
+                                 <span class="folder-size">${f.sizeFormatted} (${f.count.toLocaleString()})</span>
                                </div>
                              `).join('')}
                            </div>`
@@ -883,6 +940,40 @@
                         </div>
                     `;
                 }).join('');
+
+                // Render global top folders by size
+                if (data.topFoldersBySize && data.topFoldersBySize.length > 0) {
+                    const sizeEl = document.getElementById('topFoldersBySize');
+                    sizeEl.innerHTML = `<table class="folder-table">
+                        <thead><tr>
+                            <th>#</th><th>Folder</th><th class="num">Files</th><th class="num">Size</th>
+                        </tr></thead>
+                        <tbody>${data.topFoldersBySize.map((f, i) => `
+                            <tr>
+                                <td class="rank">${i + 1}</td>
+                                <td class="folder-name" title="${f.fullPath || f.path}" onclick="window.open('https://medialib2.tcghk.trade/api/search-folder?q=${encodeURIComponent(f.fullPath || f.path)}', '_blank')">📁 ${f.path}</td>
+                                <td class="num">${f.count.toLocaleString()}</td>
+                                <td class="num">${f.sizeFormatted}</td>
+                            </tr>
+                        `).join('')}</tbody></table>`;
+                }
+
+                // Render global top folders by count
+                if (data.topFoldersByCount && data.topFoldersByCount.length > 0) {
+                    const countEl = document.getElementById('topFoldersByCount');
+                    countEl.innerHTML = `<table class="folder-table">
+                        <thead><tr>
+                            <th>#</th><th>Folder</th><th class="num">Files</th><th class="num">Size</th>
+                        </tr></thead>
+                        <tbody>${data.topFoldersByCount.map((f, i) => `
+                            <tr>
+                                <td class="rank">${i + 1}</td>
+                                <td class="folder-name" title="${f.fullPath || f.path}" onclick="window.open('https://medialib2.tcghk.trade/api/search-folder?q=${encodeURIComponent(f.fullPath || f.path)}', '_blank')">📁 ${f.path}</td>
+                                <td class="num">${f.count.toLocaleString()}</td>
+                                <td class="num">${f.sizeFormatted}</td>
+                            </tr>
+                        `).join('')}</tbody></table>`;
+                }
                 
             } catch (err) {
                 console.error('Error loading file type breakdown:', err);
