@@ -495,10 +495,13 @@
         const urlParams = new URLSearchParams(window.location.search);
         const urlId = urlParams.get('id');
         const urlPath = urlParams.get('path');
-        if (urlId) {
+        if (urlId && !isNaN(parseInt(urlId))) {
             loadTree(parseInt(urlId));
         } else if (urlPath) {
             loadTree(urlPath);
+        } else if (urlId) {
+            // id is actually a path (from folder links)
+            loadTree(urlId);
         } else {
             loadTree('');
         }

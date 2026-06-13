@@ -874,7 +874,13 @@ async function initDatabase(dbConfig = {}) {
     });
   }
 
-  // ==================== ADMIN ROUTES ====================
+  // Serve duplicates page
+app.get('/duplicates', (req, res) => {
+  const html = fs.readFileSync(join(__dirname, 'public', 'duplicates.html'), 'utf8');
+  res.send(html);
+});
+
+// ==================== ADMIN ROUTES ====================
 
   // Rebuild folder tree
   app.get('/api/rebuild-folder-tree', requireAuth, requireAdmin, async (req, res) => {
@@ -989,22 +995,24 @@ function formatBytes(bytes) {
 // Folder tree API - uses folder_tree table for fast indexed queries
 app.get('/api/folder-tree', requireAuthWrapper, async (req, res) => {
   try {
-    const { path: reqPath } = req.query;
+    const { path: reqPath, id: reqId } = req.query;
 
-    if (!reqPath) {
+    if (!reqPath && !reqId) {
       // Return root drives — folders whose parent is a root drive (depth=2, parent is the drive letter at depth=1)
       const [drives] = await db.connection.query(`
-        SELECT p.folder_id as drive, SUM(c.file_count) as file_count, SUM(c.total_size) as total_size,
+        SELECT p.id, p.folder_id as drive, p.remark, p.hidden,
+               SUM(c.file_count) as file_count, SUM(c.total_size) as total_size,
                SUM(c.recursive_count) as recursive_count, SUM(c.recursive_size) as recursive_size
         FROM folder_tree c
         INNER JOIN folder_tree p ON c.parent_id = p.id
         WHERE c.depth = 2
-        GROUP BY p.folder_id
+        GROUP BY p.id, p.folder_id, p.remark, p.hidden
         ORDER BY recursive_size DESC
       `);
       return res.json({
         path: '',
         children: drives.map(r => ({
+          id: r.id,
           name: r.drive,
           path: r.drive,
           isFolder: true,
@@ -1013,39 +1021,55 @@ app.get('/api/folder-tree', requireAuthWrapper, async (req, res) => {
           totalSizeFormatted: formatBytes(parseInt(r.total_size)),
           recursiveCount: parseInt(r.recursive_count),
           recursiveSize: parseInt(r.recursive_size),
-          recursiveSizeFormatted: formatBytes(parseInt(r.recursive_size))
+          recursiveSizeFormatted: formatBytes(parseInt(r.recursive_size)),
+          hidden: r.hidden === 1,
+          remark: r.remark || null
         }))
       });
     }
 
-    let normalizedPath = reqPath.replace(/\//g, '\\');
+    let normalizedPath;
+    let folderId;
 
-    // Get current folder info
-    const [currentInfo] = await db.connection.query(
-      'SELECT file_count, total_size, recursive_count, recursive_size FROM folder_tree WHERE folder_id = ?',
-      [normalizedPath]
-    );
+    if (reqId) {
+      // Lookup by ID
+      const [row] = await db.connection.query('SELECT folder_id FROM folder_tree WHERE id = ?', [parseInt(reqId)]);
+      if (row.length === 0) {
+        return res.status(404).json({ error: 'Folder not found' });
+      }
+      normalizedPath = row[0].folder_id;
+      folderId = parseInt(reqId);
+    } else {
+      normalizedPath = reqPath.replace(/\//g, '\\');
+      // Strip trailing backslash for folder_tree lookup
+      if (normalizedPath.endsWith('\\') && normalizedPath.length > 1) {
+        normalizedPath = normalizedPath.slice(0, -1);
+      }
+      // Resolve path to folder_tree id
+      const [row] = await db.connection.query('SELECT id FROM folder_tree WHERE folder_id = ?', [normalizedPath]);
+      folderId = row.length > 0 ? row[0].id : null;
+    }
 
     // Get child folders — only immediate children using indexed parent_id
-    const [parentRow] = await db.connection.query(
-      'SELECT id FROM folder_tree WHERE folder_id = ?',
-      [normalizedPath]
-    );
-    
-    if (parentRow.length === 0) {
+    if (!folderId) {
       return res.json({ path: normalizedPath, info: null, children: [] });
     }
+
+    const [currentInfo] = await db.connection.query(
+      'SELECT file_count, total_size, recursive_count, recursive_size FROM folder_tree WHERE id = ?',
+      [folderId]
+    );
 
     const showHidden = req.query.showHidden === '1';
     const hiddenClause = showHidden ? '' : 'AND hidden = 0';
 
     const [children] = await db.connection.query(`
-      SELECT folder_id, folder_name, file_count, total_size, recursive_count, recursive_size, hidden, remark, related_folder_id
+      SELECT id, folder_id, folder_name, file_count, total_size, recursive_count, recursive_size, hidden, remark, related_folder_id
       FROM folder_tree
       WHERE parent_id = ? ${hiddenClause}
       ORDER BY total_size DESC
       LIMIT 200
-    `, [parentRow[0].id]);
+    `, [folderId]);
 
     // Get direct files (files in this exact folder from scanned_files)
     const [files] = await db.connection.query(`
@@ -1175,6 +1199,325 @@ app.get('/api/search-folder', requireAuthWrapper, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Get duplicates from database
+app.get('/api/duplicates', requireAuthWrapper, async (req, res) => {
+  try {
+    const minSize = parseInt(req.query.minSize) || 0;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+
+    const [groups] = await db.connection.query(`
+      SELECT hash, COUNT(*) as count, size
+      FROM scanned_files
+      WHERE hash IS NOT NULL AND size >= ?
+      GROUP BY hash, size
+      HAVING count > 1
+      ORDER BY size DESC
+      LIMIT ?
+    `, [minSize, limit]);
+
+    const duplicates = [];
+    for (const group of groups) {
+      const [files] = await db.connection.query(
+        'SELECT id, path, name, size, extension FROM scanned_files WHERE hash = ? AND size = ?',
+        [group.hash, group.size]
+      );
+      duplicates.push({
+        hash: group.hash ? group.hash.substring(0, 16) + '...' : null,
+        count: group.count,
+        size: parseInt(group.size),
+        sizeFormatted: formatBytes(parseInt(group.size)),
+        wastedSpace: (group.count - 1) * parseInt(group.size),
+        wastedFormatted: formatBytes((group.count - 1) * parseInt(group.size)),
+      files: files.map(f => ({
+          id: f.id,
+          name: f.name,
+          path: f.path,
+          extension: f.extension,
+          folderId: f.tree_id,
+          folderName: f.folder_name || f.folder_id
+        }))
+      });
+    }
+
+    // Get totals
+    const [totals] = await db.connection.query(`
+      SELECT COUNT(*) as groups, SUM(cnt) as files, SUM(wasted) as wasted FROM (
+        SELECT hash, COUNT(*) as cnt, (COUNT(*) - 1) * size as wasted
+        FROM scanned_files WHERE hash IS NOT NULL AND size >= ?
+        GROUP BY hash, size HAVING COUNT(*) > 1
+      ) t
+    `, [minSize]);
+
+    res.json({
+      groups: duplicates,
+      totalGroups: totals[0].groups || 0,
+      totalFiles: parseInt(totals[0].files) || 0,
+      totalWasted: parseInt(totals[0].wasted) || 0,
+      totalWastedFormatted: formatBytes(parseInt(totals[0].wasted) || 0)
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Duplicate report API — folder-level analysis
+app.get('/api/duplicates/report', requireAuthWrapper, async (req, res) => {
+  try {
+    const minSize = parseInt(req.query.minSize) || 0;
+    const limit = Math.min(parseInt(req.query.limit) || 500, 2000);
+
+    // Get all duplicate files with their folder info
+    const [dupFiles] = await db.connection.query(`
+      SELECT sf.id, sf.path, sf.name, sf.size, sf.extension, sf.hash,
+             sf.folder_id, ft.id as tree_id, ft.folder_name
+      FROM scanned_files sf
+      LEFT JOIN folder_tree ft ON sf.folder_id = ft.folder_id
+      WHERE sf.hash IS NOT NULL
+        AND sf.hash IN (
+          SELECT hash FROM scanned_files
+          WHERE hash IS NOT NULL AND size >= ?
+          GROUP BY hash, size HAVING COUNT(*) > 1
+        )
+        AND sf.size >= ?
+      ORDER BY sf.hash, sf.size DESC
+    `, [minSize, minSize]);
+
+    // Group by hash
+    const hashMap = new Map();
+    for (const file of dupFiles) {
+      const key = `${file.hash}_${file.size}`;
+      if (!hashMap.has(key)) {
+        hashMap.set(key, { hash: file.hash, size: parseInt(file.size), files: [] });
+      }
+      hashMap.get(key).files.push({
+        id: file.id,
+        name: file.name,
+        path: file.path,
+        extension: file.extension,
+        folderId: file.tree_id,
+        folderName: file.folder_name || file.folder_id
+      });
+    }
+
+    const allGroups = Array.from(hashMap.values()).filter(g => g.files.length > 1);
+
+    // Analyze by drive
+    const driveStats = {};
+    for (const group of allGroups) {
+      for (const file of group.files) {
+        const drive = file.path.substring(0, 2) || '??';
+        if (!driveStats[drive]) driveStats[drive] = { files: 0, wasted: 0, groups: new Set() };
+        driveStats[drive].files++;
+        driveStats[drive].wasted += group.size;
+        driveStats[drive].groups.add(group.hash);
+      }
+    }
+
+    const driveReport = Object.entries(driveStats)
+      .map(([drive, s]) => ({
+        drive,
+        files: s.files,
+        wasted: s.wasted,
+        wastedFormatted: formatBytes(s.wasted),
+        groups: s.groups.size
+      }))
+      .sort((a, b) => b.wasted - a.wasted);
+
+    // Analyze by folder
+    const folderStats = {};
+    for (const group of allGroups) {
+      for (const file of group.files) {
+        const fid = file.folderId || file.folderName;
+        if (!folderStats[fid]) folderStats[fid] = { folderId: file.folderId, name: file.folderName || fid, files: 0, wasted: 0, groups: new Set() };
+        folderStats[fid].files++;
+        folderStats[fid].wasted += group.size;
+        folderStats[fid].groups.add(group.hash);
+      }
+    }
+
+    const folderReport = Object.entries(folderStats)
+      .map(([fid, s]) => ({
+        folderId: s.folderId,
+        name: s.name,
+        files: s.files,
+        wasted: s.wasted,
+        wastedFormatted: formatBytes(s.wasted),
+        groups: s.groups.size
+      }))
+      .sort((a, b) => b.wasted - a.wasted)
+      .slice(0, 30);
+
+    // Summary
+    const totalWasted = allGroups.reduce((sum, g) => sum + (g.files.length - 1) * g.size, 0);
+    const totalDupFiles = allGroups.reduce((sum, g) => sum + g.files.length, 0);
+
+    // Top groups (limited, sorted by wasted space)
+    const topGroups = allGroups
+      .sort((a, b) => (b.files.length - 1) * b.size - (a.files.length - 1) * a.size)
+      .slice(0, limit)
+      .map(g => ({
+        hash: g.hash ? g.hash.substring(0, 12) + '...' : null,
+        size: g.size,
+        sizeFormatted: formatBytes(g.size),
+        count: g.files.length,
+        wasted: (g.files.length - 1) * g.size,
+        wastedFormatted: formatBytes((g.files.length - 1) * g.size),
+        files: g.files.map(f => ({
+          name: f.name,
+          path: f.path,
+          folderId: f.folderId,
+          folderName: f.folderName,
+          extension: f.extension
+        }))
+      }));
+
+    res.json({
+      summary: {
+        totalGroups: allGroups.length,
+        totalDupFiles: totalDupFiles,
+        totalWasted,
+        totalWastedFormatted: formatBytes(totalWasted),
+        hashCoverage: { hashed: 9843, total: 4166048 }
+      },
+      driveReport,
+      folderReport,
+      topGroups
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Serve duplicates report page
+app.get('/duplicates/report', (req, res) => {
+  const html = fs.readFileSync(join(__dirname, 'public', 'duplicates-report.html'), 'utf8');
+  res.send(html);
+});
+
+// Backup analysis API — check which files have copies elsewhere
+let backupAnalysisCache = null;
+let backupAnalysisCacheTime = 0;
+
+app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
+  try {
+    const folder = req.query.folder || '%202004IphoneBackup%';
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+
+    // Check cache (5 min TTL)
+    const now = Date.now();
+    if (backupAnalysisCache && (now - backupAnalysisCacheTime) < 300000) {
+      return res.json(backupAnalysisCache);
+    }
+
+    // Get all files in backup folder
+    const [files] = await db.connection.query(`
+      SELECT id, name, size, hash, extension, folder_id
+      FROM scanned_files
+      WHERE folder_id LIKE ?
+      ORDER BY name
+    `, [folder]);
+
+    // Separate hashed vs unhashed
+    const hashed = files.filter(f => f.hash);
+    const unhashed = files.filter(f => !f.hash);
+
+    // Check hashed files for copies elsewhere
+    const hashes = [...new Set(hashed.map(f => f.hash))];
+    const dupMap = new Map();
+
+    if (hashes.length > 0) {
+      const BATCH = 500;
+      for (let i = 0; i < hashes.length; i += BATCH) {
+        const batch = hashes.slice(i, i + BATCH);
+        const placeholders = batch.map(() => '?').join(',');
+        const [dups] = await db.connection.query(`
+          SELECT sf.hash, sf.path, sf.name, sf.size, sf.folder_id, ft.folder_name
+          FROM scanned_files sf
+          LEFT JOIN folder_tree ft ON sf.folder_id = ft.folder_id
+          WHERE sf.hash IN (${placeholders})
+            AND sf.folder_id NOT LIKE ?
+        `, [...batch, folder]);
+        for (const d of dups) {
+          if (!dupMap.has(d.hash)) dupMap.set(d.hash, []);
+          dupMap.get(d.hash).push({
+            path: d.path,
+            name: d.name,
+            folder: d.folder_name || d.folder_id
+          });
+        }
+      }
+    }
+
+    // Build results
+    const withCopy = [];
+    const withoutCopy = [];
+
+    for (const file of hashed) {
+      const others = dupMap.get(file.hash);
+      if (others && others.length > 0) {
+        withCopy.push({
+          id: file.id,
+          name: file.name,
+          path: file.folder_id + '\\' + file.name,
+          size: file.size,
+          sizeFormatted: formatBytes(parseInt(file.size)),
+          extension: file.extension,
+          copies: others.length,
+          copyLocations: others.slice(0, 5)
+        });
+      } else {
+        withoutCopy.push({
+          id: file.id,
+          name: file.name,
+          size: file.size,
+          sizeFormatted: formatBytes(parseInt(file.size)),
+          extension: file.extension
+        });
+      }
+    }
+
+    // Sort by size
+    withCopy.sort((a, b) => b.size - a.size);
+    withoutCopy.sort((a, b) => b.size - a.size);
+
+    const wastedByCopies = withCopy.reduce((sum, f) => sum + f.size * (f.copies), 0);
+
+    const response = {
+      summary: {
+        totalFiles: files.length,
+        hashed: hashed.length,
+        unhashed: unhashed.length,
+        withCopy: withCopy.length,
+        withoutCopy: withoutCopy.length,
+        wastedSpace: wastedByCopies,
+        wastedFormatted: formatBytes(wastedByCopies)
+      },
+      withCopy: withCopy.slice(0, limit),
+      withoutCopy: withoutCopy.slice(0, limit),
+      unhashed: unhashed.sort((a, b) => b.size - a.size).map(f => ({
+        id: f.id,
+        name: f.name,
+        path: f.folder_id + '\\' + f.name,
+        size: f.size,
+        sizeFormatted: formatBytes(parseInt(f.size)),
+        extension: f.extension
+      }))
+    };
+
+    backupAnalysisCache = response;
+    backupAnalysisCacheTime = now;
+    res.json(response);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Serve backup analysis page
+app.get('/backup', (req, res) => {
+  const html = fs.readFileSync(join(__dirname, 'public', 'backup-analysis.html'), 'utf8');
+  res.send(html);
 });
 
 // ==================== AUTHENTICATION ROUTES ====================
@@ -1522,15 +1865,18 @@ app.get('/api/file-type-breakdown', async (req, res) => {
       const placeholders = exts.map(() => '?').join(',');
       try {
         const [folderRows] = await connection.query(`
-          SELECT folder_path, full_path, COUNT(*) as file_count, SUM(size) as total_size FROM (
+          SELECT ft.id as folder_id, t.folder_path, t.full_path, t.file_count, t.total_size FROM (
             SELECT 
               SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
               SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', ''))) as full_path,
-              size
+              COUNT(*) as file_count,
+              SUM(size) as total_size
             FROM scanned_files WHERE LOWER(extension) IN (${placeholders})
-          ) t GROUP BY full_path, folder_path ORDER BY total_size DESC LIMIT 10
+            GROUP BY full_path, folder_path ORDER BY total_size DESC LIMIT 10
+          ) t LEFT JOIN folder_tree ft ON ft.folder_id = REPLACE(t.full_path, '/', '\\\\')
         `, exts.map(e => e.replace('.', '')));
         topFolders[category] = folderRows.map(r => ({
+          id: r.folder_id,
           path: r.folder_path,
           fullPath: r.full_path,
           count: parseInt(r.file_count),
@@ -1614,26 +1960,31 @@ app.get('/api/file-type-breakdown', async (req, res) => {
     // Global top folders (all file types)
     try {
       const [topBySize] = await connection.query(`
-        SELECT folder_path, full_path, COUNT(*) as file_count, SUM(size) as total_size FROM (
+        SELECT ft.id as folder_id, t.folder_path, t.full_path, t.file_count, t.total_size FROM (
           SELECT 
             SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
             SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', ''))) as full_path,
-            size
+            COUNT(*) as file_count,
+            SUM(size) as total_size
           FROM scanned_files WHERE extension IS NOT NULL AND extension != ''
-        ) t GROUP BY full_path, folder_path ORDER BY total_size DESC LIMIT 20
+          GROUP BY full_path, folder_path ORDER BY total_size DESC LIMIT 20
+        ) t LEFT JOIN folder_tree ft ON ft.folder_id = REPLACE(t.full_path, '/', '\\\\')
       `);
 
       const [topByCount] = await connection.query(`
-        SELECT folder_path, full_path, COUNT(*) as file_count, SUM(size) as total_size FROM (
+        SELECT ft.id as folder_id, t.folder_path, t.full_path, t.file_count, t.total_size FROM (
           SELECT 
             SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
             SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', ''))) as full_path,
-            size
+            COUNT(*) as file_count,
+            SUM(size) as total_size
           FROM scanned_files WHERE extension IS NOT NULL AND extension != ''
-        ) t GROUP BY full_path, folder_path ORDER BY file_count DESC LIMIT 10
+          GROUP BY full_path, folder_path ORDER BY file_count DESC LIMIT 10
+        ) t LEFT JOIN folder_tree ft ON ft.folder_id = REPLACE(t.full_path, '/', '\\\\')
       `);
 
       response.topFoldersBySize = topBySize.map(r => ({
+        id: r.folder_id,
         path: r.folder_path,
         fullPath: r.full_path,
         count: parseInt(r.file_count),
@@ -1642,6 +1993,7 @@ app.get('/api/file-type-breakdown', async (req, res) => {
       }));
 
       response.topFoldersByCount = topByCount.map(r => ({
+        id: r.folder_id,
         path: r.folder_path,
         fullPath: r.full_path,
         count: parseInt(r.file_count),
