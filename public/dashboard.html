@@ -881,7 +881,7 @@
                         ? `<div class="file-type-folders">
                              <div class="file-type-folders-title">Top ${cat.topFolders.length} Folders:</div>
                              ${cat.topFolders.map(f => `
-                               <div class="folder-item" title="${f.fullPath || f.path}" onclick="window.open('https://medialib2.tcghk.trade/api/search-folder?q=${encodeURIComponent(f.fullPath || f.path)}', '_blank')" style="cursor:pointer;">
+                               <div class="folder-item" title="${f.fullPath || f.path}" onclick="window.location.href='/tree?path=${encodeURIComponent(f.fullPath || f.path).replace(/%2F/g, '/')}'" style="cursor:pointer;">
                                  <span class="folder-path">📁 ${f.path}</span>
                                  <span class="folder-size">${f.sizeFormatted} (${f.count.toLocaleString()})</span>
                                </div>
@@ -951,7 +951,7 @@
                         <tbody>${data.topFoldersBySize.map((f, i) => `
                             <tr>
                                 <td class="rank">${i + 1}</td>
-                                <td class="folder-name" title="${f.fullPath || f.path}" onclick="window.open('https://medialib2.tcghk.trade/api/search-folder?q=${encodeURIComponent(f.fullPath || f.path)}', '_blank')">📁 ${f.path}</td>
+                                <td class="folder-name" title="${f.fullPath || f.path}" onclick="window.location.href='/tree?path=${encodeURIComponent(f.fullPath || f.path).replace(/%2F/g, '/')}'">📁 ${f.path}</td>
                                 <td class="num">${f.count.toLocaleString()}</td>
                                 <td class="num">${f.sizeFormatted}</td>
                             </tr>
@@ -968,7 +968,7 @@
                         <tbody>${data.topFoldersByCount.map((f, i) => `
                             <tr>
                                 <td class="rank">${i + 1}</td>
-                                <td class="folder-name" title="${f.fullPath || f.path}" onclick="window.open('https://medialib2.tcghk.trade/api/search-folder?q=${encodeURIComponent(f.fullPath || f.path)}', '_blank')">📁 ${f.path}</td>
+                                <td class="folder-name" title="${f.fullPath || f.path}" onclick="window.location.href='/tree?path=${encodeURIComponent(f.fullPath || f.path).replace(/%2F/g, '/')}'">📁 ${f.path}</td>
                                 <td class="num">${f.count.toLocaleString()}</td>
                                 <td class="num">${f.sizeFormatted}</td>
                             </tr>

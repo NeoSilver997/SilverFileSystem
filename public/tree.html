@@ -154,6 +154,7 @@
     <script src="/auth.js"></script>
     <script>
         let currentPath = '';
+        let currentId = null;
         let currentData = null;
         let sortField = 'totalSize';
         let sortDir = -1;
@@ -203,14 +204,22 @@
             bc.innerHTML = html;
         }
 
-        async function loadTree(path) {
+        async function loadTree(pathOrId) {
             showLoading();
             try {
-                let url = path ? `/api/folder-tree?path=${encodeURIComponent(path)}` : '/api/folder-tree';
+                let url;
+                if (typeof pathOrId === 'number') {
+                    url = `/api/folder-tree?id=${pathOrId}`;
+                } else if (pathOrId) {
+                    url = `/api/folder-tree?path=${encodeURIComponent(pathOrId)}`;
+                } else {
+                    url = '/api/folder-tree';
+                }
                 if (showHidden) url += (url.includes('?') ? '&' : '?') + 'showHidden=1';
                 const res = await authFetch(url);
                 const data = await res.json();
                 currentPath = data.path || '';
+                currentId = data.id || null;
                 currentData = data;
                 updateBreadcrumb();
                 updateButtons();
@@ -221,29 +230,43 @@
             hideLoading();
         }
 
-        function navigateTo(path) {
-            if (currentPath) history.push(currentPath);
-            currentPath = path;
-            loadTree(path);
+        function navigateTo(pathOrId) {
+            if (currentId || currentPath) history.push({ id: currentId, path: currentPath });
+            if (typeof pathOrId === 'number') {
+                currentPath = '';
+                currentId = null;
+            } else {
+                currentPath = pathOrId || '';
+                currentId = null;
+            }
+            loadTree(pathOrId);
         }
 
         function goUp() {
             if (history.length > 0) {
                 const prev = history.pop();
-                currentPath = prev;
-                loadTree(prev);
+                if (prev.id) {
+                    currentId = null;
+                    currentPath = '';
+                    loadTree(prev.id);
+                } else {
+                    currentPath = prev.path || '';
+                    currentId = null;
+                    loadTree(prev.path || '');
+                }
             } else if (currentPath) {
                 const parts = currentPath.replace(/\\/g, '/').split('/').filter(Boolean);
                 parts.pop();
                 const upPath = parts.length > 0 ? parts.join('/') + '/' : '';
-                history.push(currentPath);
+                history.push({ id: currentId, path: currentPath });
                 currentPath = upPath;
+                currentId = null;
                 loadTree(upPath);
             }
         }
 
         function refreshCurrent() {
-            loadTree(currentPath);
+            loadTree(currentPath || '');
         }
 
         function toggleHidden() {
@@ -324,6 +347,7 @@
                     <th onclick="sortData('name')">Name${sortIcon('name')}</th>
                     <th class="num" onclick="sortData('fileCount')">Files${sortIcon('fileCount')}</th>
                     <th class="num" onclick="sortData('totalSize')">Size${sortIcon('totalSize')}</th>
+                    <th class="bar-cell"></th>
                     <th class="num" onclick="sortData('recursiveCount')">All Files${sortIcon('recursiveCount')}</th>
                     <th class="num" onclick="sortData('recursiveSize')">All Size${sortIcon('recursiveSize')}</th>
                     <th class="bar-cell"></th>
@@ -337,11 +361,14 @@
                     <td class="name">..</td>
                     <td class="num"></td>
                     <td class="num"></td>
+                    <td class="bar-cell"></td>
                     <td class="num"></td>
                     <td class="num"></td>
                     <td class="bar-cell"></td>
                 </tr>`;
             }
+
+            const maxRecSize = Math.max(...items.map(i => i.recursiveSize || 0), 1);
 
             for (const item of items) {
                 const icon = item.isFolder ? (item.hidden ? '🔒' : '📁') : getFileIcon(item.extension);
@@ -350,8 +377,9 @@
                 const recSize = item.recursiveSize || size;
                 const recCount = item.recursiveCount || count;
                 const pct = maxSize > 0 ? (size / maxSize * 100) : 0;
+                const recPct = maxRecSize > 0 ? (recSize / maxRecSize * 100) : 0;
                 const click = item.isFolder
-                    ? `navigateTo('${item.path.replace(/\\/g, '/').replace(/'/g, "\\'")}')`
+                    ? `navigateTo(${item.id})`
                     : `window.open('/api/search-folder?q=${encodeURIComponent(item.path)}', '_blank')`;
 
                 const nameDisplay = item.remark 
@@ -359,14 +387,15 @@
                     : item.name;
                 const nameStyle = item.hidden ? 'opacity:0.5;' : '';
 
-                html += `<tr class="${item.isFolder ? 'folder' : ''}" onclick="${click}">
+                html += `<tr class="${item.isFolder ? 'folder' : ''}" data-folder-id="${item.id || ''}" onclick="${click}">
                     <td class="icon">${icon}</td>
                     <td class="name" title="${item.path}${item.remark ? ' | ' + item.remark : ''}" style="${nameStyle}">${nameDisplay}</td>
                     <td class="num">${count.toLocaleString()}</td>
                     <td class="num">${formatBytes(size)}</td>
+                    <td class="bar-cell"><div class="size-bar"><div class="size-bar-fill" style="width:${pct}%"></div></div></td>
                     <td class="num-sub">${recCount.toLocaleString()}</td>
                     <td class="num-sub">${formatBytes(recSize)}</td>
-                    <td class="bar-cell"><div class="size-bar"><div class="size-bar-fill" style="width:${pct}%"></div></div></td>
+                    <td class="bar-cell"><div class="size-bar"><div class="size-bar-fill" style="width:${recPct}%"></div></div></td>
                 </tr>`;
             }
 
@@ -391,13 +420,11 @@
 
         // Context menu
         document.addEventListener('contextmenu', (e) => {
-            const row = e.target.closest('tr');
+            const row = e.target.closest('tr[data-folder-id]');
             if (!row) return;
+            const folderId = parseInt(row.dataset.folderId);
             const items = currentData?.children || [];
-            const nameEl = row.querySelector('.name');
-            if (!nameEl) return;
-            const name = nameEl.textContent.split('(')[0].trim();
-            contextItem = items.find(i => i.name === name && i.isFolder);
+            contextItem = items.find(i => i.id === folderId && i.isFolder);
             if (!contextItem) return;
             e.preventDefault();
             const menu = document.getElementById('contextMenu');
@@ -464,8 +491,17 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
 
-        // Load on start
-        loadTree('');
+        // Load on start — check URL for ?id= or ?path= parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlId = urlParams.get('id');
+        const urlPath = urlParams.get('path');
+        if (urlId) {
+            loadTree(parseInt(urlId));
+        } else if (urlPath) {
+            loadTree(urlPath);
+        } else {
+            loadTree('');
+        }
     </script>
 </body>
 </html>
