@@ -1251,6 +1251,111 @@ app.post('/api/tree/delete-file', requireAuthWrapper, async (req, res) => {
     }
   });
 
+// Check for deleted files in a folder and remove from DB (supports recursive)
+app.post('/api/folder-tree/check-deleted', requireAuthWrapper, async (req, res) => {
+  try {
+    const { folderId, remove, recursive } = req.body;
+    if (!folderId) return res.status(400).json({ error: 'folderId required' });
+
+    const [folderRow] = await db.connection.query('SELECT folder_id FROM folder_tree WHERE id = ?', [folderId]);
+    if (folderRow.length === 0) return res.status(404).json({ error: 'Folder not found' });
+
+    let folderIds = [folderId];
+    if (recursive) {
+      const [children] = await db.connection.query('SELECT id FROM folder_tree WHERE parent_id = ?', [folderId]);
+      const queue = children.map(c => c.id);
+      while (queue.length > 0) {
+        const current = queue.shift();
+        folderIds.push(current);
+        const [sub] = await db.connection.query('SELECT id FROM folder_tree WHERE parent_id = ?', [current]);
+        for (const s of sub) queue.push(s.id);
+      }
+    }
+
+    const placeholders = folderIds.map(() => '?').join(',');
+    const [files] = await db.connection.query(
+      `SELECT sf.id, sf.name, ft.folder_id as folder_path
+       FROM scanned_files sf
+       JOIN folder_tree ft ON ft.id = sf.folder_id_int
+       WHERE sf.folder_id_int IN (${placeholders})`,
+      folderIds
+    );
+
+    if (files.length === 0) return res.json({ total: 0, missing: 0, removed: 0, files: [], foldersChecked: folderIds.length });
+
+    const BATCH = 100;
+    const missing = [];
+
+    for (let i = 0; i < files.length; i += BATCH) {
+      const batch = files.slice(i, i + BATCH);
+      const checks = batch.map(f => {
+        const fullPath = f.folder_path + '\\' + f.name;
+        return new Promise(resolve => {
+          const timer = setTimeout(() => resolve({ ...f, exists: false, path: fullPath }), 2000);
+          fs.access(fullPath, fs.constants.F_OK, err => {
+            clearTimeout(timer);
+            resolve({ ...f, exists: !err, path: fullPath });
+          });
+        });
+      });
+      const results = await Promise.all(checks);
+      for (const r of results) {
+        if (!r.exists) missing.push(r);
+      }
+    }
+
+    let removed = 0;
+    let archived = 0;
+    if (remove && missing.length > 0) {
+      archived = await db.archiveDeletedFiles(missing.map(f => ({
+        id: f.id, name: f.name, path: f.path, size: null, hash: null, extension: null
+      })), 'check-deleted');
+      const DEL_BATCH = 500;
+      for (let i = 0; i < missing.length; i += DEL_BATCH) {
+        const batch = missing.slice(i, i + DEL_BATCH);
+        const ids = batch.map(f => f.id);
+        const ph = ids.map(() => '?').join(',');
+        await db.connection.query(`DELETE FROM scanned_files WHERE id IN (${ph})`, ids);
+        removed += batch.length;
+      }
+    }
+
+    res.json({
+      total: files.length,
+      missing: missing.length,
+      removed,
+      archived,
+      foldersChecked: folderIds.length,
+      files: missing.slice(0, 100).map(f => ({ id: f.id, name: f.name, path: f.path }))
+    });
+  } catch (err) {
+    console.error('Check deleted error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete file record from database by path
+app.post('/api/tree/delete-file', requireAuthWrapper, async (req, res) => {
+  try {
+    const { path } = req.body;
+    if (!path) return res.status(400).json({ error: 'path required' });
+    const winPath = path.replace(/\//g, '\\');
+    const parts = winPath.replace(/\\/g, '/').split('/');
+    const fileName = parts.pop();
+    const folderPath = parts.join('\\');
+    const [folderRow] = await db.connection.query('SELECT id FROM folder_tree WHERE folder_id = ?', [folderPath]);
+    if (folderRow.length === 0) return res.json({ deleted: 0 });
+    const [result] = await db.connection.query(
+      'DELETE FROM scanned_files WHERE name = ? AND folder_id_int = ?',
+      [fileName, folderRow[0].id]
+    );
+    res.json({ deleted: result.affectedRows });
+  } catch (err) {
+    console.error('Delete file error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Serve tree view page
 app.get('/tree', (req, res) => {
   const html = fs.readFileSync(join(__dirname, 'public', 'tree.html'), 'utf8');
@@ -1488,6 +1593,7 @@ app.get('/api/duplicates/report', requireAuthWrapper, async (req, res) => {
       topGroups
     });
   } catch (err) {
+    console.error('Backup analysis error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1501,27 +1607,43 @@ app.get('/duplicates/report', (req, res) => {
 // Backup analysis API — check which files have copies elsewhere
 let backupAnalysisCache = null;
 let backupAnalysisCacheTime = 0;
+let backupAnalysisCacheFolder = null;
 
 app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
   try {
-    const folderRaw = req.query.folder || '%2022%Lenovo y700%';
+    const folderRaw = req.query.folder;
+    if (!folderRaw) return res.status(400).json({ error: 'folder parameter required' });
     const limit = Math.min(parseInt(req.query.limit) || 100, 500);
-    const folder = folderRaw.replace(/\\/g, '\\\\');
+    const folder = folderRaw.replace(/\\/g, '/').replace(/\/+$/, '');
 
     // Check cache (5 min TTL)
     const now = Date.now();
-    if (backupAnalysisCache && (now - backupAnalysisCacheTime) < 300000) {
+    if (backupAnalysisCache && backupAnalysisCacheFolder === folder && (now - backupAnalysisCacheTime) < 300000) {
       return res.json(backupAnalysisCache);
     }
 
-    // Get all files in backup folder
-    const [files] = await db.connection.query(`
-      SELECT sf.id, sf.name, sf.size, sf.hash, sf.extension, ft.folder_id as folder_path
-      FROM scanned_files sf
-      LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
-      WHERE ft.folder_id LIKE ?
-      ORDER BY sf.name
-    `, [folder]);
+    // Get matching folder IDs first (index-friendly)
+    const [targetFolderRows] = await db.connection.query(`
+      SELECT id FROM folder_tree WHERE REPLACE(folder_id, '\\\\', '/') LIKE ?
+    `, [folder + '%']);
+    const targetFolderIds = targetFolderRows.map(f => f.id);
+
+    let files = [];
+    if (targetFolderIds.length > 0) {
+      const BATCH = 500;
+      for (let i = 0; i < targetFolderIds.length; i += BATCH) {
+        const batch = targetFolderIds.slice(i, i + BATCH);
+        const placeholders = batch.map(() => '?').join(',');
+        const [batchFiles] = await db.connection.query(`
+          SELECT sf.id, sf.name, sf.size, sf.hash, sf.extension, ft.folder_id as folder_path
+          FROM scanned_files sf
+          LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+          WHERE sf.folder_id_int IN (${placeholders})
+          ORDER BY sf.name
+        `, batch);
+        files.push(...batchFiles);
+      }
+    }
 
     // Separate hashed vs unhashed
     const hashed = files.filter(f => f.hash);
@@ -1532,17 +1654,37 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
     const dupMap = new Map();
 
     if (hashes.length > 0) {
+      // Build folder_ids to exclude (all folder_ids matching our target path)
+      const [excludeFolders] = await db.connection.query(`
+        SELECT id FROM folder_tree WHERE REPLACE(folder_id, '\\\\', '/') LIKE ?
+      `, [folder + '%']);
+      const excludeIds = excludeFolders.map(f => f.id);
+
       const BATCH = 500;
       for (let i = 0; i < hashes.length; i += BATCH) {
         const batch = hashes.slice(i, i + BATCH);
         const placeholders = batch.map(() => '?').join(',');
-        const [dups] = await db.connection.query(`
-          SELECT sf.hash, sf.name, sf.size, ft.folder_id as folder_path, ft.folder_name
-          FROM scanned_files sf
-          LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
-          WHERE sf.hash IN (${placeholders})
-            AND ft.folder_id NOT LIKE ?
-        `, [...batch, folder]);
+        let dupQuery, dupParams;
+        if (excludeIds.length > 0) {
+          const exPh = excludeIds.map(() => '?').join(',');
+          dupQuery = `
+            SELECT sf.hash, sf.name, sf.size, ft.folder_id as folder_path, ft.folder_name
+            FROM scanned_files sf
+            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+            WHERE sf.hash IN (${placeholders})
+              AND sf.folder_id_int NOT IN (${exPh})
+          `;
+          dupParams = [...batch, ...excludeIds];
+        } else {
+          dupQuery = `
+            SELECT sf.hash, sf.name, sf.size, ft.folder_id as folder_path, ft.folder_name
+            FROM scanned_files sf
+            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+            WHERE sf.hash IN (${placeholders})
+          `;
+          dupParams = batch;
+        }
+        const [dups] = await db.connection.query(dupQuery, dupParams);
         for (const d of dups) {
           if (!dupMap.has(d.hash)) dupMap.set(d.hash, []);
           dupMap.get(d.hash).push({
@@ -1613,6 +1755,7 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
 
     backupAnalysisCache = response;
     backupAnalysisCacheTime = now;
+    backupAnalysisCacheFolder = folder;
     res.json(response);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1623,8 +1766,20 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
 app.post('/api/mark-deleted', requireAuthWrapper, async (req, res) => {
   try {
     const { folder: folderRaw, mode } = req.body;
-    const folder = (folderRaw || '%').replace(/\\/g, '\\\\');
-    
+    const folder = (folderRaw || '%').replace(/\\/g, '/').replace(/\/+$/, '');
+
+    // Get matching folder IDs first (index-friendly)
+    const [targetFolders] = await db.connection.query(
+      `SELECT id FROM folder_tree WHERE REPLACE(folder_id, '\\\\', '/') LIKE ?`,
+      [folder + '%']
+    );
+    const targetIds = targetFolders.map(f => f.id);
+
+    if (targetIds.length === 0) {
+      return res.json({ deleted: 0, kept: 0, total: 0 });
+    }
+    const ph = targetIds.map(() => '?').join(',');
+
     let query, params;
     if (mode === 'has-copy') {
       query = `SELECT sf.id, CONCAT(ft.folder_id, '\\\\', sf.name) as path FROM scanned_files sf
@@ -1635,13 +1790,13 @@ app.post('/api/mark-deleted', requireAuthWrapper, async (req, res) => {
                    WHERE hash IS NOT NULL
                    GROUP BY hash, size HAVING COUNT(*) > 1
                  )
-                 AND ft.folder_id LIKE ?`;
-      params = [folder || '%'];
+                 AND sf.folder_id_int IN (${ph})`;
+      params = targetIds;
     } else {
       query = `SELECT sf.id, CONCAT(ft.folder_id, '\\\\', sf.name) as path FROM scanned_files sf
                JOIN folder_tree ft ON ft.id = sf.folder_id_int
-               WHERE ft.folder_id LIKE ?`;
-      params = [folder || '%'];
+               WHERE sf.folder_id_int IN (${ph})`;
+      params = targetIds;
     }
 
     const [files] = await db.connection.query(query, params);
@@ -1698,6 +1853,83 @@ app.post('/api/mark-deleted', requireAuthWrapper, async (req, res) => {
 app.get('/backup', (req, res) => {
   const html = fs.readFileSync(join(__dirname, 'public', 'backup-analysis.html'), 'utf8');
   res.send(html);
+});
+
+app.get('/drive-usage', (req, res) => {
+  const html = fs.readFileSync(join(__dirname, 'public', 'drive-usage.html'), 'utf8');
+  res.send(html);
+});
+
+app.get('/deleted-archive', (req, res) => {
+  const html = fs.readFileSync(join(__dirname, 'public', 'deleted-archive.html'), 'utf8');
+  res.send(html);
+});
+
+// API: Get deleted files archive
+app.get('/api/deleted-archive', requireAuthWrapper, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 200, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+    const data = await db.getDeletedFilesArchive(limit, offset);
+    res.json(data);
+  } catch (err) {
+    console.error('Deleted archive API error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Restore file from archive
+app.post('/api/deleted-archive/restore', requireAuthWrapper, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'ids required' });
+    const placeholders = ids.map(() => '?').join(',');
+    const [files] = await db.connection.query(
+      `SELECT * FROM deleted_files_archive WHERE id IN (${placeholders})`, ids
+    );
+    let restored = 0;
+    for (const f of files) {
+      if (f.path) {
+        const exists = await new Promise(r => fs.access(f.path, fs.constants.F_OK, err => r(!err)));
+        if (exists) {
+          const parts = f.path.replace(/\\/g, '/').split('/');
+          const fileName = parts.pop();
+          const folderPath = parts.join('\\');
+          const [folderRow] = await db.connection.query('SELECT id FROM folder_tree WHERE folder_id = ?', [folderPath]);
+          if (folderRow.length > 0) {
+            await db.connection.query(
+              'INSERT INTO scanned_files (name, size, hash, extension, folder_id_int) VALUES (?, ?, ?, ?, ?)',
+              [fileName, f.size, f.hash, f.extension, folderRow[0].id]
+            );
+            restored++;
+          }
+        }
+      }
+    }
+    if (restored > 0) {
+      await db.connection.query(`DELETE FROM deleted_files_archive WHERE id IN (${placeholders})`, ids);
+    }
+    res.json({ restored, total: files.length });
+  } catch (err) {
+    console.error('Restore archive error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Permanently delete from archive
+app.post('/api/deleted-archive/purge', requireAuthWrapper, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'ids required' });
+    const placeholders = ids.map(() => '?').join(',');
+    const [result] = await db.connection.query(
+      `DELETE FROM deleted_files_archive WHERE id IN (${placeholders})`, ids
+    );
+    res.json({ purged: result.affectedRows });
+  } catch (err) {
+    console.error('Purge archive error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ==================== AUTHENTICATION ROUTES ====================
@@ -3097,6 +3329,62 @@ app.post('/api/cli/execute', strictLimiter, async (req, res) => {
   }
 });
 
+// ==================== DRIVE USAGE HISTORY ====================
+
+async function checkDriveUsage() {
+  try {
+    if (!db || !db.connection) return;
+    const { stdout: output } = await execFileAsync('powershell', ['-NoProfile', '-Command',
+      `Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,Size,FreeSpace | ConvertTo-Json`
+    ], { timeout: 10000 });
+    const cleaned = output.replace(/^\uFEFF/, '').trim();
+    let parsed = JSON.parse(cleaned);
+    let drives = Array.isArray(parsed) ? parsed : [parsed];
+    const fixedDrives = drives.filter(d => d && d.DriveType === 3 && d.DeviceID);
+    for (const d of fixedDrives) {
+      const drive = d.DeviceID;
+      const totalBytes = parseInt(d.Size) || 0;
+      const freeBytes = parseInt(d.FreeSpace) || 0;
+      const usedBytes = totalBytes - freeBytes;
+      if (totalBytes > 0) {
+        await db.recordDriveUsage(drive, totalBytes, usedBytes, freeBytes);
+      }
+    }
+    console.log(`⏱️ Drive usage recorded: ${fixedDrives.length} drives`);
+  } catch (err) {
+    console.error('Drive usage check failed:', err.message);
+  }
+}
+
+function startDriveUsageJob() {
+  checkDriveUsage();
+  setInterval(checkDriveUsage, 60 * 60 * 1000);
+  console.log('⏱️ Drive usage job started (every hour)');
+}
+
+app.get('/api/drive-usage', requireAuthWrapper, async (req, res) => {
+  try {
+    const { drive, days } = req.query;
+    const history = await db.getDriveUsageHistory(drive || null, parseInt(days) || 30);
+    const latest = await db.getLatestDriveUsage();
+    res.json({ latest, history });
+  } catch (err) {
+    console.error('Drive usage API error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/drive-usage/check', requireAuthWrapper, async (req, res) => {
+  try {
+    await checkDriveUsage();
+    const latest = await db.getLatestDriveUsage();
+    res.json({ success: true, latest });
+  } catch (err) {
+    console.error('Drive usage check API error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==================== START SERVER ====================
 
 const PORT = process.env.PORT || 4000;
@@ -3123,6 +3411,7 @@ async function startServer() {
       console.log(`🎬 Movie Player: http://localhost:${PORT}/movies`);
       console.log(`\n🔌 API Endpoints: http://localhost:${PORT}/about`);
       console.log(`📖 See SERVER_GUIDE.md for full API documentation\n`);
+      startDriveUsageJob();
     });
   } catch (err) {
     console.error('❌ Failed to start server:', err.message);

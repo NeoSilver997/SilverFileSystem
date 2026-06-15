@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deleted Files Archive - SilverFileSystem</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f0f; color: #e0e0e0; }
+        .header { background: linear-gradient(135deg, #141e30 0%, #243b55 100%); padding: 0.5rem 1rem; display: flex; align-items: center; gap: 1rem; }
+        .header h1 { font-size: 1.5rem; font-weight: 700; }
+        .header .back { color: #667eea; cursor: pointer; text-decoration: none; font-size: 0.9rem; }
+        .container { padding: 1rem; max-width: 1400px; margin: 0 auto; }
+        .controls { background: #1a1a1a; padding: 0.75rem 1rem; display: flex; gap: 0.75rem; align-items: center; border-bottom: 1px solid #2a2a2a; flex-wrap: wrap; }
+        .controls button { padding: 0.4rem 1rem; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+        .btn-primary { background: #667eea; color: white; }
+        .btn-danger { background: #e74c3c; color: white; }
+        .btn-secondary { background: #555; color: white; }
+        .section { background: #1a1a1a; border-radius: 10px; padding: 1rem; margin-bottom: 1rem; border: 1px solid #2a2a2a; }
+        .section h2 { font-size: 1.1rem; margin-bottom: 0.75rem; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th { text-align: left; padding: 0.5rem; background: #222; font-weight: 600; opacity: 0.8; position: sticky; top: 0; }
+        td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #1f1f1f; }
+        tr:hover { background: #222; }
+        tr.selected { background: rgba(102,126,234,0.15); }
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        .loading { text-align: center; padding: 3rem; opacity: 0.5; }
+        .path-cell { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8rem; opacity: 0.6; }
+        input[type="checkbox"] { cursor: pointer; }
+        .stats { font-size: 0.85rem; opacity: 0.7; margin-left: auto; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a href="/" class="back">Dashboard</a>
+        <h1>🗑️ Deleted Files Archive</h1>
+    </div>
+    <div class="controls">
+        <button class="btn-primary" onclick="selectAll()">☑ Select All</button>
+        <button class="btn-secondary" onclick="deselectAll()">☐ Deselect</button>
+        <button class="btn-primary" onclick="restoreSelected()">♻ Restore Selected</button>
+        <button class="btn-danger" onclick="purgeSelected()">🗑 Purge Selected</button>
+        <span class="stats" id="stats"></span>
+    </div>
+    <div class="container">
+        <div id="content"><div class="loading">Loading archive...</div></div>
+    </div>
+
+    <script src="/auth.js"></script>
+    <script>
+        let allFiles = [];
+        let selectedIds = new Set();
+        let currentPage = 0;
+        const PAGE_SIZE = 200;
+
+        function formatBytes(b) {
+            if (!b) return '-';
+            const k = 1024, s = ['B','KB','MB','GB','TB'];
+            const i = Math.floor(Math.log(b) / Math.log(k));
+            return (b / Math.pow(k, i)).toFixed(1) + ' ' + s[i];
+        }
+
+        async function loadArchive(page = 0) {
+            try {
+                const res = await authFetch(`/api/deleted-archive?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`);
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                allFiles = data.files;
+                currentPage = page;
+                renderArchive(data);
+            } catch (err) {
+                document.getElementById('content').innerHTML = `<div class="loading">Error: ${err.message}</div>`;
+            }
+        }
+
+        function renderArchive(data) {
+            const { files, total } = data;
+            const totalPages = Math.ceil(total / PAGE_SIZE);
+            let html = '';
+
+            html += '<div class="section">';
+            html += '<table><thead><tr><th><input type="checkbox" id="checkAll" onchange="toggleCheckAll(this)"></th><th>Name</th><th>Path</th><th class="num">Size</th><th>Hash</th><th>Deleted By</th><th>Deleted At</th></tr></thead><tbody>';
+
+            for (const f of files) {
+                const checked = selectedIds.has(f.id) ? 'checked' : '';
+                const rowClass = selectedIds.has(f.id) ? 'selected' : '';
+                html += `<tr class="${rowClass}" onclick="toggleSelect(${f.id}, event)">
+                    <td><input type="checkbox" ${checked} onclick="event.stopPropagation();toggleSelect(${f.id})"></td>
+                    <td>${f.name || '-'}</td>
+                    <td class="path-cell" title="${f.path || ''}">${f.path || '-'}</td>
+                    <td class="num">${formatBytes(f.size)}</td>
+                    <td style="font-size:0.75rem;opacity:0.5;">${f.hash ? f.hash.substring(0,12) + '...' : '-'}</td>
+                    <td>${f.deleted_by || '-'}</td>
+                    <td>${f.deleted_at ? new Date(f.deleted_at).toLocaleString() : '-'}</td>
+                </tr>`;
+            }
+            html += '</tbody></table></div>';
+
+            // Pagination
+            if (totalPages > 1) {
+                html += '<div style="display:flex;justify-content:center;gap:0.5rem;margin-top:1rem;">';
+                if (currentPage > 0) html += `<button class="btn-secondary" onclick="loadArchive(${currentPage - 1})" style="padding:0.3rem 0.8rem;">⬅ Prev</button>`;
+                html += `<span style="padding:0.3rem;font-size:0.85rem;opacity:0.7;">Page ${currentPage + 1} / ${totalPages}</span>`;
+                if (currentPage < totalPages - 1) html += `<button class="btn-secondary" onclick="loadArchive(${currentPage + 1})" style="padding:0.3rem 0.8rem;">Next ➡</button>`;
+                html += '</div>';
+            }
+
+            document.getElementById('content').innerHTML = html;
+            document.getElementById('stats').textContent = `${total} files archived | ${selectedIds.size} selected`;
+        }
+
+        function toggleSelect(id, event) {
+            if (event && event.target.type === 'checkbox') {
+                // checkbox click handles itself
+            } else if (event) {
+                // row click toggles
+            }
+            if (selectedIds.has(id)) selectedIds.delete(id);
+            else selectedIds.add(id);
+            renderArchive({ files: allFiles, total: parseInt(document.getElementById('stats')?.textContent) || allFiles.length });
+        }
+
+        function toggleCheckAll(cb) {
+            if (cb.checked) allFiles.forEach(f => selectedIds.add(f.id));
+            else allFiles.forEach(f => selectedIds.delete(f.id));
+            renderArchive({ files: allFiles, total: parseInt(document.getElementById('stats')?.textContent) || allFiles.length });
+        }
+
+        function selectAll() { allFiles.forEach(f => selectedIds.add(f.id)); renderArchive({ files: allFiles, total: allFiles.length }); }
+        function deselectAll() { selectedIds.clear(); renderArchive({ files: allFiles, total: allFiles.length }); }
+
+        async function restoreSelected() {
+            if (selectedIds.size === 0) return alert('No files selected.');
+            if (!confirm(`Restore ${selectedIds.size} file(s) to database?`)) return;
+            try {
+                const res = await authFetch('/api/deleted-archive/restore', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids: [...selectedIds] })
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                alert(`Restored ${data.restored} of ${data.total} files.`);
+                selectedIds.clear();
+                loadArchive(currentPage);
+            } catch (err) {
+                alert('Restore failed: ' + err.message);
+            }
+        }
+
+        async function purgeSelected() {
+            if (selectedIds.size === 0) return alert('No files selected.');
+            if (!confirm(`Permanently purge ${selectedIds.size} file(s) from archive?`)) return;
+            try {
+                const res = await authFetch('/api/deleted-archive/purge', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids: [...selectedIds] })
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                alert(`Purged ${data.purged} files from archive.`);
+                selectedIds.clear();
+                loadArchive(currentPage);
+            } catch (err) {
+                alert('Purge failed: ' + err.message);
+            }
+        }
+
+        loadArchive();
+    </script>
+</body>
+</html>

@@ -958,6 +958,7 @@ program
         } catch (err) {
           if (err.code === 'ENOENT') {
             deleted++;
+            await db.archiveDeletedFiles([{ id: file.id, name: file.path?.split(/[/\\]/).pop(), path: file.path }], 'update-hashes');
             await db.deleteFile(file.id);
             console.warn(chalk.red(`\nDeleted (not found): ${file.path}`));
           } else {

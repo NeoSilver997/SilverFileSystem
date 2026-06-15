@@ -152,9 +152,9 @@
 
         function toLikePattern(input) {
             if (!input) return '%';
-            let p = input.replace(/\//g, '\\');
+            let p = input.replace(/\\/g, '/').replace(/\/+$/, '');
             if (p.includes('%') || p.includes('_')) return p;
-            return p + '%';
+            return p + '/%';
         }
 
         async function loadAnalysis() {

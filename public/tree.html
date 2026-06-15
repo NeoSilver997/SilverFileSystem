@@ -125,6 +125,9 @@
             </label>
             <button onclick="goUp()" id="backBtn" style="display:none; padding:0.4rem 0.8rem; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">⬅ Back</button>
             <button onclick="refreshCurrent()" id="refreshBtn" style="display:none; padding:0.4rem 0.8rem; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">🔄 Refresh</button>
+            <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.8rem; cursor:pointer; color:rgba(255,255,255,0.7); display:none;" id="recursiveLabel">
+                <input type="checkbox" id="recursiveCb" style="cursor:pointer;"> Sub
+            </label>
             <button onclick="checkDeleted()" id="checkDelBtn" style="display:none; padding:0.4rem 0.8rem; background:rgba(231,76,60,0.3); border:1px solid rgba(231,76,60,0.5); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">🗑️ Check Deleted</button>
             <button onclick="rebuildTree()" id="rebuildBtn" style="padding:0.4rem 0.8rem; background:rgba(102,126,234,0.3); border:1px solid rgba(102,126,234,0.5); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">🔧 Rebuild</button>
         </div>
@@ -180,14 +183,17 @@
             const backBtn = document.getElementById('backBtn');
             const refreshBtn = document.getElementById('refreshBtn');
             const checkDelBtn = document.getElementById('checkDelBtn');
+            const recursiveLabel = document.getElementById('recursiveLabel');
             if (currentPath) {
                 backBtn.style.display = '';
                 refreshBtn.style.display = '';
                 checkDelBtn.style.display = '';
+                recursiveLabel.style.display = '';
             } else {
                 backBtn.style.display = 'none';
                 refreshBtn.style.display = 'none';
                 checkDelBtn.style.display = 'none';
+                recursiveLabel.style.display = 'none';
             }
         }
 
@@ -302,23 +308,24 @@
 
         async function checkDeleted() {
             if (!currentId) return alert('Navigate to a folder first.');
+            const recursive = document.getElementById('recursiveCb').checked;
             showLoading();
             try {
                 const res = await authFetch('/api/folder-tree/check-deleted', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ folderId: currentId, remove: false })
+                    body: JSON.stringify({ folderId: currentId, remove: false, recursive })
                 });
                 const data = await res.json();
                 if (data.error) throw new Error(data.error);
 
                 if (data.missing === 0) {
                     hideLoading();
-                    alert(`All ${data.total} files exist on disk. Nothing to remove.`);
+                    alert(`All ${data.total} files exist on disk. (${data.foldersChecked} folders checked)`);
                     return;
                 }
 
-                const confirmMsg = `Found ${data.missing} missing file(s) out of ${data.total}:\n\n` +
+                const confirmMsg = `Found ${data.missing} missing file(s) out of ${data.total} (${data.foldersChecked} folders):\n\n` +
                     data.files.slice(0, 20).map(f => `  ${f.name}`).join('\n') +
                     (data.files.length > 20 ? `\n  ... and ${data.files.length - 20} more` : '') +
                     `\n\nRemove ${data.missing} entries from database?`;
@@ -327,7 +334,7 @@
                     const delRes = await authFetch('/api/folder-tree/check-deleted', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ folderId: currentId, remove: true })
+                        body: JSON.stringify({ folderId: currentId, remove: true, recursive })
                     });
                     const delData = await delRes.json();
                     alert(`Removed ${delData.removed} missing file(s) from database.`);
