@@ -1125,93 +1125,8 @@ app.get('/api/folder-tree', requireAuthWrapper, async (req, res) => {
   }
 });
 
-// Check for deleted files in a folder and remove from DB
-app.post('/api/folder-tree/check-deleted', requireAuthWrapper, async (req, res) => {
-  try {
-    const { folderId, remove } = req.body;
-    if (!folderId) return res.status(400).json({ error: 'folderId required' });
-
-    const [folderRow] = await db.connection.query('SELECT folder_id FROM folder_tree WHERE id = ?', [folderId]);
-    if (folderRow.length === 0) return res.status(404).json({ error: 'Folder not found' });
-    const folderPath = folderRow[0].folder_id;
-
-    const [files] = await db.connection.query(
-      'SELECT id, name FROM scanned_files WHERE folder_id_int = ?',
-      [folderId]
-    );
-
-    if (files.length === 0) return res.json({ total: 0, missing: 0, removed: 0, files: [] });
-
-    const BATCH = 100;
-    const missing = [];
-
-    for (let i = 0; i < files.length; i += BATCH) {
-      const batch = files.slice(i, i + BATCH);
-      const checks = batch.map(f => {
-        const fullPath = folderPath + '\\' + f.name;
-        return new Promise(resolve => {
-          const timer = setTimeout(() => resolve({ ...f, exists: false, path: fullPath }), 2000);
-          fs.access(fullPath, fs.constants.F_OK, err => {
-            clearTimeout(timer);
-            resolve({ ...f, exists: !err, path: fullPath });
-          });
-        });
-      });
-      const results = await Promise.all(checks);
-      for (const r of results) {
-        if (!r.exists) missing.push(r);
-      }
-    }
-
-    let removed = 0;
-    if (remove && missing.length > 0) {
-      const DEL_BATCH = 500;
-      for (let i = 0; i < missing.length; i += DEL_BATCH) {
-        const batch = missing.slice(i, i + DEL_BATCH);
-        const ids = batch.map(f => f.id);
-        const placeholders = ids.map(() => '?').join(',');
-        await db.connection.query(`DELETE FROM scanned_files WHERE id IN (${placeholders})`, ids);
-        removed += batch.length;
-      }
-    }
-
-    res.json({
-      total: files.length,
-      missing: missing.length,
-      removed,
-      files: missing.map(f => ({ id: f.id, name: f.name, path: f.path }))
-    });
-  } catch (err) {
-    console.error('Check deleted error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Delete file record from database by path
-app.post('/api/tree/delete-file', requireAuthWrapper, async (req, res) => {
-  try {
-    const { path } = req.body;
-    if (!path) return res.status(400).json({ error: 'path required' });
 
-    const winPath = path.replace(/\//g, '\\');
-    const parts = winPath.replace(/\\/g, '/').split('/');
-    const fileName = parts.pop();
-    const folderPath = parts.join('\\');
-
-    const [folderRow] = await db.connection.query('SELECT id FROM folder_tree WHERE folder_id = ?', [folderPath]);
-    if (folderRow.length === 0) return res.json({ deleted: 0 });
-
-    const [result] = await db.connection.query(
-      'DELETE FROM scanned_files WHERE name = ? AND folder_id_int = ?',
-      [fileName, folderRow[0].id]
-    );
-
-    res.json({ deleted: result.affectedRows });
-  } catch (err) {
-    console.error('Delete file error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
 
   // Update folder hidden/remark
   app.put('/api/folder-tree/:id', requireAuthWrapper, async (req, res) => {
@@ -1318,6 +1233,10 @@ app.post('/api/folder-tree/check-deleted', requireAuthWrapper, async (req, res) 
         await db.connection.query(`DELETE FROM scanned_files WHERE id IN (${ph})`, ids);
         removed += batch.length;
       }
+      // Refresh folder stats for all checked folders
+      for (const fid of folderIds) {
+        await db.refreshFolderStats(fid);
+      }
     }
 
     res.json({
@@ -1345,10 +1264,29 @@ app.post('/api/tree/delete-file', requireAuthWrapper, async (req, res) => {
     const folderPath = parts.join('\\');
     const [folderRow] = await db.connection.query('SELECT id FROM folder_tree WHERE folder_id = ?', [folderPath]);
     if (folderRow.length === 0) return res.json({ deleted: 0 });
+
+    // Archive before delete
+    const [fileRow] = await db.connection.query(
+      'SELECT sf.id, sf.name, sf.size, sf.hash, sf.extension FROM scanned_files sf WHERE sf.name = ? AND sf.folder_id_int = ?',
+      [fileName, folderRow[0].id]
+    );
+    if (fileRow.length > 0) {
+      await db.archiveDeletedFiles([{
+        id: fileRow[0].id, name: fileRow[0].name,
+        path: winPath, size: fileRow[0].size,
+        hash: fileRow[0].hash, extension: fileRow[0].extension
+      }], 'delete-file');
+    }
+
     const [result] = await db.connection.query(
       'DELETE FROM scanned_files WHERE name = ? AND folder_id_int = ?',
       [fileName, folderRow[0].id]
     );
+
+    if (result.affectedRows > 0) {
+      await db.refreshFolderStats(folderRow[0].id);
+    }
+
     res.json({ deleted: result.affectedRows });
   } catch (err) {
     console.error('Delete file error:', err.message);
