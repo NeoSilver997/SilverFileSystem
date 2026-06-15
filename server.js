@@ -1632,10 +1632,13 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
         const [dups] = await db.connection.query(dupQuery, dupParams);
         for (const d of dups) {
           if (!dupMap.has(d.hash)) dupMap.set(d.hash, []);
+          const fullPath = d.folder_path ? d.folder_path + '\\' + d.name : d.name;
+          const drive = (d.folder_path || '').substring(0, 2) || '??';
           dupMap.get(d.hash).push({
-            path: d.folder_path ? d.folder_path + '\\' + d.name : d.name,
+            path: fullPath,
             name: d.name,
-            folder: d.folder_name || d.folder_id
+            folder: d.folder_name || d.folder_id,
+            drive: drive
           });
         }
       }

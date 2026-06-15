@@ -217,7 +217,7 @@
                 if (withCopy.length === 0) { el.innerHTML = '<div class="empty">All files have copies elsewhere</div>'; return; }
                 el.innerHTML = `<table><thead><tr><th></th><th>Name</th><th>Size</th><th>Ext</th><th>Copies</th><th>Locations</th></tr></thead>
                 <tbody>${withCopy.map(f => {
-                    const locs = f.copyLocations.map(l => l.folder).join(', ');
+                    const locs = f.copyLocations.map(l => `<span style="background:rgba(102,126,234,0.15);color:#667eea;padding:0.1rem 0.3rem;border-radius:3px;font-size:0.7rem;margin-right:0.2rem;" title="${l.path||''}">${l.drive} ${l.folder}</span>`).join(' ');
                     const imgClick = isImage(f.extension) ? `onclick="event.stopPropagation();openImage(${f.id},'${f.name.replace(/'/g, "\\'")}')"` : '';
                     return `<tr style="cursor:pointer;" ${imgClick} onclick="${!imgClick ? `window.open('file:///${f.path.replace(/\\\\/g, '/')}', '_blank')` : ''}">
                         <td><span class="copy-badge">✓</span></td>
@@ -225,7 +225,7 @@
                         <td class="num">${f.sizeFormatted}</td>
                         <td>${f.extension || '-'}</td>
                         <td class="num">${f.copies}</td>
-                        <td class="copy-detail" title="${locs}">${locs}</td>
+                        <td class="copy-detail">${locs}</td>
                     </tr>`;
                 }).join('')}</tbody></table>`;
             } else if (currentTab === 'multiCopy') {
@@ -233,7 +233,7 @@
                 if (multi.length === 0) { el.innerHTML = '<div class="empty">No files with multiple copies</div>'; return; }
                 el.innerHTML = `<table><thead><tr><th></th><th>Name</th><th>Size</th><th>Ext</th><th>Copies</th><th>Locations</th></tr></thead>
                 <tbody>${multi.map(f => {
-                    const locs = f.copyLocations.map(l => l.folder).join(', ');
+                    const locs = f.copyLocations.map(l => `<span style="background:rgba(231,76,60,0.15);color:#e74c3c;padding:0.1rem 0.3rem;border-radius:3px;font-size:0.7rem;margin-right:0.2rem;" title="${l.path||''}">${l.drive} ${l.folder}</span>`).join(' ');
                     const imgClick = isImage(f.extension) ? `onclick="event.stopPropagation();openImage(${f.id},'${f.name.replace(/'/g, "\\'")}')"` : '';
                     return `<tr style="cursor:pointer;" ${imgClick} onclick="${!imgClick ? `window.open('file:///${f.path.replace(/\\\\/g, '/')}', '_blank')` : ''}">
                         <td><span class="copy-badge" style="background:rgba(231,76,60,0.2);color:#e74c3c;">🔁</span></td>
@@ -241,7 +241,7 @@
                         <td class="num">${f.sizeFormatted}</td>
                         <td>${f.extension || '-'}</td>
                         <td class="num" style="color:#e74c3c;font-weight:bold;">${f.copies}</td>
-                        <td class="copy-detail" title="${locs}">${locs}</td>
+                        <td class="copy-detail">${locs}</td>
                     </tr>`;
                 }).join('')}</tbody></table>`;
             } else if (currentTab === 'withoutCopy') {
