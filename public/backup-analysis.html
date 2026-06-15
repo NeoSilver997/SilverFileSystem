@@ -176,6 +176,7 @@
 
         function renderAnalysis(data) {
             const { summary, withCopy, withoutCopy } = data;
+            const multiCopy = withCopy.filter(f => f.copies > 1);
             let html = '';
 
             html += `<div class="stats-grid">
@@ -183,17 +184,17 @@
                 <div class="stat-card"><div class="stat-value">${summary.hashed.toLocaleString()}</div><div class="stat-label">Hashed</div></div>
                 <div class="stat-card"><div class="stat-value">${summary.unhashed.toLocaleString()}</div><div class="stat-label">Unhashed</div></div>
                 <div class="stat-card"><div class="stat-value stat-ok">${summary.withCopy.toLocaleString()}</div><div class="stat-label">Has Copy Elsewhere</div></div>
-                <div class="stat-card"><div class="stat-value stat-warn">${summary.withoutCopy.toLocaleString()}</div><div class="stat-label">Unique to Backup</div></div>
+                <div class="stat-card"><div class="stat-value stat-warn">${multiCopy.length.toLocaleString()}</div><div class="stat-label">Has Multiple Copies (>1)</div></div>
                 <div class="stat-card"><div class="stat-value">${summary.wastedFormatted}</div><div class="stat-label">Wasted by Copies</div></div>
             </div>`;
 
             html += `<div class="section">
                 <div class="tabs">
                     <button class="tab ${currentTab==='withCopy'?'active':''}" onclick="switchTab('withCopy')">✅ Has Copy (${withCopy.length})</button>
+                    <button class="tab ${currentTab==='multiCopy'?'active':''}" onclick="switchTab('multiCopy')">🔁 Multiple Copies (${multiCopy.length})</button>
                     <button class="tab ${currentTab==='withoutCopy'?'active':''}" onclick="switchTab('withoutCopy')">⚠️ Unique (${withoutCopy.length})</button>
                     <button class="tab ${currentTab==='unknown'?'active':''}" onclick="switchTab('unknown')">❓ Unknown (${summary.unhashed})</button>
-                    <button onclick="exportWithCopy()" style="margin-left:auto;padding:0.3rem 0.8rem;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem;">📋 Export Has-Copy List</button>
-                    <button onclick="generateDeleteScript()" style="padding:0.3rem 0.8rem;background:#f39c12;color:white;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem;">🗑️ Generate Delete Script</button>
+                    <button onclick="generateDeleteScript()" style="margin-left:auto;padding:0.3rem 0.8rem;background:#f39c12;color:white;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem;">🗑️ Generate Delete Script</button>
                 </div>
                 <div id="fileList"></div>
             </div>`;
@@ -224,6 +225,22 @@
                         <td class="num">${f.sizeFormatted}</td>
                         <td>${f.extension || '-'}</td>
                         <td class="num">${f.copies}</td>
+                        <td class="copy-detail" title="${locs}">${locs}</td>
+                    </tr>`;
+                }).join('')}</tbody></table>`;
+            } else if (currentTab === 'multiCopy') {
+                const multi = withCopy.filter(f => f.copies > 1);
+                if (multi.length === 0) { el.innerHTML = '<div class="empty">No files with multiple copies</div>'; return; }
+                el.innerHTML = `<table><thead><tr><th></th><th>Name</th><th>Size</th><th>Ext</th><th>Copies</th><th>Locations</th></tr></thead>
+                <tbody>${multi.map(f => {
+                    const locs = f.copyLocations.map(l => l.folder).join(', ');
+                    const imgClick = isImage(f.extension) ? `onclick="event.stopPropagation();openImage(${f.id},'${f.name.replace(/'/g, "\\'")}')"` : '';
+                    return `<tr style="cursor:pointer;" ${imgClick} onclick="${!imgClick ? `window.open('file:///${f.path.replace(/\\\\/g, '/')}', '_blank')` : ''}">
+                        <td><span class="copy-badge" style="background:rgba(231,76,60,0.2);color:#e74c3c;">🔁</span></td>
+                        <td class="file-name" title="${f.path}">${f.name}</td>
+                        <td class="num">${f.sizeFormatted}</td>
+                        <td>${f.extension || '-'}</td>
+                        <td class="num" style="color:#e74c3c;font-weight:bold;">${f.copies}</td>
                         <td class="copy-detail" title="${locs}">${locs}</td>
                     </tr>`;
                 }).join('')}</tbody></table>`;
