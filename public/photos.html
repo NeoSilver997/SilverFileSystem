@@ -122,6 +122,8 @@
             <select id="modelFilter" class="filter-btn" onchange="loadPhotos()"><option value="">All Models</option></select>
         </div>
         <label class="dup-toggle"><input type="checkbox" id="hideDuplicates" checked onchange="loadPhotos()"> Hide Duplicates</label>
+        <button onclick="deleteAllFiltered()" style="padding:0.4rem 0.8rem;background:rgba(231,76,60,0.2);color:#e74c3c;border:1px solid rgba(231,76,60,0.4);border-radius:4px;cursor:pointer;font-size:0.8rem;">🗑 Delete All</button>
+        <button onclick="backupAllFiltered()" style="padding:0.4rem 0.8rem;background:rgba(39,174,96,0.2);color:#27ae60;border:1px solid rgba(39,174,96,0.4);border-radius:4px;cursor:pointer;font-size:0.8rem;">💾 Backup All</button>
         <div class="view-toggle">
             <button class="view-btn active" data-view="grid">Grid</button>
             <button class="view-btn" data-view="map">Map</button>
@@ -386,6 +388,45 @@
                 showModalPhoto();
                 renderGrid(true);
             } catch (err) { alert('Delete failed: '+err.message); }
+        }
+
+        async function deleteAllFiltered() {
+            const ids = allPhotos.map(p => p.id);
+            if (ids.length === 0) return alert('No photos to delete.');
+            if (!confirm(`Delete ALL ${ids.length} displayed photos permanently from disk and database?`)) return;
+            let deleted = 0, errors = 0;
+            for (const id of ids) {
+                try {
+                    const res = await authFetch('/api/photos/'+id, { method: 'DELETE' });
+                    const data = await res.json();
+                    if (data.success) deleted++; else errors++;
+                } catch (_) { errors++; }
+            }
+            allPhotosData = allPhotosData.filter(p => !ids.includes(p.id));
+            allPhotos = [];
+            document.getElementById('totalPhotos').textContent = '0';
+            document.getElementById('hiddenCount').textContent = '0';
+            renderGrid(true);
+            alert(`Done: ${deleted} deleted, ${errors} errors`);
+        }
+
+        function backupAllFiltered() {
+            const ids = allPhotos.map(p => p.id);
+            if (ids.length === 0) return alert('No photos to backup.');
+            let script = '# SilverFileSystem Photo Backup Script\n';
+            script += `# ${ids.length} photos\n`;
+            script += `# Generated: ${new Date().toISOString()}\n\n`;
+            for (const p of allPhotos) {
+                const winPath = (p.path || '').replace(/\//g, '\\');
+                script += `if (Test-Path "${winPath}") { Copy-Item "${winPath}" -Destination "Backup\\" -Force }\n`;
+            }
+            script += `\nWrite-Host "Done: ${ids.length} files backed up"\n`;
+            const blob = new Blob([script], { type: 'text/plain' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `backup-photos-${ids.length}-${new Date().toISOString().slice(0,10)}.ps1`;
+            a.click();
+            URL.revokeObjectURL(a.href);
         }
 
         document.addEventListener('keydown', e => {
