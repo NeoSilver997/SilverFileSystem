@@ -4,517 +4,105 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Photo Library - SilverFileSystem</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: #f5f7fa;
-            color: #2c3e50;
-        }
-
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 0.5rem 1rem;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-            position: relative;
-        }
-        
-        .logout-btn {
-            position: absolute;
-            top: 0.5rem;
-            right: 1rem;
-            padding: 0.5rem 1rem;
-            background: rgba(255, 255, 255, 0.1);
-            border: 2px solid rgba(255, 255, 255, 0.2);
-            color: white;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        .logout-btn:hover { background: rgba(255, 255, 255, 0.2); }
-
-        .header h1 {
-            font-size: 1.8rem;
-            margin-bottom: 0.25rem;
-            font-weight: 700;
-        }
-
-        .header p {
-            font-size: 0.9rem;
-            opacity: 0.9;
-        }
-
-        .stats-bar {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 0.5rem;
-            padding: 0.5rem;
-            background: white;
-            border-bottom: 2px solid #e9ecef;
-        }
-
-        .stat-card {
-            text-align: center;
-            padding: 0.25rem;
-        }
-
-        .stat-number {
-            font-size: 2rem;
-            font-weight: bold;
-            color: #667eea;
-        }
-
-        .stat-label {
-            font-size: 0.9rem;
-            color: #666;
-            margin-top: 0.3rem;
-        }
-
-        .controls {
-            background: white;
-            padding: 0.5rem;
-            border-bottom: 1px solid #e9ecef;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.5rem;
-            align-items: center;
-        }
-
-        .search-box {
-            flex: 1;
-            min-width: 250px;
-        }
-
-        .search-box input {
-            width: 100%;
-            padding: 0.75rem 1rem;
-            border: 2px solid #e9ecef;
-            border-radius: 8px;
-            font-size: 1rem;
-            transition: border-color 0.3s;
-        }
-
-        .search-box input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
-        .filter-group {
-            display: flex;
-            gap: 0.5rem;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-
-        .filter-label {
-            font-weight: 600;
-            color: #2c3e50;
-            font-size: 0.9rem;
-        }
-
-        .filter-btn {
-            padding: 0.75rem 1.5rem;
-            border: 2px solid #e9ecef;
-            background: white;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 0.9rem;
-            transition: all 0.3s;
-        }
-
-        .filter-btn:hover {
-            border-color: #667eea;
-            color: #667eea;
-        }
-
-        .filter-btn.active {
-            background: #667eea;
-            color: white;
-            border-color: #667eea;
-        }
-
-        .view-toggle {
-            display: flex;
-            gap: 0.5rem;
-        }
-
-        .view-btn {
-            padding: 0.75rem 1rem;
-            border: 2px solid #e9ecef;
-            background: white;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .view-btn.active {
-            background: #667eea;
-            color: white;
-            border-color: #667eea;
-        }
-
-        .container {
-            padding: 0.5rem;
-            max-width: 1600px;
-            margin: 0 auto;
-        }
-
-        .gallery-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 0.5rem;
-        }
-
-        .gallery-list {
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
-        }
-
-        .gallery-map {
-            display: grid;
-            grid-template-columns: 300px 1fr;
-            gap: 1rem;
-            height: 70vh;
-        }
-
-        .map-list {
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-        }
-
-        .map-photo-card {
-            background: white;
-            border-radius: 8px;
-            padding: 0.75rem;
-            cursor: pointer;
-            transition: all 0.3s;
-            border: 2px solid transparent;
-        }
-
-        .map-photo-card:hover {
-            border-color: #667eea;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-        }
-
-        .map-photo-card.selected {
-            border-color: #667eea;
-            background: #f0f0ff;
-        }
-
-        .map-photo-thumbnail {
-            width: 100%;
-            height: 150px;
-            object-fit: cover;
-            border-radius: 4px;
-            margin-bottom: 0.5rem;
-        }
-
-        .map-photo-name {
-            font-weight: 600;
-            font-size: 0.9rem;
-            margin-bottom: 0.25rem;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .map-photo-location {
-            font-size: 0.8rem;
-            color: #666;
-        }
-
-        .map-container {
-            background: #f0f0f0;
-            border-radius: 12px;
-            overflow: hidden;
-            position: relative;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .map-placeholder {
-            text-align: center;
-            color: #666;
-        }
-
-        .map-placeholder h3 {
-            font-size: 2rem;
-            margin-bottom: 1rem;
-        }
-
-        .location-marker {
-            position: absolute;
-            width: 30px;
-            height: 30px;
-            background: #667eea;
-            border: 3px solid white;
-            border-radius: 50%;
-            transform: translate(-50%, -50%);
-            cursor: pointer;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-            transition: all 0.3s;
-        }
-
-        .location-marker:hover {
-            transform: translate(-50%, -50%) scale(1.2);
-        }
-
-        .location-marker.selected {
-            background: #e74c3c;
-            z-index: 10;
-        }
-
-        .photo-card {
-            background: white;
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-            transition: transform 0.3s, box-shadow 0.3s;
-            cursor: pointer;
-        }
-
-        .photo-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
-        }
-
-        .photo-thumbnail {
-            width: 100%;
-            aspect-ratio: 1;
-            background: #f0f0f0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .photo-thumbnail img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-
-        .photo-icon {
-            font-size: 3rem;
-            color: #ccc;
-        }
-
-        .photo-info {
-            padding: 0.5rem;
-        }
-
-        .photo-name {
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .photo-meta {
-            font-size: 0.85rem;
-            color: #666;
-            display: flex;
-            flex-direction: column;
-            gap: 0.25rem;
-        }
-
-        .photo-badge {
-            display: inline-block;
-            padding: 0.25rem 0.5rem;
-            background: #e9ecef;
-            border-radius: 4px;
-            font-size: 0.75rem;
-            margin-right: 0.25rem;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 4rem 2rem;
-            font-size: 1.2rem;
-            color: #666;
-        }
-
-        .error {
-            text-align: center;
-            padding: 4rem 2rem;
-            color: #e74c3c;
-        }
-
-        .no-results {
-            text-align: center;
-            padding: 4rem 2rem;
-            color: #666;
-        }
-
-        .no-results h2 {
-            font-size: 2rem;
-            margin-bottom: 1rem;
-        }
-
-        /* Lightbox styles */
-        .lightbox {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.95);
-            z-index: 9999;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .lightbox.active {
-            display: flex;
-        }
-
-        .lightbox-content {
-            max-width: 90vw;
-            max-height: 90vh;
-            position: relative;
-        }
-
-        .lightbox-image {
-            max-width: 100%;
-            max-height: 90vh;
-            object-fit: contain;
-        }
-
-        .lightbox-close {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            font-size: 3rem;
-            color: white;
-            cursor: pointer;
-            background: rgba(0, 0, 0, 0.5);
-            width: 50px;
-            height: 50px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 10000;
-        }
-
-        .lightbox-nav {
-            position: absolute;
-            top: 50%;
-            transform: translateY(-50%);
-            font-size: 3rem;
-            color: white;
-            cursor: pointer;
-            background: rgba(0, 0, 0, 0.5);
-            width: 60px;
-            height: 60px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 10000;
-        }
-
-        .lightbox-prev {
-            left: 20px;
-        }
-
-        .lightbox-next {
-            right: 20px;
-        }
-
-        .lightbox-info {
-            position: absolute;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0, 0, 0, 0.7);
-            color: white;
-            padding: 1rem 2rem;
-            border-radius: 8px;
-            text-align: center;
-        }
-
-        @media (max-width: 768px) {
-            .gallery-grid {
-                grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-                gap: 1rem;
-            }
-
-            .controls {
-                flex-direction: column;
-                align-items: stretch;
-            }
-
-            .search-box {
-                width: 100%;
-            }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f0f; color: #e0e0e0; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 0.5rem 1rem; display: flex; align-items: center; gap: 1rem; }
+        .header h1 { font-size: 1.5rem; font-weight: 700; }
+        .header .back { color: white; cursor: pointer; text-decoration: none; font-size: 0.9rem; }
+        .stats-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.5rem; padding: 0.5rem; background: #1a1a1a; border-bottom: 1px solid #2a2a2a; }
+        .stat-card { text-align: center; padding: 0.25rem; }
+        .stat-number { font-size: 1.5rem; font-weight: bold; color: #667eea; }
+        .stat-label { font-size: 0.8rem; color: #888; margin-top: 0.2rem; }
+        .controls { background: #1a1a1a; padding: 0.5rem; border-bottom: 1px solid #2a2a2a; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+        .search-box { flex: 1; min-width: 200px; }
+        .search-box input { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #444; border-radius: 6px; background: #222; color: white; font-size: 0.9rem; }
+        .search-box input:focus { outline: none; border-color: #667eea; }
+        .filter-group { display: flex; gap: 0.3rem; align-items: center; flex-wrap: wrap; }
+        .filter-label { font-weight: 600; color: #aaa; font-size: 0.8rem; }
+        select.filter-btn { padding: 0.4rem 0.6rem; border: 1px solid #444; background: #222; color: white; border-radius: 4px; font-size: 0.8rem; cursor: pointer; }
+        .view-toggle { display: flex; gap: 0.3rem; }
+        .view-btn { padding: 0.4rem 0.8rem; border: 1px solid #444; background: #222; color: white; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+        .view-btn.active { background: #667eea; border-color: #667eea; }
+        .dup-toggle { display: flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; color: #aaa; cursor: pointer; }
+        .dup-toggle input { cursor: pointer; }
+        .container { padding: 0.5rem; max-width: 1600px; margin: 0 auto; }
+        .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.5rem; }
+        .photo-card { background: #1a1a1a; border-radius: 8px; overflow: hidden; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; border: 1px solid #2a2a2a; }
+        .photo-card:hover { transform: translateY(-3px); box-shadow: 0 4px 15px rgba(0,0,0,0.3); border-color: #667eea; }
+        .photo-thumbnail { width: 100%; aspect-ratio: 1; background: #222; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+        .photo-thumbnail img { width: 100%; height: 100%; object-fit: cover; }
+        .photo-info { padding: 0.5rem; }
+        .photo-name { font-weight: 600; font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 0.25rem; }
+        .photo-meta { font-size: 0.75rem; color: #888; display: flex; flex-direction: column; gap: 0.15rem; }
+        .photo-badge { display: inline-block; padding: 0.1rem 0.3rem; background: rgba(102,126,234,0.2); color: #667eea; border-radius: 3px; font-size: 0.7rem; margin-right: 0.2rem; }
+        .loading { text-align: center; padding: 3rem; opacity: 0.5; }
+        .no-results { text-align: center; padding: 3rem; opacity: 0.5; }
+        /* Map view */
+        .gallery-map { display: grid; grid-template-columns: 300px 1fr; gap: 0.5rem; height: 70vh; }
+        .map-list { overflow-y: auto; display: flex; flex-direction: column; gap: 0.3rem; }
+        .map-photo-card { background: #1a1a1a; border-radius: 6px; padding: 0.5rem; cursor: pointer; border: 1px solid #2a2a2a; display: flex; gap: 0.5rem; align-items: center; }
+        .map-photo-card:hover, .map-photo-card.selected { border-color: #667eea; background: #222; }
+        .map-photo-card img { width: 50px; height: 50px; object-fit: cover; border-radius: 4px; }
+        .map-photo-card .info { flex: 1; min-width: 0; }
+        .map-photo-card .name { font-size: 0.8rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .map-photo-card .loc { font-size: 0.7rem; color: #888; }
+        #leafletMap { width: 100%; height: 100%; border-radius: 8px; }
+        /* Lightbox / Modal */
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.92); z-index: 9999; align-items: center; justify-content: center; }
+        .modal-overlay.active { display: flex; }
+        .modal-content { display: flex; max-width: 95vw; max-height: 95vh; gap: 1rem; }
+        .modal-image-wrap { flex: 1; display: flex; align-items: center; justify-content: center; min-width: 0; position: relative; }
+        .modal-image-wrap img { max-width: 100%; max-height: 90vh; object-fit: contain; border-radius: 8px; }
+        .modal-sidebar { width: 320px; background: #1a1a1a; border-radius: 8px; padding: 1rem; overflow-y: auto; flex-shrink: 0; }
+        .modal-sidebar h3 { font-size: 1rem; margin-bottom: 0.75rem; color: #667eea; }
+        .modal-meta-row { display: flex; justify-content: space-between; padding: 0.35rem 0; border-bottom: 1px solid #2a2a2a; font-size: 0.85rem; }
+        .modal-meta-row .label { color: #888; }
+        .modal-meta-row .value { color: #e0e0e0; text-align: right; max-width: 60%; word-break: break-all; }
+        .modal-close { position: fixed; top: 15px; right: 20px; font-size: 2rem; color: white; cursor: pointer; background: rgba(0,0,0,0.5); width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; z-index: 10001; }
+        .modal-nav { position: fixed; top: 50%; transform: translateY(-50%); font-size: 2rem; color: white; cursor: pointer; background: rgba(0,0,0,0.5); width: 50px; height: 50px; border-radius: 50%; display: flex; align-items: center; justify-content: center; z-index: 10001; }
+        .modal-nav.prev { left: 15px; }
+        .modal-nav.next { right: 340px; }
+        .modal-delete { margin-top: 1rem; padding: 0.5rem; background: rgba(231,76,60,0.2); color: #e74c3c; border: 1px solid rgba(231,76,60,0.4); border-radius: 6px; cursor: pointer; font-size: 0.85rem; width: 100%; text-align: center; }
+        .modal-delete:hover { background: rgba(231,76,60,0.4); }
+        .modal-nav-btns { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 0.5rem; z-index: 10001; }
+        .modal-nav-btns button { padding: 0.5rem 1.5rem; background: rgba(0,0,0,0.6); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; cursor: pointer; font-size: 1rem; }
+        .modal-nav-btns button:hover { background: rgba(255,255,255,0.1); }
+        @media (max-width: 900px) {
+            .modal-content { flex-direction: column; }
+            .modal-sidebar { width: 100%; max-height: 40vh; }
+            .modal-nav.next { right: 15px; top: auto; bottom: 80px; }
+            .gallery-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+            .gallery-map { grid-template-columns: 1fr; grid-template-rows: 1fr 200px; }
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <button class="logout-btn" onclick="logout()">Logout</button>
+        <a href="/" class="back">Dashboard</a>
         <h1>📷 Photo Library</h1>
-        <p>Browse and search your photo collection</p>
     </div>
 
     <div class="stats-bar" id="statsBar">
-        <div class="stat-card">
-            <div class="stat-number" id="totalPhotos">-</div>
-            <div class="stat-label">Total Photos</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number" id="totalSize">-</div>
-            <div class="stat-label">Total Size</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number" id="uniqueCameras">-</div>
-            <div class="stat-label">Cameras Used</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number" id="withGPS">-</div>
-            <div class="stat-label">With GPS Data</div>
-        </div>
+        <div class="stat-card"><div class="stat-number" id="totalPhotos">-</div><div class="stat-label">Photos</div></div>
+        <div class="stat-card"><div class="stat-number" id="totalSize">-</div><div class="stat-label">Size</div></div>
+        <div class="stat-card"><div class="stat-number" id="uniqueCameras">-</div><div class="stat-label">Cameras</div></div>
+        <div class="stat-card"><div class="stat-number" id="withGPS">-</div><div class="stat-label">With GPS</div></div>
+        <div class="stat-card"><div class="stat-number" id="hiddenCount">-</div><div class="stat-label">Hidden</div></div>
     </div>
 
     <div class="controls">
-        <div class="search-box">
-            <input type="text" id="searchInput" placeholder="Search photos by name, camera, location...">
+        <div class="search-box"><input type="text" id="searchInput" placeholder="Search photos by name, camera, location..."></div>
+        <div class="filter-group">
+            <select id="cameraFilter" class="filter-btn" onchange="loadPhotos()"><option value="">All Cameras</option></select>
         </div>
         <div class="filter-group">
-            <button class="filter-btn active" data-filter="all">All</button>
-            <button class="filter-btn" data-filter="gps">With GPS</button>
-            <button class="filter-btn" data-filter="portrait">Portrait</button>
-            <button class="filter-btn" data-filter="landscape">Landscape</button>
+            <select id="yearFilter" class="filter-btn" onchange="loadPhotos()"><option value="">All Years</option></select>
         </div>
         <div class="filter-group">
-            <span class="filter-label">Camera:</span>
-            <select id="cameraFilter" class="filter-btn" onchange="loadPhotos()" style="min-width:120px;">
-                <option value="">All Cameras</option>
-            </select>
-        </div>
-        <div class="filter-group">
-            <span class="filter-label">Year:</span>
-            <select id="yearFilter" class="filter-btn" onchange="loadPhotos()" style="min-width:80px;">
-                <option value="">All Years</option>
-            </select>
-        </div>
-        <div class="filter-group">
-            <span class="filter-label">Month:</span>
-            <select id="monthFilter" class="filter-btn" onchange="loadPhotos()" style="min-width:80px;">
+            <select id="monthFilter" class="filter-btn" onchange="loadPhotos()">
                 <option value="">All Months</option>
                 <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
                 <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
@@ -523,472 +111,304 @@
             </select>
         </div>
         <div class="filter-group">
-            <span class="filter-label">Days:</span>
-            <select id="daysFilter" class="filter-btn" onchange="loadPhotos()" style="min-width:80px;">
-                <option value="">Last 7 days</option>
-                <option value="1">1 day</option>
-                <option value="3">3 days</option>
-                <option value="7" selected>7 days</option>
-                <option value="30">30 days</option>
-                <option value="90">90 days</option>
-                <option value="365">1 year</option>
-                <option value="0">All time</option>
+            <select id="daysFilter" class="filter-btn" onchange="loadPhotos()">
+                <option value="7" selected>Last 7 days</option>
+                <option value="1">1 day</option><option value="3">3 days</option>
+                <option value="30">30 days</option><option value="90">90 days</option>
+                <option value="365">1 year</option><option value="0">All time</option>
             </select>
         </div>
         <div class="filter-group">
-            <span class="filter-label">Model:</span>
-            <select id="modelFilter" class="filter-btn" onchange="loadPhotos()" style="min-width:140px;">
-                <option value="">All Models</option>
-            </select>
+            <select id="modelFilter" class="filter-btn" onchange="loadPhotos()"><option value="">All Models</option></select>
         </div>
+        <label class="dup-toggle"><input type="checkbox" id="hideDuplicates" checked onchange="loadPhotos()"> Hide Duplicates</label>
         <div class="view-toggle">
             <button class="view-btn active" data-view="grid">Grid</button>
-            <button class="view-btn" data-view="list">List</button>
             <button class="view-btn" data-view="map">Map</button>
         </div>
     </div>
 
-    <div class="container">
-        <div id="photoContainer" class="gallery-grid">
-            <div class="loading">Loading photos...</div>
-        </div>
-    </div>
+    <div class="container"><div id="photoContainer" class="gallery-grid"><div class="loading">Loading photos...</div></div></div>
 
-    <!-- Lightbox for photo slideshow -->
-    <div id="lightbox" class="lightbox">
-        <div class="lightbox-close" onclick="closeLightbox()">×</div>
-        <div class="lightbox-nav lightbox-prev" onclick="navigateLightbox(-1)">‹</div>
-        <div class="lightbox-nav lightbox-next" onclick="navigateLightbox(1)">›</div>
-        <div class="lightbox-content">
-            <img id="lightboxImage" class="lightbox-image" src="" alt="">
-            <div class="lightbox-info" id="lightboxInfo"></div>
+    <!-- Modal / Lightbox -->
+    <div id="photoModal" class="modal-overlay" onclick="if(event.target===this)closeModal()">
+        <div class="modal-close" onclick="closeModal()">×</div>
+        <div class="modal-nav prev" onclick="navigateModal(-1)">‹</div>
+        <div class="modal-nav next" onclick="navigateModal(1)">›</div>
+        <div class="modal-content">
+            <div class="modal-image-wrap"><img id="modalImage" src="" alt=""></div>
+            <div class="modal-sidebar" id="modalSidebar"></div>
+        </div>
+        <div class="modal-nav-btns">
+            <button onclick="navigateModal(-1)">‹ Prev</button>
+            <span id="modalCounter" style="padding:0.5rem 1rem;color:#aaa;">1 / 1</span>
+            <button onclick="navigateModal(1)">Next ›</button>
         </div>
     </div>
 
     <script src="/auth.js"></script>
-    <!-- Login Overlay -->
-    <div id="loginOverlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
-        <div style="background:white; padding:2rem; border-radius:12px; box-shadow:0 8px 32px rgba(0,0,0,0.3); width:360px; max-width:90%;">
-            <h2 style="text-align:center; margin-bottom:1.5rem; color:#333;">📷 Photo Library Login</h2>
-            <form id="loginForm">
-                <input type="text" id="loginUsername" placeholder="Username" required style="width:100%; padding:0.75rem; margin-bottom:0.75rem; border:1px solid #ddd; border-radius:6px; font-size:1rem; box-sizing:border-box;">
-                <input type="password" id="loginPassword" placeholder="Password" required style="width:100%; padding:0.75rem; margin-bottom:1rem; border:1px solid #ddd; border-radius:6px; font-size:1rem; box-sizing:border-box;">
-                <button type="submit" style="width:100%; padding:0.75rem; background:#667eea; color:white; border:none; border-radius:6px; font-size:1.1rem; cursor:pointer;">Login</button>
-                <div id="loginError" style="color:red; text-align:center; margin-top:0.75rem; display:none;"></div>
-            </form>
-            <div style="text-align:center; margin-top:1rem;">
-                <a href="/api/auth/google" style="color:#667eea; text-decoration:none;">Sign in with Google</a>
-            </div>
-        </div>
-    </div>
-
     <script>
-        const ITEMS_PER_PAGE = 100; // Items per page
-        let currentFilter = 'all';
-        let currentView = 'grid';
-        let searchTimeout = null;
-        let allPhotos = [];
         let allPhotosData = [];
-        let currentLightboxIndex = 0;
+        let allPhotos = [];
+        let currentView = 'grid';
+        let currentModalIndex = 0;
+        let searchTimeout = null;
         let currentPage = 1;
+        const ITEMS_PER_PAGE = 100;
+        let leafletMap = null;
+        let leafletMarkers = [];
+        let allHiddenPhotos = [];
 
-        function getCookie(name) {
-            const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
-            return m ? m.pop() : null;
-        }
+        function getCookie(name) { const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)'); return m ? m.pop() : null; }
+        function setCookie(name, val, days) { const d = new Date(); d.setTime(d.getTime()+days*86400000); document.cookie = name+'='+val+';expires='+d.toUTCString()+';path=/;SameSite=Lax'; }
+        function formatBytes(b) { if (!b) return '0 B'; const k=1024,s=['B','KB','MB','GB','TB']; const i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(1)+' '+s[i]; }
+        function formatDate(d) { if (!d) return 'N/A'; return new Date(d).toLocaleString(); }
 
-        function setCookie(name, val, days) {
-            const d = new Date();
-            d.setTime(d.getTime() + days * 86400000);
-            document.cookie = name + '=' + val + ';expires=' + d.toUTCString() + ';path=/;SameSite=Lax';
-        }
-
-        async function checkAuth() {
-            // Check URL for token (from OAuth callback)
-            const params = new URLSearchParams(window.location.search);
-            const urlToken = params.get('token');
-            if (urlToken) {
-                setCookie('silverfs_token', urlToken, 1);
-                window.history.replaceState({}, '', '/photos');
-                return true;
-            }
-            return !!getCookie('silverfs_token');
-        }
-
-        function showLogin() {
-            document.getElementById('loginOverlay').style.display = 'flex';
-        }
-
-        function hideLogin() {
-            document.getElementById('loginOverlay').style.display = 'none';
-        }
-
-        async function authFetch(url, options = {}) {
+        async function authFetch(url, opts={}) {
             const token = getCookie('silverfs_token');
-            if (!token) {
-                showLogin();
-                throw new Error('Not authenticated');
-            }
-            options.headers = options.headers || {};
-            options.headers['Authorization'] = 'Bearer ' + token;
-            const res = await fetch(url, options);
-            if (res.status === 401) {
-                showLogin();
-                throw new Error('Session expired');
-            }
+            if (!token) { document.getElementById('loginOverlay')&&(document.getElementById('loginOverlay').style.display='flex'); throw new Error('Not authenticated'); }
+            opts.headers = opts.headers||{}; opts.headers['Authorization'] = 'Bearer '+token;
+            const res = await fetch(url, opts);
+            if (res.status===401) throw new Error('Session expired');
             return res;
-        }
-
-        document.getElementById('loginForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const username = document.getElementById('loginUsername').value;
-            const password = document.getElementById('loginPassword').value;
-            const errDiv = document.getElementById('loginError');
-            try {
-                const res = await fetch('/api/auth/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
-                    body: JSON.stringify({ username, password })
-                });
-                const data = await res.json();
-                if (data.success && data.token) {
-                    setCookie('silverfs_token', data.token, 1);
-                    hideLogin();
-                    loadPhotos();
-                } else {
-                    errDiv.textContent = data.error || 'Login failed';
-                    errDiv.style.display = 'block';
-                }
-            } catch (err) {
-                errDiv.textContent = 'Connection error';
-                errDiv.style.display = 'block';
-            }
-        });
-
-        function formatDate(dateString) {
-            if (!dateString) return 'N/A';
-            const date = new Date(dateString);
-            return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
-        }
-
-        function openLightbox(index) {
-            currentLightboxIndex = index;
-            showLightboxImage();
-            document.getElementById('lightbox').classList.add('active');
-            document.body.style.overflow = 'hidden';
-        }
-
-        function closeLightbox() {
-            document.getElementById('lightbox').classList.remove('active');
-            document.body.style.overflow = 'auto';
-        }
-
-        function navigateLightbox(direction) {
-            currentLightboxIndex += direction;
-            if (currentLightboxIndex < 0) currentLightboxIndex = allPhotos.length - 1;
-            if (currentLightboxIndex >= allPhotos.length) currentLightboxIndex = 0;
-            showLightboxImage();
-        }
-
-        function showLightboxImage() {
-            const photo = allPhotos[currentLightboxIndex];
-            document.getElementById('lightboxImage').src = `/images/${photo.id}`;
-            document.getElementById('lightboxInfo').innerHTML = `
-                <div><strong>${photo.name}</strong></div>
-                <div>${photo.width || 0}×${photo.height || 0} • ${formatBytes(photo.size)}</div>
-                ${photo.camera_make ? `<div>📸 ${photo.camera_make} ${photo.camera_model || ''}</div>` : ''}
-                <div>${currentLightboxIndex + 1} / ${allPhotos.length}</div>
-            `;
-        }
-
-        // Keyboard navigation
-        document.addEventListener('keydown', (e) => {
-            if (document.getElementById('lightbox').classList.contains('active')) {
-                if (e.key === 'Escape') closeLightbox();
-                if (e.key === 'ArrowLeft') navigateLightbox(-1);
-                if (e.key === 'ArrowRight') navigateLightbox(1);
-            }
-        });
-
-        function renderPhotos(reset = false) {
-            const container = document.getElementById('photoContainer');
-            
-            if (reset) {
-                currentPage = 1;
-            }
-            
-            const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
-            const endIdx = startIdx + ITEMS_PER_PAGE;
-            const photosToShow = allPhotosData.slice(startIdx, endIdx);
-            
-            // Render current page photos
-            container.innerHTML = photosToShow.map((photo, index) => {
-                const globalIndex = startIdx + index;
-                return `
-                <div class="photo-card" onclick="openLightbox(${globalIndex})">
-                    <div class="photo-thumbnail">
-                        <img src="/images/${photo.id}/thumb" alt="${photo.name}" loading="lazy" onerror="this.src='/images/${photo.id}'; this.onerror=null;">
-                    </div>
-                    <div class="photo-info">
-                        <div class="photo-name" title="${photo.path || photo.name}">${photo.name}</div>
-                        <div class="photo-meta">
-                            <div>${photo.width || 0}×${photo.height || 0} • ${photo.size ? formatBytes(photo.size) : '0 B'}</div>
-                            ${photo.camera_make ? `<div>📸 ${photo.camera_make} ${photo.camera_model || ''}</div>` : ''}
-                            ${photo.date_taken ? `<div>📅 ${formatDate(photo.date_taken)}</div>` : ''}
-                            ${photo.latitude ? `<span class="photo-badge">📍 GPS</span>` : ''}
-                        </div>
-                    </div>
-                </div>
-            `}).join('');
-            
-            allPhotos = allPhotosData; // For lightbox navigation
-            
-            // Add pagination controls if needed
-            const totalPages = Math.ceil(allPhotosData.length / ITEMS_PER_PAGE);
-            if (totalPages > 1) {
-                container.innerHTML += `
-                    <div style="grid-column: 1/-1; text-align: center; padding: 1rem;">
-                        <div style="display: inline-flex; gap: 0.5rem; align-items: center; background: white; padding: 0.5rem; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-                            <button onclick="goToPage(1)" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === 1 ? '#e0e0e0' : '#667eea'}; color: ${currentPage === 1 ? '#999' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === 1 ? 'not-allowed' : 'pointer'}; font-weight: 600;">First</button>
-                            <button onclick="goToPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === 1 ? '#e0e0e0' : '#667eea'}; color: ${currentPage === 1 ? '#999' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === 1 ? 'not-allowed' : 'pointer'}; font-weight: 600;">‹ Prev</button>
-                            <span style="padding: 0.5rem 1rem; color: #333; font-weight: 600;">Page ${currentPage} of ${totalPages}</span>
-                            <button onclick="goToPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? '#e0e0e0' : '#667eea'}; color: ${currentPage === totalPages ? '#999' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Next ›</button>
-                            <button onclick="goToPage(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.5rem 0.75rem; background: ${currentPage === totalPages ? '#e0e0e0' : '#667eea'}; color: ${currentPage === totalPages ? '#999' : 'white'}; border: none; border-radius: 4px; cursor: ${currentPage === totalPages ? 'not-allowed' : 'pointer'}; font-weight: 600;">Last</button>
-                        </div>
-                        <div style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">
-                            Showing ${startIdx + 1}-${Math.min(endIdx, allPhotosData.length)} of ${allPhotosData.length} photos
-                        </div>
-                    </div>
-                `;
-            }
-            
-            // Scroll to top when changing pages
-            if (!reset) {
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-            }
-        }
-        
-        function goToPage(page) {
-            const totalPages = Math.ceil(allPhotosData.length / ITEMS_PER_PAGE);
-            if (page >= 1 && page <= totalPages) {
-                currentPage = page;
-                renderPhotos(false);
-            }
         }
 
         async function loadPhotos() {
             const container = document.getElementById('photoContainer');
-            const searchTerm = document.getElementById('searchInput').value;
+            try {
+                const params = new URLSearchParams();
+                const search = document.getElementById('searchInput').value;
                 const camera = document.getElementById('cameraFilter').value;
                 const model = document.getElementById('modelFilter').value;
                 const year = document.getElementById('yearFilter').value;
                 const month = document.getElementById('monthFilter').value;
                 const days = document.getElementById('daysFilter').value;
-                
-                try {
-                    // Build query params
-                    const params = new URLSearchParams();
-                    if (searchTerm) params.append('search', searchTerm);
-                    if (currentFilter !== 'all') params.append('filter', currentFilter);
-                    if (camera) params.append('camera', camera);
-                    if (model) params.append('model', model);
-                    if (year) params.append('year', year);
-                    if (month) params.append('month', month);
-                    if (days) params.append('days', days);
-                
-                const response = await authFetch(`/api/photos?${params}`);
-                const data = await response.json();
-                
-                if (data.error) {
-                    throw new Error(data.error);
-                }
-                
-                // Update stats
+                if (search) params.append('search', search);
+                if (camera) params.append('camera', camera);
+                if (model) params.append('model', model);
+                if (year) params.append('year', year);
+                if (month) params.append('month', month);
+                if (days) params.append('days', days);
+
+                const res = await authFetch('/api/photos?'+params);
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+
                 document.getElementById('totalPhotos').textContent = data.stats.totalPhotos;
                 document.getElementById('totalSize').textContent = data.stats.totalSize;
                 document.getElementById('uniqueCameras').textContent = data.stats.uniqueCameras;
                 document.getElementById('withGPS').textContent = data.stats.withGPS;
-                
-                // Populate filter dropdowns
+
                 if (data.filters) {
                     const camSelect = document.getElementById('cameraFilter');
-                    const yearSelect = document.getElementById('yearFilter');
                     const curCam = camSelect.value;
-                    const curYear = yearSelect.value;
-                    camSelect.innerHTML = '<option value="">All Cameras</option>' + 
-                        data.filters.cameras.map(c => `<option value="${c.name}" ${c.name===curCam?'selected':''}>${c.name} (${c.count.toLocaleString()})</option>`).join('');
-                    
+                    camSelect.innerHTML = '<option value="">All Cameras</option>' + data.filters.cameras.map(c => `<option value="${c.name}" ${c.name===curCam?'selected':''}>${c.name} (${c.count.toLocaleString()})</option>`).join('');
                     const modelSelect = document.getElementById('modelFilter');
                     const curModel = modelSelect.value;
-                    modelSelect.innerHTML = '<option value="">All Models</option>' + 
-                        data.filters.models.map(m => `<option value="${m.name}" ${m.name===curModel?'selected':''}>${m.name} (${m.count.toLocaleString()})</option>`).join('');
-                    yearSelect.innerHTML = '<option value="">All Years</option>' + 
-                        data.filters.years.map(y => `<option value="${y}" ${String(y)===curYear?'selected':''}>${y}</option>`).join('');
+                    modelSelect.innerHTML = '<option value="">All Models</option>' + data.filters.models.map(m => `<option value="${m.name}" ${m.name===curModel?'selected':''}>${m.name} (${m.count.toLocaleString()})</option>`).join('');
+                    const yearSelect = document.getElementById('yearFilter');
+                    const curYear = yearSelect.value;
+                    yearSelect.innerHTML = '<option value="">All Years</option>' + data.filters.years.map(y => `<option value="${y}" ${String(y)===curYear?'selected':''}>${y}</option>`).join('');
                 }
-                
-                // Store all photos and render first page
-                if (data.photos.length === 0) {
-                    container.innerHTML = `
-                        <div class="no-results">
-                            <h2>No photos found</h2>
-                            <p>Try adjusting your search or filters</p>
-                        </div>
-                    `;
-                    return;
-                }
-                
+
                 allPhotosData = data.photos;
                 allPhotos = data.photos;
-                
-                renderPhotos(true);
-                
+
+                if (document.getElementById('hideDuplicates').checked) {
+                    allPhotos = allPhotosData.filter(p => !p.is_duplicate);
+                } else {
+                    allPhotos = allPhotosData;
+                }
+
+                const hideCount = allPhotosData.length - allPhotos.length;
+                document.getElementById('hiddenCount').textContent = hideCount.toLocaleString();
+
+                if (currentView === 'map') { renderMapView(); } else { renderGrid(true); }
             } catch (err) {
-                container.innerHTML = `
-                    <div class="error">
-                        <h2>Error loading photos</h2>
-                        <p>${err.message}</p>
-                    </div>
-                `;
+                container.innerHTML = `<div class="no-results">Error: ${err.message}</div>`;
             }
         }
 
-        function formatBytes(bytes) {
-            if (bytes === 0) return '0 B';
-            const k = 1024;
-            const sizes = ['B', 'KB', 'MB', 'GB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        function renderGrid(reset=false) {
+            if (reset) currentPage = 1;
+            const container = document.getElementById('photoContainer');
+            container.className = 'gallery-grid';
+            const start = (currentPage-1)*ITEMS_PER_PAGE;
+            const page = allPhotos.slice(start, start+ITEMS_PER_PAGE);
+
+            if (page.length === 0) { container.innerHTML = '<div class="no-results">No photos found</div>'; return; }
+
+            container.innerHTML = page.map((photo, i) => {
+                const gi = start + i;
+                return `<div class="photo-card" onclick="openModal(${gi})">
+                    <div class="photo-thumbnail"><img src="/images/${photo.id}/thumb" alt="${photo.name}" loading="lazy" onerror="this.src='/images/${photo.id}';this.onerror=null;"></div>
+                    <div class="photo-info">
+                        <div class="photo-name" title="${photo.path||photo.name}">${photo.name}</div>
+                        <div class="photo-meta">
+                            <div>${photo.width||0}×${photo.height||0} • ${formatBytes(photo.size)}</div>
+                            ${photo.camera_make?`<div>📸 ${photo.camera_make} ${photo.camera_model||''}</div>`:''}
+                            ${photo.date_taken?`<div>📅 ${formatDate(photo.date_taken)}</div>`:''}
+                            ${photo.latitude?`<span class="photo-badge">📍 GPS</span>`:''}
+                            ${photo.is_duplicate?`<span class="photo-badge" style="background:rgba(231,76,60,0.2);color:#e74c3c;">🔁 Dup</span>`:''}
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+
+            const totalPages = Math.ceil(allPhotos.length/ITEMS_PER_PAGE);
+            if (totalPages > 1) {
+                container.innerHTML += `<div style="grid-column:1/-1;text-align:center;padding:1rem;">
+                    <div style="display:inline-flex;gap:0.3rem;align-items:center;background:#1a1a1a;padding:0.5rem;border-radius:8px;border:1px solid #2a2a2a;">
+                        <button onclick="goPage(1)" ${currentPage===1?'disabled':''} style="padding:0.4rem 0.7rem;background:${currentPage===1?'#333':'#667eea'};color:${currentPage===1?'#666':'white'};border:none;border-radius:4px;cursor:pointer;">First</button>
+                        <button onclick="goPage(${currentPage-1})" ${currentPage===1?'disabled':''} style="padding:0.4rem 0.7rem;background:${currentPage===1?'#333':'#667eea'};color:${currentPage===1?'#666':'white'};border:none;border-radius:4px;cursor:pointer;">‹</button>
+                        <span style="padding:0.4rem 0.8rem;color:#aaa;font-size:0.85rem;">${currentPage}/${totalPages}</span>
+                        <button onclick="goPage(${currentPage+1})" ${currentPage===totalPages?'disabled':''} style="padding:0.4rem 0.7rem;background:${currentPage===totalPages?'#333':'#667eea'};color:${currentPage===totalPages?'#666':'white'};border:none;border-radius:4px;cursor:pointer;">›</button>
+                        <button onclick="goPage(${totalPages})" ${currentPage===totalPages?'disabled':''} style="padding:0.4rem 0.7rem;background:${currentPage===totalPages?'#333':'#667eea'};color:${currentPage===totalPages?'#666':'white'};border:none;border-radius:4px;cursor:pointer;">Last</button>
+                    </div>
+                    <div style="margin-top:0.3rem;color:#666;font-size:0.8rem;">${start+1}-${Math.min(start+ITEMS_PER_PAGE,allPhotos.length)} of ${allPhotos.length.toLocaleString()}</div>
+                </div>`;
+            }
         }
 
-        // Event listeners
-        document.getElementById('searchInput').addEventListener('input', () => {
-            clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(loadPhotos, 300);
-        });
-
-        document.querySelectorAll('.filter-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                if (this.tagName === 'SELECT') return;
-                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-                this.classList.add('active');
-                currentFilter = this.dataset.filter || 'all';
-                loadPhotos();
-            });
-        });
-
-        let selectedMapPhoto = null;
+        function goPage(p) { const tp=Math.ceil(allPhotos.length/ITEMS_PER_PAGE); if(p>=1&&p<=tp){currentPage=p;renderGrid(false);window.scrollTo({top:0,behavior:'smooth'});} }
 
         function renderMapView() {
             const container = document.getElementById('photoContainer');
-            // For map view, show ALL photos with GPS (ignore date filters)
-            const photosWithGPS = (allPhotosData.length > 0 ? allPhotosData : allPhotos).filter(p => p.latitude && p.longitude);
-            
-            if (photosWithGPS.length === 0) {
-                container.innerHTML = `
-                    <div class="no-results">
-                        <h2>No photos with GPS data</h2>
-                        <p>Photos need GPS coordinates to be displayed on the map</p>
-                    </div>
-                `;
-                return;
-            }
+            container.className = '';
+            const gpsPhotos = allPhotos.filter(p => p.latitude && p.longitude);
+            if (gpsPhotos.length === 0) { container.innerHTML = '<div class="no-results">No photos with GPS data</div>'; return; }
 
-            // Calculate map bounds
-            const lats = photosWithGPS.map(p => parseFloat(p.latitude));
-            const lngs = photosWithGPS.map(p => parseFloat(p.longitude));
-            const minLat = Math.min(...lats);
-            const maxLat = Math.max(...lats);
-            const minLng = Math.min(...lngs);
-            const maxLng = Math.max(...lngs);
+            container.innerHTML = `<div class="gallery-map"><div class="map-list" id="mapList"></div><div id="leafletMap"></div></div>`;
 
-            container.innerHTML = `
-                <div class="gallery-map">
-                    <div class="map-list" id="mapList"></div>
-                    <div class="map-container" id="mapContainer">
-                        <div class="map-placeholder">
-                            <h3>📍 ${photosWithGPS.length} Photos with Location</h3>
-                            <p>Click on photos in the list to see their location</p>
-                        </div>
-                    </div>
-                </div>
-            `;
+            // Init Leaflet map
+            if (leafletMap) { leafletMap.remove(); leafletMap = null; }
+            leafletMap = L.map('leafletMap').setView([gpsPhotos[0].latitude, gpsPhotos[0].longitude], 10);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(leafletMap);
+
+            leafletMarkers = [];
+            gpsPhotos.forEach((photo, i) => {
+                const marker = L.marker([photo.latitude, photo.longitude]).addTo(leafletMap);
+                marker.bindPopup(`<img src="/images/${photo.id}/thumb" style="width:150px;border-radius:4px;" onclick="openModal(${allPhotos.indexOf(photo)})"><br><b>${photo.name}</b><br>${formatDate(photo.date_taken)}`);
+                marker.on('click', () => highlightMapItem(i));
+                leafletMarkers.push(marker);
+            });
+
+            const bounds = L.latLngBounds(gpsPhotos.map(p => [p.latitude, p.longitude]));
+            leafletMap.fitBounds(bounds, { padding: [20, 20] });
 
             const mapList = document.getElementById('mapList');
-            mapList.innerHTML = photosWithGPS.map((photo, index) => `
-                <div class="map-photo-card" onclick="selectMapPhoto(${index}, ${photo.latitude}, ${photo.longitude})" id="map-photo-${index}">
-                    <img src="/images/${photo.id}/thumb" class="map-photo-thumbnail" alt="${photo.name}" loading="lazy" onerror="this.src='/images/${photo.id}'; this.onerror=null;">
-                    <div class="map-photo-name">${photo.name}</div>
-                    <div class="map-photo-location">📍 ${photo.latitude.toFixed(4)}, ${photo.longitude.toFixed(4)}</div>
+            mapList.innerHTML = gpsPhotos.map((photo, i) => `
+                <div class="map-photo-card" id="mcard-${i}" onclick="focusMapPhoto(${i})">
+                    <img src="/images/${photo.id}/thumb" loading="lazy" onerror="this.src='/images/${photo.id}';this.onerror=null;">
+                    <div class="info"><div class="name">${photo.name}</div><div class="loc">📍 ${photo.latitude.toFixed(4)}, ${photo.longitude.toFixed(4)}</div></div>
                 </div>
             `).join('');
-
-            // Store photos with GPS for map selection
-            window.photosWithGPS = photosWithGPS;
+            window._gpsPhotos = gpsPhotos;
         }
 
-        function selectMapPhoto(index, lat, lng) {
-            const photosWithGPS = window.photosWithGPS || [];
-            if (!photosWithGPS[index]) return;
+        function focusMapPhoto(i) {
+            const p = window._gpsPhotos[i];
+            if (!p || !leafletMap) return;
+            leafletMap.setView([p.latitude, p.longitude], 15);
+            leafletMarkers[i]?.openPopup();
+            highlightMapItem(i);
+        }
 
-            // Update selected card
-            document.querySelectorAll('.map-photo-card').forEach(card => card.classList.remove('selected'));
-            document.getElementById(`map-photo-${index}`).classList.add('selected');
+        function highlightMapItem(i) {
+            document.querySelectorAll('.map-photo-card').forEach(c => c.classList.remove('selected'));
+            const el = document.getElementById('mcard-'+i);
+            if (el) { el.classList.add('selected'); el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+        }
 
-            // Update map display
-            const mapContainer = document.getElementById('mapContainer');
-            const photo = photosWithGPS[index];
-            
-            mapContainer.innerHTML = `
-                <div style="width: 100%; height: 100%; display: flex; flex-direction: column;">
-                    <div style="flex: 1; background: #e0e0e0; position: relative; display: flex; align-items: center; justify-content: center;">
-                        <div style="text-align: center; color: #666;">
-                            <div style="font-size: 3rem; margin-bottom: 1rem;">📍</div>
-                            <div style="font-size: 1.2rem; font-weight: 600; margin-bottom: 0.5rem;">${photo.name}</div>
-                            <div style="font-size: 1rem;">Latitude: ${lat.toFixed(6)}</div>
-                            <div style="font-size: 1rem;">Longitude: ${lng.toFixed(6)}</div>
-                            ${photo.altitude ? `<div style="font-size: 1rem;">Altitude: ${photo.altitude}m</div>` : ''}
-                            <button onclick="openMapInNewWindow(${lat}, ${lng})" style="margin-top: 1rem; padding: 0.5rem 1rem; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer;">Open in Google Maps</button>
-                        </div>
-                    </div>
-                    <div style="padding: 1rem;">
-                        <img src="/images/${photo.id}/thumb" style="width: 100%; max-height: 200px; object-fit: contain; border-radius: 8px;" onclick="openLightbox(${allPhotos.findIndex(p => p.id === photo.id)})" onerror="this.src='/images/${photo.id}'; this.onerror=null;">
-                    </div>
-                </div>
+        function openModal(index) {
+            currentModalIndex = index;
+            document.getElementById('photoModal').classList.add('active');
+            document.body.style.overflow = 'hidden';
+            showModalPhoto();
+        }
+
+        function closeModal() {
+            document.getElementById('photoModal').classList.remove('active');
+            document.body.style.overflow = 'auto';
+        }
+
+        function navigateModal(dir) {
+            currentModalIndex += dir;
+            if (currentModalIndex < 0) currentModalIndex = allPhotos.length - 1;
+            if (currentModalIndex >= allPhotos.length) currentModalIndex = 0;
+            showModalPhoto();
+        }
+
+        function showModalPhoto() {
+            const photo = allPhotos[currentModalIndex];
+            if (!photo) return;
+            document.getElementById('modalImage').src = `/images/${photo.id}`;
+            document.getElementById('modalCounter').textContent = `${currentModalIndex+1} / ${allPhotos.length}`;
+
+            const gpsLink = photo.latitude ? `https://www.google.com/maps?q=${photo.latitude},${photo.longitude}` : '';
+
+            document.getElementById('modalSidebar').innerHTML = `
+                <h3>Photo Details</h3>
+                <div class="modal-meta-row"><span class="label">Name</span><span class="value" title="${photo.path||''}">${photo.name}</span></div>
+                <div class="modal-meta-row"><span class="label">Dimensions</span><span class="value">${photo.width||0} × ${photo.height||0}</span></div>
+                <div class="modal-meta-row"><span class="label">Size</span><span class="value">${formatBytes(photo.size)}</span></div>
+                ${photo.format?`<div class="modal-meta-row"><span class="label">Format</span><span class="value">${photo.format}</span></div>`:''}
+                ${photo.camera_make?`<div class="modal-meta-row"><span class="label">Camera</span><span class="value">${photo.camera_make} ${photo.camera_model||''}</span></div>`:''}
+                ${photo.lens_model?`<div class="modal-meta-row"><span class="label">Lens</span><span class="value">${photo.lens_model}</span></div>`:''}
+                ${photo.iso?`<div class="modal-meta-row"><span class="label">ISO</span><span class="value">${photo.iso}</span></div>`:''}
+                ${photo.aperture?`<div class="modal-meta-row"><span class="label">Aperture</span><span class="value">f/${photo.aperture}</span></div>`:''}
+                ${photo.shutter_speed?`<div class="modal-meta-row"><span class="label">Shutter</span><span class="value">${photo.shutter_speed}s</span></div>`:''}
+                ${photo.focal_length?`<div class="modal-meta-row"><span class="label">Focal Length</span><span class="value">${photo.focal_length}mm</span></div>`:''}
+                ${photo.flash?`<div class="modal-meta-row"><span class="label">Flash</span><span class="value">${photo.flash}</span></div>`:''}
+                <div class="modal-meta-row"><span class="label">Date Taken</span><span class="value">${formatDate(photo.date_taken)}</span></div>
+                ${photo.latitude?`<div class="modal-meta-row"><span class="label">GPS</span><span class="value"><a href="${gpsLink}" target="_blank" style="color:#667eea;">${photo.latitude.toFixed(6)}, ${photo.longitude.toFixed(6)}</a></span></div>`:''}
+                ${photo.altitude?`<div class="modal-meta-row"><span class="label">Altitude</span><span class="value">${photo.altitude}m</span></div>`:''}
+                ${photo.software?`<div class="modal-meta-row"><span class="label">Software</span><span class="value">${photo.software}</span></div>`:''}
+                ${photo.artist?`<div class="modal-meta-row"><span class="label">Artist</span><span class="value">${photo.artist}</span></div>`:''}
+                ${photo.copyright?`<div class="modal-meta-row"><span class="label">Copyright</span><span class="value">${photo.copyright}</span></div>`:''}
+                ${photo.hash?`<div class="modal-meta-row"><span class="label">Hash</span><span class="value" style="font-size:0.7rem;">${photo.hash.substring(0,16)}...</span></div>`:''}
+                <div class="modal-meta-row"><span class="label">Path</span><span class="value" style="font-size:0.7rem;">${photo.path||'N/A'}</span></div>
+                <button class="modal-delete" onclick="deletePhoto(${photo.id}, ${currentModalIndex})">🗑 Delete Photo</button>
             `;
-
-            selectedMapPhoto = index;
         }
 
-        function openMapInNewWindow(lat, lng) {
-            window.open(`https://www.google.com/maps?q=${lat},${lng}`, '_blank');
+        async function deletePhoto(id, index) {
+            if (!confirm('Delete this photo permanently from disk and database?')) return;
+            try {
+                const res = await authFetch('/api/photos/'+id, { method: 'DELETE' });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                allPhotos.splice(index, 1);
+                allPhotosData = allPhotosData.filter(p => p.id !== id);
+                document.getElementById('totalPhotos').textContent = allPhotos.length;
+                if (allPhotos.length === 0) { closeModal(); renderGrid(true); return; }
+                if (currentModalIndex >= allPhotos.length) currentModalIndex = allPhotos.length - 1;
+                showModalPhoto();
+                renderGrid(true);
+            } catch (err) { alert('Delete failed: '+err.message); }
         }
+
+        document.addEventListener('keydown', e => {
+            if (document.getElementById('photoModal').classList.contains('active')) {
+                if (e.key==='Escape') closeModal();
+                if (e.key==='ArrowLeft') navigateModal(-1);
+                if (e.key==='ArrowRight') navigateModal(1);
+            }
+        });
+
+        document.getElementById('searchInput').addEventListener('input', () => { clearTimeout(searchTimeout); searchTimeout = setTimeout(loadPhotos, 300); });
 
         document.querySelectorAll('.view-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
                 this.classList.add('active');
                 currentView = this.dataset.view;
-                const container = document.getElementById('photoContainer');
-                
-                if (currentView === 'map') {
-                    container.className = '';
-                    renderMapView();
-                } else {
-                    container.className = currentView === 'grid' ? 'gallery-grid' : 'gallery-list';
-                }
+                if (currentView === 'map') renderMapView();
+                else { if (leafletMap) { leafletMap.remove(); leafletMap = null; } renderGrid(true); }
             });
         });
 
-        // Initial load - check auth first
-        (async () => {
-            const hasToken = await checkAuth();
-            if (hasToken) {
-                loadPhotos();
-            } else {
-                showLogin();
-            }
-        })();
+        loadPhotos();
     </script>
 </body>
 </html>

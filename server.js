@@ -2518,6 +2518,26 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
   }
 });
 
+// Delete a photo by ID (removes from DB and disk)
+app.delete('/api/photos/:id', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.deletePhoto(parseInt(id));
+    if (result.deleted > 0 && result.path) {
+      // Try to delete the actual file from disk
+      try { await fs.promises.unlink(result.path); } catch (_) {}
+      // Also try thumbnail
+      try { await fs.promises.unlink(result.path + '.thumb'); } catch (_) {}
+      // Clear photo cache
+      photosCache = null;
+    }
+    res.json({ success: result.deleted > 0, deleted: result.deleted });
+  } catch (err) {
+    console.error('Delete photo error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get all music tracks with optional search and filters
 app.get('/api/music', requireAuthWrapper, requireMusicPermission, async (req, res) => {
   try {
