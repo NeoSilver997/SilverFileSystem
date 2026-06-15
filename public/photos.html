@@ -282,25 +282,25 @@
 
             // Init Leaflet map
             if (leafletMap) { leafletMap.remove(); leafletMap = null; }
-            leafletMap = L.map('leafletMap').setView([gpsPhotos[0].latitude, gpsPhotos[0].longitude], 10);
+            leafletMap = L.map('leafletMap').setView([parseFloat(gpsPhotos[0].latitude), parseFloat(gpsPhotos[0].longitude)], 10);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(leafletMap);
 
             leafletMarkers = [];
             gpsPhotos.forEach((photo, i) => {
-                const marker = L.marker([photo.latitude, photo.longitude]).addTo(leafletMap);
+                const marker = L.marker([parseFloat(photo.latitude), parseFloat(photo.longitude)]).addTo(leafletMap);
                 marker.bindPopup(`<img src="/images/${photo.id}/thumb" style="width:150px;border-radius:4px;" onclick="openModal(${allPhotos.indexOf(photo)})"><br><b>${photo.name}</b><br>${formatDate(photo.date_taken)}`);
                 marker.on('click', () => highlightMapItem(i));
                 leafletMarkers.push(marker);
             });
 
-            const bounds = L.latLngBounds(gpsPhotos.map(p => [p.latitude, p.longitude]));
+            const bounds = L.latLngBounds(gpsPhotos.map(p => [parseFloat(p.latitude), parseFloat(p.longitude)]));
             leafletMap.fitBounds(bounds, { padding: [20, 20] });
 
             const mapList = document.getElementById('mapList');
             mapList.innerHTML = gpsPhotos.map((photo, i) => `
                 <div class="map-photo-card" id="mcard-${i}" onclick="focusMapPhoto(${i})">
                     <img src="/images/${photo.id}/thumb" loading="lazy" onerror="this.src='/images/${photo.id}';this.onerror=null;">
-                    <div class="info"><div class="name">${photo.name}</div><div class="loc">📍 ${photo.latitude.toFixed(4)}, ${photo.longitude.toFixed(4)}</div></div>
+                    <div class="info"><div class="name">${photo.name}</div><div class="loc">📍 ${parseFloat(photo.latitude).toFixed(4)}, ${parseFloat(photo.longitude).toFixed(4)}</div></div>
                 </div>
             `).join('');
             window._gpsPhotos = gpsPhotos;
@@ -309,7 +309,7 @@
         function focusMapPhoto(i) {
             const p = window._gpsPhotos[i];
             if (!p || !leafletMap) return;
-            leafletMap.setView([p.latitude, p.longitude], 15);
+            leafletMap.setView([parseFloat(p.latitude), parseFloat(p.longitude)], 15);
             leafletMarkers[i]?.openPopup();
             highlightMapItem(i);
         }
@@ -361,7 +361,7 @@
                 ${photo.focal_length?`<div class="modal-meta-row"><span class="label">Focal Length</span><span class="value">${photo.focal_length}mm</span></div>`:''}
                 ${photo.flash?`<div class="modal-meta-row"><span class="label">Flash</span><span class="value">${photo.flash}</span></div>`:''}
                 <div class="modal-meta-row"><span class="label">Date Taken</span><span class="value">${formatDate(photo.date_taken)}</span></div>
-                ${photo.latitude?`<div class="modal-meta-row"><span class="label">GPS</span><span class="value"><a href="${gpsLink}" target="_blank" style="color:#667eea;">${photo.latitude.toFixed(6)}, ${photo.longitude.toFixed(6)}</a></span></div>`:''}
+                ${photo.latitude?`<div class="modal-meta-row"><span class="label">GPS</span><span class="value"><a href="${gpsLink}" target="_blank" style="color:#667eea;">${parseFloat(photo.latitude).toFixed(6)}, ${parseFloat(photo.longitude).toFixed(6)}</a></span></div>`:''}
                 ${photo.altitude?`<div class="modal-meta-row"><span class="label">Altitude</span><span class="value">${photo.altitude}m</span></div>`:''}
                 ${photo.software?`<div class="modal-meta-row"><span class="label">Software</span><span class="value">${photo.software}</span></div>`:''}
                 ${photo.artist?`<div class="modal-meta-row"><span class="label">Artist</span><span class="value">${photo.artist}</span></div>`:''}
