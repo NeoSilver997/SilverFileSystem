@@ -885,8 +885,15 @@ app.get('/duplicates', (req, res) => {
   // Rebuild folder tree
   app.get('/api/rebuild-folder-tree', requireAuth, requireAdmin, async (req, res) => {
     try {
-      await db.rebuildFolderTree();
-      res.json({ success: true, message: 'Folder tree rebuilt' });
+      const { folderId } = req.query;
+      if (folderId) {
+        // Quick rebuild: just refresh stats for this folder + ancestors
+        await db.refreshFolderStats(parseInt(folderId));
+        res.json({ success: true, message: 'Folder stats refreshed' });
+      } else {
+        await db.rebuildFolderTree();
+        res.json({ success: true, message: 'Folder tree rebuilt' });
+      }
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -3272,10 +3279,14 @@ app.post('/api/cli/execute', strictLimiter, async (req, res) => {
 async function checkDriveUsage() {
   try {
     if (!db || !db.connection) return;
-    const { stdout: output } = await execFileAsync('powershell', ['-NoProfile', '-Command',
+    const { stdout: output, stderr } = await execFileAsync('powershell', ['-NoProfile', '-Command',
       `Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,Size,FreeSpace | ConvertTo-Json`
-    ], { timeout: 10000 });
+    ], { timeout: 30000 });
     const cleaned = output.replace(/^\uFEFF/, '').trim();
+    if (!cleaned) {
+      console.warn('Drive usage: empty output from PowerShell', stderr ? stderr.substring(0, 200) : '');
+      return;
+    }
     let parsed = JSON.parse(cleaned);
     let drives = Array.isArray(parsed) ? parsed : [parsed];
     const fixedDrives = drives.filter(d => d && d.DriveType === 3 && d.DeviceID);

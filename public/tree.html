@@ -290,10 +290,11 @@
         }
 
         async function rebuildTree() {
-            if (!confirm('Rebuild folder tree? This may take a while.')) return;
+            if (!currentId) return alert('Navigate to a folder first.');
             showLoading();
             try {
-                const res = await authFetch('/api/rebuild-folder-tree');
+                const url = `/api/rebuild-folder-tree?folderId=${currentId}`;
+                const res = await authFetch(url);
                 const data = await res.json();
                 if (data.success) {
                     loadTree(currentPath);
