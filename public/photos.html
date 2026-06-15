@@ -122,7 +122,7 @@
             <select id="modelFilter" class="filter-btn" onchange="loadPhotos()"><option value="">All Models</option></select>
         </div>
         <label class="dup-toggle"><input type="checkbox" id="hideDuplicates" checked onchange="loadPhotos()"> Hide Duplicates</label>
-        <button onclick="deleteAllFiltered()" style="padding:0.4rem 0.8rem;background:rgba(231,76,60,0.2);color:#e74c3c;border:1px solid rgba(231,76,60,0.4);border-radius:4px;cursor:pointer;font-size:0.8rem;">🗑 Delete All</button>
+        <button onclick="deleteAllDuplicates()" style="padding:0.4rem 0.8rem;background:rgba(231,76,60,0.2);color:#e74c3c;border:1px solid rgba(231,76,60,0.4);border-radius:4px;cursor:pointer;font-size:0.8rem;">🗑 Delete All Duplicates</button>
         <button onclick="backupAllFiltered()" style="padding:0.4rem 0.8rem;background:rgba(39,174,96,0.2);color:#27ae60;border:1px solid rgba(39,174,96,0.4);border-radius:4px;cursor:pointer;font-size:0.8rem;">💾 Backup All</button>
         <div class="view-toggle">
             <button class="view-btn active" data-view="grid">Grid</button>
@@ -390,24 +390,24 @@
             } catch (err) { alert('Delete failed: '+err.message); }
         }
 
-        async function deleteAllFiltered() {
-            const ids = allPhotos.map(p => p.id);
-            if (ids.length === 0) return alert('No photos to delete.');
-            if (!confirm(`Delete ALL ${ids.length} displayed photos permanently from disk and database?`)) return;
+        async function deleteAllDuplicates() {
+            const dups = allPhotosData.filter(p => p.is_duplicate);
+            if (dups.length === 0) return alert('No duplicate photos found.');
+            if (!confirm(`Delete ALL ${dups.length} duplicate photos permanently?`)) return;
             let deleted = 0, errors = 0;
-            for (const id of ids) {
+            for (const p of dups) {
                 try {
-                    const res = await authFetch('/api/photos/'+id, { method: 'DELETE' });
+                    const res = await authFetch('/api/photos/'+p.id, { method: 'DELETE' });
                     const data = await res.json();
                     if (data.success) deleted++; else errors++;
                 } catch (_) { errors++; }
             }
-            allPhotosData = allPhotosData.filter(p => !ids.includes(p.id));
-            allPhotos = [];
-            document.getElementById('totalPhotos').textContent = '0';
+            allPhotosData = allPhotosData.filter(p => !p.is_duplicate);
+            allPhotos = document.getElementById('hideDuplicates').checked ? allPhotosData : allPhotosData;
+            document.getElementById('totalPhotos').textContent = allPhotos.length;
             document.getElementById('hiddenCount').textContent = '0';
             renderGrid(true);
-            alert(`Done: ${deleted} deleted, ${errors} errors`);
+            alert(`Done: ${deleted} duplicates deleted, ${errors} errors`);
         }
 
         function backupAllFiltered() {
