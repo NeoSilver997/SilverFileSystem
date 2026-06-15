@@ -148,6 +148,14 @@ const duplicates = await finder.findDuplicates(['/path']);
 - ✅ Proper error handling for permission issues
 - ✅ Safe file operations (no write/delete operations)
 - ✅ Input validation on all commands
+- ✅ JWT authentication with token expiration (24h)
+- ✅ Rate limiting on API endpoints (100 req/15min) and auth endpoints (10 req/15min)
+- ✅ `cookie-parser` middleware for cookie-based auth (enables `<img>`/`<audio>`/`<video>` tags to authenticate)
+- ✅ `trust proxy` support for proper HTTPS detection behind reverse proxies
+- ✅ Permissions cache (30s TTL) to reduce DB load while keeping changes near-realtime
+- ✅ Media data caching (2min TTL) for photos/music/movies endpoints
+- ✅ CORS configured with credentials support
+- ✅ Admin-only middleware for user management endpoints
 
 ## Testing
 

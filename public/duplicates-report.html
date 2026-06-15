@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Duplicate Analysis Report - SilverFileSystem</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f0f; color: #e0e0e0; }
+        .header { background: linear-gradient(135deg, #141e30 0%, #243b55 100%); padding: 0.5rem 1rem; display: flex; align-items: center; gap: 1rem; }
+        .header h1 { font-size: 1.5rem; font-weight: 700; }
+        .header .back { color: #667eea; cursor: pointer; text-decoration: none; font-size: 0.9rem; }
+        .container { padding: 1rem; max-width: 1400px; margin: 0 auto; }
+        .section { background: #1a1a1a; border-radius: 10px; padding: 1rem; margin-bottom: 1rem; border: 1px solid #2a2a2a; }
+        .section h2 { font-size: 1.2rem; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+        .stat-card { background: #222; border-radius: 8px; padding: 0.75rem; text-align: center; }
+        .stat-value { font-size: 1.5rem; font-weight: bold; color: #667eea; }
+        .stat-label { font-size: 0.8rem; opacity: 0.6; }
+        .stat-warn { color: #e74c3c; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th { text-align: left; padding: 0.5rem; background: #222; font-weight: 600; opacity: 0.8; position: sticky; top: 0; }
+        td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #1f1f1f; }
+        tr:hover { background: #222; }
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        .bar { height: 8px; background: #333; border-radius: 4px; overflow: hidden; margin-top: 2px; }
+        .bar-fill { height: 100%; border-radius: 4px; }
+        .bar-drive { background: linear-gradient(90deg, #667eea, #764ba2); }
+        .bar-waste { background: linear-gradient(90deg, #e74c3c, #c0392b); }
+        .folder-link { color: #667eea; cursor: pointer; text-decoration: none; }
+        .folder-link:hover { text-decoration: underline; }
+        .group-card { background: #222; border-radius: 8px; margin-bottom: 0.5rem; overflow: hidden; }
+        .group-header { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0.75rem; cursor: pointer; }
+        .group-header:hover { background: #2a2a2a; }
+        .group-files { display: none; border-top: 1px solid #2a2a2a; }
+        .group-files.open { display: block; }
+        .file-item { display: flex; gap: 0.5rem; padding: 0.3rem 0.75rem; font-size: 0.8rem; border-bottom: 1px solid #1f1f1f; align-items: baseline; }
+        .file-item:last-child { border-bottom: none; }
+        .file-name { font-weight: 500; white-space: nowrap; }
+        .file-path { opacity: 0.5; font-size: 0.75rem; word-break: break-all; line-height: 1.3; }
+        .file-folder { color: #667eea; font-size: 0.75rem; white-space: nowrap; }
+        .dup-mark { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 0.3rem; vertical-align: middle; }
+        .dup-mark-high { background: #e74c3c; }
+        .dup-mark-med { background: #f39c12; }
+        .dup-mark-low { background: #27ae60; }
+        .badge { display: inline-block; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.75rem; font-weight: 600; }
+        .badge-count { background: rgba(102,126,234,0.2); color: #667eea; }
+        .badge-waste { background: rgba(231,76,60,0.2); color: #e74c3c; }
+        .loading { text-align: center; padding: 3rem; opacity: 0.5; }
+        .note { background: rgba(255,193,7,0.1); border: 1px solid rgba(255,193,7,0.3); border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; font-size: 0.85rem; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a href="/" class="back">Dashboard</a>
+        <h1>📊 Duplicate Analysis Report</h1>
+    </div>
+    <div class="container">
+        <div class="note">
+            ⚠️ Only 9,843 of 4.1M files have been hashed. Run <code>silverfs update-hashes-db --db</code> to hash more files for better duplicate detection.
+            <br>H: and P: are primary file locations.
+        </div>
+        <div id="content"><div class="loading">Loading report...</div></div>
+    </div>
+
+    <script src="/auth.js"></script>
+    <script>
+        let allGroups = [];
+        let sortField = 'wasted';
+        let sortDir = -1;
+        let filterExt = '';
+
+        function formatBytes(b) {
+            if (!b) return '0 B';
+            const k = 1024, s = ['B','KB','MB','GB','TB'];
+            const i = Math.floor(Math.log(b) / Math.log(k));
+            return (b / Math.pow(k, i)).toFixed(1) + ' ' + s[i];
+        }
+
+        async function loadReport() {
+            try {
+                const res = await authFetch('/api/duplicates/report?limit=2000');
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                allGroups = data.topGroups;
+                renderReport(data);
+            } catch (err) {
+                document.getElementById('content').innerHTML = `<div class="loading">Error: ${err.message}</div>`;
+            }
+        }
+
+        function renderReport(data) {
+            const { summary, driveReport, folderReport } = data;
+            let html = '';
+
+            // Summary stats
+            html += `<div class="stats-grid">
+                <div class="stat-card"><div class="stat-value">${summary.totalGroups}</div><div class="stat-label">Duplicate Groups</div></div>
+                <div class="stat-card"><div class="stat-value">${summary.totalDupFiles}</div><div class="stat-label">Duplicate Files</div></div>
+                <div class="stat-card"><div class="stat-value stat-warn">${summary.totalWastedFormatted}</div><div class="stat-label">Wasted Space</div></div>
+                <div class="stat-card"><div class="stat-value">${summary.hashCoverage.hashed.toLocaleString()}</div><div class="stat-label">Files Hashed</div></div>
+            </div>`;
+
+            // Drive breakdown
+            const maxDriveWaste = Math.max(...driveReport.map(d => d.wasted), 1);
+            html += `<div class="section"><h2>💾 Duplicates by Drive</h2>
+                <table><thead><tr><th>Drive</th><th class="num">Files</th><th class="num">Groups</th><th class="num">Wasted</th><th>Bar</th></tr></thead>
+                <tbody>${driveReport.map(d => {
+                    const pct = (d.wasted / maxDriveWaste * 100).toFixed(0);
+                    const isPrimary = ['H:', 'P:'].includes(d.drive);
+                    return `<tr${isPrimary ? ' style="background:rgba(102,126,234,0.05)"' : ''}>
+                        <td><strong>${d.drive}</strong>${isPrimary ? ' ⭐' : ''}</td>
+                        <td class="num">${d.files.toLocaleString()}</td>
+                        <td class="num">${d.groups.toLocaleString()}</td>
+                        <td class="num">${d.wastedFormatted}</td>
+                        <td><div class="bar"><div class="bar-drive" style="width:${pct}%"></div></div></td>
+                    </tr>`;
+                }).join('')}</tbody></table></div>`;
+
+            // Top folders with most duplicates
+            const maxFolderWaste = Math.max(...folderReport.map(f => f.wasted), 1);
+            const maxFolderGroups = Math.max(...folderReport.map(f => f.groups), 1);
+            html += `<div class="section"><h2>📁 Top Folders by Wasted Space</h2>
+                <table><thead><tr><th>#</th><th></th><th>Folder</th><th class="num">Files</th><th class="num">Groups</th><th class="num">Wasted</th><th>Bar</th></tr></thead>
+                <tbody>${folderReport.map((f, i) => {
+                    const pct = (f.wasted / maxFolderWaste * 100).toFixed(0);
+                    const groupPct = f.groups / maxFolderGroups;
+                    const markClass = groupPct > 0.5 ? 'dup-mark-high' : groupPct > 0.2 ? 'dup-mark-med' : 'dup-mark-low';
+                    return `<tr>
+                        <td>${i + 1}</td>
+                        <td><span class="dup-mark ${markClass}" title="${f.groups} duplicate groups"></span></td>
+                        <td><a class="folder-link" href="/tree?id=${f.folderId || ''}" title="${f.name}">${f.name}</a></td>
+                        <td class="num">${f.files.toLocaleString()}</td>
+                        <td class="num">${f.groups.toLocaleString()}</td>
+                        <td class="num">${f.wastedFormatted}</td>
+                        <td><div class="bar"><div class="bar-waste" style="width:${pct}%"></div></div></td>
+                    </tr>`;
+                }).join('')}</tbody></table></div>`;
+
+            // Sort/filter controls + groups
+            const exts = [...new Set(allGroups.flatMap(g => g.files.map(f => f.extension).filter(Boolean)))].sort();
+            html += `<div class="section"><h2>🔍 Duplicate Groups</h2>
+                <div style="display:flex;gap:0.75rem;align-items:center;margin-bottom:0.75rem;flex-wrap:wrap;">
+                    <label style="font-size:0.85rem;opacity:0.7;">Sort:</label>
+                    <button onclick="sortGroups('wasted')" style="padding:0.3rem 0.6rem;background:${sortField==='wasted'?'#667eea':'#333'};color:white;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem;">Wasted ▼</button>
+                    <button onclick="sortGroups('count')" style="padding:0.3rem 0.6rem;background:${sortField==='count'?'#667eea':'#333'};color:white;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem;">Copies ▼</button>
+                    <button onclick="sortGroups('size')" style="padding:0.3rem 0.6rem;background:${sortField==='size'?'#667eea':'#333'};color:white;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem;">Size ▼</button>
+                    <label style="font-size:0.85rem;opacity:0.7;margin-left:0.5rem;">Filter ext:</label>
+                    <select onchange="filterExt=this.value;renderGroups()" style="padding:0.3rem;background:#222;color:white;border:1px solid #444;border-radius:4px;font-size:0.8rem;">
+                        <option value="">All</option>
+                        ${exts.map(e => `<option value="${e}" ${filterExt===e?'selected':''}>${e}</option>`).join('')}
+                    </select>
+                    <button onclick="generateDeleteScript()" style="padding:0.4rem 0.8rem;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem;margin-left:auto;">🗑️ Generate Delete Script (>3 copies, excl. NAS/Backup)</button>
+                    <span style="opacity:0.5;font-size:0.8rem;" id="groupCount"></span>
+                </div>
+                <div id="groupsList"></div>
+            </div>`;
+
+            document.getElementById('content').innerHTML = html;
+            renderGroups();
+        }
+
+        function sortGroups(field) {
+            if (sortField === field) sortDir *= -1;
+            else { sortField = field; sortDir = -1; }
+            renderGroups();
+        }
+
+        function renderGroups() {
+            let groups = [...allGroups];
+            if (filterExt) {
+                groups = groups.filter(g => g.files.some(f => f.extension === filterExt));
+            }
+            groups.sort((a, b) => {
+                let va, vb;
+                if (sortField === 'wasted') { va = a.wasted; vb = b.wasted; }
+                else if (sortField === 'count') { va = a.count; vb = b.count; }
+                else { va = a.size; vb = b.size; }
+                return sortDir * (vb - va);
+            });
+
+            document.getElementById('groupCount').textContent = `${groups.length} groups`;
+
+            const html = groups.map((g, i) => {
+                const filesHtml = g.files.map(f => `
+                    <div class="file-item">
+                        <span class="file-folder"><a class="folder-link" href="/tree?id=${f.folderId || ''}">${f.folderName || ''}</a></span>
+                        <span class="file-name">${f.name}</span>
+                        <span class="file-path">${f.path}</span>
+                    </div>
+                `).join('');
+                return `<div class="group-card">
+                    <div class="group-header" onclick="this.nextElementSibling.classList.toggle('open')">
+                        <div><span class="badge badge-count">${g.count} copies</span> <span class="badge badge-waste">${g.wastedFormatted} wasted</span> <span class="file-ext">${g.files[0]?.extension || '?'}</span></div>
+                        <span style="opacity:0.5;font-size:0.8rem;">${g.sizeFormatted} each ▶</span>
+                    </div>
+                    <div class="group-files">${filesHtml}</div>
+                </div>`;
+            }).join('');
+
+            document.getElementById('groupsList').innerHTML = html || '<div class="empty">No groups match filter</div>';
+        }
+
+        function generateDeleteScript() {
+            const excludePatterns = ['D:\\NAS_SYNC', 'D:\\NAS_Sync', 'H:\\', 'E:\\NAS_SYNC', 'E:\\NAS_Sync'];
+            const isExcluded = (path) => excludePatterns.some(p => path.toUpperCase().startsWith(p.toUpperCase()));
+
+            let groups = [...allGroups];
+            if (filterExt) groups = groups.filter(g => g.files.some(f => f.extension === filterExt));
+
+            const eligible = groups.filter(g => g.count > 3);
+            if (eligible.length === 0) {
+                alert('No duplicate groups with more than 3 copies found.');
+                return;
+            }
+
+            let script = '# SilverFileSystem Duplicate Delete Script\n';
+            script += `# Generated: ${new Date().toISOString()}\n`;
+            script += `# Groups: ${eligible.length} (files with >3 copies)\n`;
+            script += `# Excluded drives: D:\\NAS_SYNC, H:\\, E:\\NAS_SYNC\n`;
+            script += `# WARNING: Review carefully before running!\n\n`;
+            script += '$deleted = 0\n';
+            script += '$skipped = 0\n';
+            script += '$errors = 0\n\n';
+
+            let totalDeleteSize = 0;
+            let totalDeleteCount = 0;
+
+            for (const g of eligible) {
+                const files = g.files;
+                const excluded = files.filter(f => isExcluded(f.path));
+                const candidates = files.filter(f => !isExcluded(f.path));
+
+                if (candidates.length === 0) {
+                    script += `# SKIP group: ${g.files[0]?.name || '?'} (${g.count} copies, all on excluded drives)\n\n`;
+                    continue;
+                }
+
+                const keepCount = 1;
+                const deleteList = candidates.slice(keepCount);
+
+                if (deleteList.length === 0) {
+                    script += `# SKIP group: ${g.files[0]?.name || '?'} (${candidates.length} candidate(s), keeping all)\n\n`;
+                    continue;
+                }
+
+                script += `# Group: ${g.files[0]?.name || '?'} | ${g.count} copies | ${g.sizeFormatted} each | ${deleteList.length} to delete\n`;
+                script += `# Keep: ${files[0]?.path || '?'}\n`;
+                if (excluded.length > 0) {
+                    script += `# Excluded (on backup drives): ${excluded.length}\n`;
+                }
+                for (const f of deleteList) {
+                    const winPath = f.path.replace(/\//g, '\\');
+                    script += `if (Test-Path "${winPath}") { Remove-Item "${winPath}" -Force; $deleted++ } else { Write-Host "NOT FOUND: ${winPath}" }\n`;
+                    totalDeleteSize += g.size;
+                    totalDeleteCount++;
+                }
+                script += '\n';
+            }
+
+            script += `Write-Host "\nDone: Deleted=$deleted Skipped=$skipped Errors=$errors"\n`;
+            script += `Write-Host "Freed space: ~${formatBytes(totalDeleteSize)} (${totalDeleteCount} files)\n`;
+
+            const blob = new Blob([script], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `delete-duplicates-${new Date().toISOString().slice(0,10)}.ps1`;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            alert(`Generated delete script:\n- ${eligible.length} groups with >3 copies\n- ${totalDeleteCount} files to delete\n- ~${formatBytes(totalDeleteSize)} to free\n- Excluded: D:\\NAS_SYNC, H:\\, E:\\NAS_SYNC`);
+        }
+
+        loadReport();
+    </script>
+</body>
+</html>

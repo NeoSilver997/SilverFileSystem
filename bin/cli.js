@@ -337,6 +337,7 @@ program
   .option('--db-user <user>', `Database user (default: ${config.database.user})`)
   .option('--db-password <password>', 'Database password')
   .option('--db-name <name>', `Database name (default: ${config.database.database})`)
+  .option('--extract-media', 'Extract media metadata', false)
   .action(async (dirPath, options) => {
     const spinner = ora('Scanning directory...').start();
     let scanId = null;
@@ -426,6 +427,10 @@ program
         
         const totalSize = files.reduce((sum, file) => sum + file.size, 0);
         await db.completeScanSession(scanId, files.length, totalSize);
+        
+        // Rebuild folder tree
+        spinner.start('Rebuilding folder tree...');
+        await db.rebuildFolderTree();
       }
       
       spinner.succeed('Scan complete!');
@@ -912,6 +917,7 @@ program
       let processed = 0;
       let updated = 0;
       let errors = 0;
+      let deleted = 0;
       let skippedLarge = 0;
       
       for (const file of files) {
@@ -950,22 +956,32 @@ program
           processed++;
           spinner.text = `Processing ${processed}/${files.length} - Updated: ${updated}, Errors: ${errors} (${hashMethod})`;
         } catch (err) {
-          errors++;
+          if (err.code === 'ENOENT') {
+            deleted++;
+            await db.archiveDeletedFiles([{ id: file.id, name: file.path?.split(/[/\\]/).pop(), path: file.path }], 'update-hashes');
+            await db.deleteFile(file.id);
+            console.warn(chalk.red(`\nDeleted (not found): ${file.path}`));
+          } else {
+            errors++;
+            console.warn(chalk.yellow(`\nWarning: ${file.path}: ${err.message}`));
+          }
           processed++;
-          spinner.text = `Processing ${processed}/${files.length} - Updated: ${updated}, Errors: ${errors} (${hashMethod})`;
-          console.warn(chalk.yellow(`\nWarning: ${file.path}: ${err.message}`));
+          spinner.text = `Processing ${processed}/${files.length} - Updated: ${updated}, Deleted: ${deleted}, Errors: ${errors} (${hashMethod})`;
         }
       }
       
       spinner.succeed('Hash update complete!');
       
       console.log(chalk.green(`\n✓ Updated ${updated} file hashes (${hashMethod} method)`));
+      if (deleted > 0) {
+        console.log(chalk.red(`✗ Deleted ${deleted} missing files from database`));
+      }
       if (useSmart) {
         console.log(chalk.cyan(`ℹ Smart optimization: Only hashed files with same size (potential duplicates)`));
         console.log(chalk.cyan(`  Use --no-smart to hash all files, or --stats to see optimization impact`));
       }
       if (errors > 0) {
-        console.log(chalk.yellow(`⚠ ${errors} files had errors (file not found or read error)`));
+        console.log(chalk.yellow(`⚠ ${errors} files had errors (read permission or other issues)`));
       }
       
       await db.close();
@@ -1568,6 +1584,43 @@ program
       console.error(chalk.red(`Error: ${err.message}`));
       await closeDatabase();
       process.exit(1);
+    }
+  });
+
+// Rebuild folder tree command
+program
+  .command('rebuild-folder-tree')
+  .description('Rebuild the folder_tree table from scanned_files')
+  .option('--db', 'Use database')
+  .option('--db-host <host>', 'Database host')
+  .option('--db-port <port>', 'Database port')
+  .option('--db-user <user>', 'Database user')
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', 'Database name')
+  .action(async (options) => {
+    await initDatabase(options);
+    
+    if (!dbManager) {
+      console.error(chalk.red('Database connection required. Use --db flag.'));
+      process.exit(1);
+    }
+    
+    const spinner = ora('Rebuilding folder tree...').start();
+    
+    try {
+      await dbManager.rebuildFolderTree();
+      spinner.succeed('Folder tree rebuilt successfully!');
+      
+      const [count] = await dbManager.connection.query('SELECT COUNT(*) as c FROM folder_tree');
+      const [drives] = await dbManager.connection.query('SELECT COUNT(*) as c FROM folder_tree WHERE depth = 1');
+      console.log(chalk.cyan(`  📁 ${count[0].c.toLocaleString()} folders indexed`));
+      console.log(chalk.cyan(`  💾 ${drives[0].c} drives`));
+      
+      await dbManager.close();
+    } catch (err) {
+      spinner.fail('Rebuild failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      await closeDatabase();
     }
   });
 

@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backup Analysis - SilverFileSystem</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f0f; color: #e0e0e0; }
+        .header { background: linear-gradient(135deg, #141e30 0%, #243b55 100%); padding: 0.5rem 1rem; display: flex; align-items: center; gap: 1rem; }
+        .header h1 { font-size: 1.5rem; font-weight: 700; }
+        .header .back { color: #667eea; cursor: pointer; text-decoration: none; font-size: 0.9rem; }
+        .controls { background: #1a1a1a; padding: 0.75rem 1rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; border-bottom: 1px solid #2a2a2a; }
+        .controls button { padding: 0.4rem 1rem; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
+        .controls button:hover { background: #5568d3; }
+        .container { padding: 1rem; max-width: 1400px; margin: 0 auto; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+        .stat-card { background: #1a1a1a; border-radius: 10px; padding: 0.75rem; text-align: center; border: 1px solid #2a2a2a; }
+        .stat-value { font-size: 1.4rem; font-weight: bold; color: #667eea; }
+        .stat-label { font-size: 0.8rem; opacity: 0.6; }
+        .stat-ok { color: #27ae60; }
+        .stat-warn { color: #e74c3c; }
+        .section { background: #1a1a1a; border-radius: 10px; padding: 1rem; margin-bottom: 1rem; border: 1px solid #2a2a2a; }
+        .section h2 { font-size: 1.1rem; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem; }
+        .tabs { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
+        .tab { padding: 0.4rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; background: #333; color: #aaa; border: none; }
+        .tab.active { background: #667eea; color: white; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th { text-align: left; padding: 0.5rem; background: #222; font-weight: 600; opacity: 0.8; position: sticky; top: 0; }
+        td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #1f1f1f; }
+        tr:hover { background: #222; }
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        .file-name { font-weight: 500; }
+        .file-path { opacity: 0.5; font-size: 0.75rem; word-break: break-all; }
+        .copy-badge { background: rgba(39,174,96,0.2); color: #27ae60; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.75rem; }
+        .unique-badge { background: rgba(231,76,60,0.2); color: #e74c3c; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.75rem; }
+        .unknown-badge { background: rgba(255,193,7,0.2); color: #ffc107; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.75rem; }
+        .copy-detail { font-size: 0.75rem; opacity: 0.6; padding-left: 1rem; }
+        .thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; background: #222; }
+        .no-thumb { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: #222; border-radius: 4px; font-size: 1.2rem; }
+        .loading { text-align: center; padding: 3rem; opacity: 0.5; }
+        .empty { text-align: center; padding: 2rem; opacity: 0.4; }
+        .progress-bar { position: fixed; top: 0; left: 0; height: 3px; background: #667eea; z-index: 999; transition: width 0.3s; display: none; }
+    </style>
+</head>
+<body>
+    <div class="progress-bar" id="progressBar"></div>
+    <div class="header">
+        <a href="/" class="back">Dashboard</a>
+        <h1>📱 Backup Analysis</h1>
+    </div>
+    <div class="controls">
+        <button onclick="loadAnalysis()">🔍 Analyze</button>
+        <div style="display:flex;gap:0.3rem;align-items:center;margin-left:0.5rem;">
+            <input type="text" id="refreshFolder" placeholder="e.g. D:\Photo\JennyiPhone\114APPLE"
+                style="width:280px;padding:0.3rem;background:#222;border:1px solid #444;border-radius:4px;color:white;font-size:0.8rem;">
+            <select id="refreshMode" style="padding:0.3rem;background:#222;border:1px solid #444;border-radius:4px;color:white;font-size:0.8rem;">
+                <option value="has-copy">Has Copy Only</option>
+                <option value="all">All Files</option>
+            </select>
+            <button onclick="refreshDeleted()" style="background:#e67e22;">🔄 Refresh & Mark Deleted</button>
+        </div>
+        <span id="statusText" style="opacity:0.5; font-size:0.85rem;"></span>
+    </div>
+    <div class="container">
+        <div id="content"><div class="loading">Click Analyze to start</div></div>
+    </div>
+
+    <!-- Lightbox -->
+    <div id="lightbox" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.95);z-index:9999;align-items:center;justify-content:center;">
+        <div style="position:absolute;top:20px;right:20px;font-size:2rem;color:white;cursor:pointer;" onclick="closeLightbox()">✕</div>
+        <img id="lightboxImg" style="max-width:90vw;max-height:90vh;object-fit:contain;">
+        <div id="lightboxInfo" style="position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.7);color:white;padding:0.5rem 1rem;border-radius:8px;text-align:center;font-size:0.85rem;"></div>
+    </div>
+
+    <script src="/auth.js"></script>
+    <script>
+        let currentTab = 'withCopy';
+        let showCount = 50;
+
+        function showLoading() {
+            document.getElementById('progressBar').style.display = 'block';
+            document.getElementById('progressBar').style.width = '70%';
+        }
+        function hideLoading() {
+            document.getElementById('progressBar').style.width = '100%';
+            setTimeout(() => { document.getElementById('progressBar').style.display = 'none'; }, 300);
+        }
+
+        function formatBytes(b) {
+            if (!b) return '0 B';
+            const k = 1024, s = ['B','KB','MB','GB','TB'];
+            const i = Math.floor(Math.log(b) / Math.log(k));
+            return (b / Math.pow(k, i)).toFixed(1) + ' ' + s[i];
+        }
+
+        function getFileIcon(ext) {
+            if (!ext) return '📄';
+            ext = ext.toLowerCase();
+            if (['mp3','flac','wav','aac','ogg','m4a'].includes(ext)) return '🎵';
+            if (['mp4','mkv','avi','mov','webm'].includes(ext)) return '🎬';
+            if (['zip','rar','7z','tar'].includes(ext)) return '📦';
+            if (['safetensors','gguf','pt','ckpt','lora','onnx'].includes(ext)) return '🤖';
+            if (['exe','msi','app'].includes(ext)) return '💻';
+            return '📄';
+        }
+
+        function isImage(ext) {
+            return ['jpg','jpeg','png','gif','bmp','webp','heic','avif','tiff'].includes((ext||'').toLowerCase());
+        }
+
+        function openImage(id, name) {
+            document.getElementById('lightboxImg').src = `/images/${id}`;
+            document.getElementById('lightboxInfo').textContent = name;
+            document.getElementById('lightbox').style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeLightbox() {
+            document.getElementById('lightbox').style.display = 'none';
+            document.body.style.overflow = '';
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeLightbox();
+        });
+
+        async function refreshDeleted() {
+            const raw = document.getElementById('refreshFolder').value.trim();
+            if (!raw) return alert('Enter a folder path first.');
+            const folder = toLikePattern(raw);
+            const mode = document.getElementById('refreshMode').value;
+            const modeText = mode === 'has-copy' ? 'has-copy files' : 'all files';
+            if (!confirm(`Check ${modeText} in "${raw}" against disk and remove missing?`)) return;
+            showLoading();
+            document.getElementById('statusText').textContent = 'Checking files against disk...';
+            try {
+                const res = await authFetch('/api/mark-deleted', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder, mode })
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                document.getElementById('statusText').textContent = `Removed ${data.deleted} deleted files, kept ${data.kept} (${data.total} total)`;
+                loadAnalysis();
+            } catch (err) {
+                document.getElementById('statusText').textContent = `Error: ${err.message}`;
+            }
+            hideLoading();
+        }
+
+        function toLikePattern(input) {
+            if (!input) return '%';
+            let p = input.replace(/\\/g, '/').replace(/\/+$/, '');
+            if (p.includes('%') || p.includes('_')) return p;
+            return p + '/%';
+        }
+
+        async function loadAnalysis() {
+            showLoading();
+            document.getElementById('statusText').textContent = 'Scanning backup files...';
+            showCount = 50;
+            const raw = document.getElementById('refreshFolder').value.trim();
+            const folder = raw ? toLikePattern(raw) : '%';
+            try {
+                const res = await authFetch(`/api/backup-analysis?folder=${encodeURIComponent(folder)}&limit=500`);
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                renderAnalysis(data);
+            } catch (err) {
+                document.getElementById('content').innerHTML = `<div class="loading">Error: ${err.message}</div>`;
+            }
+            hideLoading();
+        }
+
+        function renderAnalysis(data) {
+            const { summary, withCopy, withoutCopy } = data;
+            let html = '';
+
+            html += `<div class="stats-grid">
+                <div class="stat-card"><div class="stat-value">${summary.totalFiles.toLocaleString()}</div><div class="stat-label">Total Files</div></div>
+                <div class="stat-card"><div class="stat-value">${summary.hashed.toLocaleString()}</div><div class="stat-label">Hashed</div></div>
+                <div class="stat-card"><div class="stat-value">${summary.unhashed.toLocaleString()}</div><div class="stat-label">Unhashed</div></div>
+                <div class="stat-card"><div class="stat-value stat-ok">${summary.withCopy.toLocaleString()}</div><div class="stat-label">Has Copy Elsewhere</div></div>
+                <div class="stat-card"><div class="stat-value stat-warn">${summary.withoutCopy.toLocaleString()}</div><div class="stat-label">Unique to Backup</div></div>
+                <div class="stat-card"><div class="stat-value">${summary.wastedFormatted}</div><div class="stat-label">Wasted by Copies</div></div>
+            </div>`;
+
+            html += `<div class="section">
+                <div class="tabs">
+                    <button class="tab ${currentTab==='withCopy'?'active':''}" onclick="switchTab('withCopy')">✅ Has Copy (${withCopy.length})</button>
+                    <button class="tab ${currentTab==='withoutCopy'?'active':''}" onclick="switchTab('withoutCopy')">⚠️ Unique (${withoutCopy.length})</button>
+                    <button class="tab ${currentTab==='unknown'?'active':''}" onclick="switchTab('unknown')">❓ Unknown (${summary.unhashed})</button>
+                    <button onclick="exportWithCopy()" style="margin-left:auto;padding:0.3rem 0.8rem;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem;">📋 Export Has-Copy List</button>
+                    <button onclick="generateDeleteScript()" style="padding:0.3rem 0.8rem;background:#f39c12;color:white;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem;">🗑️ Generate Delete Script</button>
+                </div>
+                <div id="fileList"></div>
+            </div>`;
+
+            document.getElementById('content').innerHTML = html;
+            renderFileList(withCopy, withoutCopy, summary.unhashed);
+        }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            const data = window._lastData;
+            if (data) renderFileList(data.withCopy, data.withoutCopy, data.summary.unhashed);
+        }
+
+        function renderFileList(withCopy, withoutCopy, unhashedCount) {
+            const el = document.getElementById('fileList');
+            if (currentTab === 'withCopy') {
+                if (withCopy.length === 0) { el.innerHTML = '<div class="empty">All files have copies elsewhere</div>'; return; }
+                el.innerHTML = `<table><thead><tr><th></th><th>Name</th><th>Size</th><th>Ext</th><th>Copies</th><th>Locations</th></tr></thead>
+                <tbody>${withCopy.map(f => {
+                    const locs = f.copyLocations.map(l => l.folder).join(', ');
+                    const imgClick = isImage(f.extension) ? `onclick="event.stopPropagation();openImage(${f.id},'${f.name.replace(/'/g, "\\'")}')"` : '';
+                    return `<tr style="cursor:pointer;" ${imgClick} onclick="${!imgClick ? `window.open('file:///${f.path.replace(/\\\\/g, '/')}', '_blank')` : ''}">
+                        <td><span class="copy-badge">✓</span></td>
+                        <td class="file-name" title="${f.path}">${f.name}</td>
+                        <td class="num">${f.sizeFormatted}</td>
+                        <td>${f.extension || '-'}</td>
+                        <td class="num">${f.copies}</td>
+                        <td class="copy-detail" title="${locs}">${locs}</td>
+                    </tr>`;
+                }).join('')}</tbody></table>`;
+            } else if (currentTab === 'withoutCopy') {
+                if (withoutCopy.length === 0) { el.innerHTML = '<div class="empty">All hashed files have copies elsewhere</div>'; return; }
+                el.innerHTML = `<table><thead><tr><th></th><th>Name</th><th>Size</th><th>Ext</th></tr></thead>
+                <tbody>${withoutCopy.map(f => {
+                    const imgClick = isImage(f.extension) ? `onclick="event.stopPropagation();openImage(${f.id},'${(f.name||'').replace(/'/g, "\\'")}')"` : '';
+                    return `<tr style="cursor:pointer;" ${imgClick} onclick="${!imgClick ? `window.open('file:///${(f.path||'').replace(/\\\\/g, '/')}', '_blank')` : ''}">
+                        <td><span class="unique-badge">⚠</span></td>
+                        <td class="file-name" title="${f.path || f.name}">${f.name}</td>
+                        <td class="num">${f.sizeFormatted}</td>
+                        <td>${f.extension || '-'}</td>
+                    </tr>`;
+                }).join('')}</tbody></table>`;
+            } else {
+                const minSizeMB = parseFloat(document.getElementById('minSizeFilter')?.value || '1');
+                const minSize = minSizeMB * 1024 * 1024;
+                const extFilter = document.getElementById('extFilter')?.value || '';
+                const allUnhashed = window._lastData?.unhashed || [];
+                let filtered = allUnhashed.filter(f => f.size >= minSize);
+                if (extFilter) filtered = filtered.filter(f => (f.extension || '').toLowerCase() === extFilter.toLowerCase());
+                const exts = [...new Set(allUnhashed.map(f => f.extension).filter(Boolean))].sort();
+                const displayed = filtered.slice(0, showCount);
+
+                el.innerHTML = `
+                    <div style="margin-bottom:0.75rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+                        <span class="unknown-badge">❓ ${unhashedCount.toLocaleString()} files not hashed</span>
+                        <label style="font-size:0.8rem;opacity:0.7;margin-left:0.5rem;">Min:</label>
+                        <input type="number" id="minSizeFilter" value="${minSizeMB}" min="0"
+                            onchange="showCount=50;renderFileList(window._lastData.withCopy, window._lastData.withoutCopy, window._lastData.summary.unhashed)"
+                            style="width:70px;padding:0.3rem;background:#222;border:1px solid #444;border-radius:4px;color:white;font-size:0.8rem;">
+                        <span style="font-size:0.8rem;opacity:0.5;">MB</span>
+                        <label style="font-size:0.8rem;opacity:0.7;margin-left:0.5rem;">Ext:</label>
+                        <select id="extFilter" onchange="showCount=50;renderFileList(window._lastData.withCopy, window._lastData.withoutCopy, window._lastData.summary.unhashed)"
+                            style="padding:0.3rem;background:#222;border:1px solid #444;border-radius:4px;color:white;font-size:0.8rem;">
+                            <option value="">All</option>
+                            ${exts.map(e => `<option value="${e}" ${extFilter===e?'selected':''}>${e}</option>`).join('')}
+                        </select>
+                        <span style="font-size:0.8rem;opacity:0.5;margin-left:auto;">${displayed.length} / ${filtered.length}</span>
+                    </div>
+                    ${filtered.length === 0 ? '<div class="empty">No files match filter</div>' :
+                    `<table><thead><tr><th></th><th>Name</th><th>Size</th><th>Ext</th></tr></thead>
+                    <tbody>${displayed.map(f => `
+                        <tr style="cursor:pointer;" onclick="window.open('file:///${f.path.replace(/\\\\/g, '/')}', '_blank')">
+                            <td><span class="unknown-badge">❓</span></td>
+                            <td class="file-name" title="${f.path}">${f.name}</td>
+                            <td class="num">${f.sizeFormatted}</td>
+                            <td>${f.extension || '-'}</td>
+                        </tr>
+                    `).join('')}</tbody></table>
+                    ${filtered.length > showCount ? `<div style="text-align:center;padding:1rem;"><button onclick="showCount+=50;renderFileList(window._lastData.withCopy, window._lastData.withoutCopy, window._lastData.summary.unhashed)" style="padding:0.5rem 1.5rem;background:#333;color:white;border:1px solid #555;border-radius:6px;cursor:pointer;">Load More (${filtered.length - showCount} remaining)</button></div>` : ''}`}`;
+            }
+        }
+
+        // Store data for tab switching
+        const origRender = renderAnalysis;
+        renderAnalysis = function(data) {
+            window._lastData = data;
+            origRender(data);
+        };
+
+        function exportWithCopy() {
+            const data = window._lastData;
+            if (!data) return;
+            const lines = ['Name,Size,Extension,Copies,Locations'];
+            for (const f of data.withCopy) {
+                const locs = (f.copyLocations || []).map(l => (l.path || l.folder || '').replace(/\//g, '\\')).join(' | ');
+                const winPath = (f.path || '').replace(/\//g, '\\');
+                lines.push(`"${f.name}",${f.size},"${f.extension || ''}",${f.copies},"${locs}","${winPath}"`);
+            }
+            const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'backup-has-copy.csv';
+            a.click();
+        }
+
+        function generateDeleteScript() {
+            const data = window._lastData;
+            if (!data) return;
+            let script = '# Backup files that have copies elsewhere\n# Generated by SilverFileSystem\n# Review before running!\n\n';
+            for (const f of data.withCopy) {
+                const winPath = f.path.replace(/\//g, '\\');
+                script += `# ${f.name} (${f.sizeFormatted}) - ${f.copies} copies elsewhere\n`;
+                script += `Remove-Item -LiteralPath "${winPath}" -Force\n`;
+            }
+            const blob = new Blob([script], { type: 'text/plain' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'delete-backup-copies.ps1';
+            a.click();
+        }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlFolder = urlParams.get('folder');
+        if (urlFolder) {
+            document.getElementById('refreshFolder').value = urlFolder;
+        }
+        loadAnalysis();
+    </script>
+</body>
+</html>

@@ -501,11 +501,45 @@
             <button class="filter-btn" data-filter="landscape">Landscape</button>
         </div>
         <div class="filter-group">
-            <span class="filter-label">Format:</span>
-            <button class="filter-btn" data-filter="jpg">JPG</button>
-            <button class="filter-btn" data-filter="png">PNG</button>
-            <button class="filter-btn" data-filter="heic">HEIC</button>
-            <button class="filter-btn" data-filter="gif">GIF</button>
+            <span class="filter-label">Camera:</span>
+            <select id="cameraFilter" class="filter-btn" onchange="loadPhotos()" style="min-width:120px;">
+                <option value="">All Cameras</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <span class="filter-label">Year:</span>
+            <select id="yearFilter" class="filter-btn" onchange="loadPhotos()" style="min-width:80px;">
+                <option value="">All Years</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <span class="filter-label">Month:</span>
+            <select id="monthFilter" class="filter-btn" onchange="loadPhotos()" style="min-width:80px;">
+                <option value="">All Months</option>
+                <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
+                <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
+                <option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option>
+                <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <span class="filter-label">Days:</span>
+            <select id="daysFilter" class="filter-btn" onchange="loadPhotos()" style="min-width:80px;">
+                <option value="">Last 7 days</option>
+                <option value="1">1 day</option>
+                <option value="3">3 days</option>
+                <option value="7" selected>7 days</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+                <option value="365">1 year</option>
+                <option value="0">All time</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <span class="filter-label">Model:</span>
+            <select id="modelFilter" class="filter-btn" onchange="loadPhotos()" style="min-width:140px;">
+                <option value="">All Models</option>
+            </select>
         </div>
         <div class="view-toggle">
             <button class="view-btn active" data-view="grid">Grid</button>
@@ -532,6 +566,22 @@
     </div>
 
     <script src="/auth.js"></script>
+    <!-- Login Overlay -->
+    <div id="loginOverlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
+        <div style="background:white; padding:2rem; border-radius:12px; box-shadow:0 8px 32px rgba(0,0,0,0.3); width:360px; max-width:90%;">
+            <h2 style="text-align:center; margin-bottom:1.5rem; color:#333;">📷 Photo Library Login</h2>
+            <form id="loginForm">
+                <input type="text" id="loginUsername" placeholder="Username" required style="width:100%; padding:0.75rem; margin-bottom:0.75rem; border:1px solid #ddd; border-radius:6px; font-size:1rem; box-sizing:border-box;">
+                <input type="password" id="loginPassword" placeholder="Password" required style="width:100%; padding:0.75rem; margin-bottom:1rem; border:1px solid #ddd; border-radius:6px; font-size:1rem; box-sizing:border-box;">
+                <button type="submit" style="width:100%; padding:0.75rem; background:#667eea; color:white; border:none; border-radius:6px; font-size:1.1rem; cursor:pointer;">Login</button>
+                <div id="loginError" style="color:red; text-align:center; margin-top:0.75rem; display:none;"></div>
+            </form>
+            <div style="text-align:center; margin-top:1rem;">
+                <a href="/api/auth/google" style="color:#667eea; text-decoration:none;">Sign in with Google</a>
+            </div>
+        </div>
+    </div>
+
     <script>
         const ITEMS_PER_PAGE = 100; // Items per page
         let currentFilter = 'all';
@@ -541,6 +591,80 @@
         let allPhotosData = [];
         let currentLightboxIndex = 0;
         let currentPage = 1;
+
+        function getCookie(name) {
+            const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+            return m ? m.pop() : null;
+        }
+
+        function setCookie(name, val, days) {
+            const d = new Date();
+            d.setTime(d.getTime() + days * 86400000);
+            document.cookie = name + '=' + val + ';expires=' + d.toUTCString() + ';path=/;SameSite=Lax';
+        }
+
+        async function checkAuth() {
+            // Check URL for token (from OAuth callback)
+            const params = new URLSearchParams(window.location.search);
+            const urlToken = params.get('token');
+            if (urlToken) {
+                setCookie('silverfs_token', urlToken, 1);
+                window.history.replaceState({}, '', '/photos');
+                return true;
+            }
+            return !!getCookie('silverfs_token');
+        }
+
+        function showLogin() {
+            document.getElementById('loginOverlay').style.display = 'flex';
+        }
+
+        function hideLogin() {
+            document.getElementById('loginOverlay').style.display = 'none';
+        }
+
+        async function authFetch(url, options = {}) {
+            const token = getCookie('silverfs_token');
+            if (!token) {
+                showLogin();
+                throw new Error('Not authenticated');
+            }
+            options.headers = options.headers || {};
+            options.headers['Authorization'] = 'Bearer ' + token;
+            const res = await fetch(url, options);
+            if (res.status === 401) {
+                showLogin();
+                throw new Error('Session expired');
+            }
+            return res;
+        }
+
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('loginUsername').value;
+            const password = document.getElementById('loginPassword').value;
+            const errDiv = document.getElementById('loginError');
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+                if (data.success && data.token) {
+                    setCookie('silverfs_token', data.token, 1);
+                    hideLogin();
+                    loadPhotos();
+                } else {
+                    errDiv.textContent = data.error || 'Login failed';
+                    errDiv.style.display = 'block';
+                }
+            } catch (err) {
+                errDiv.textContent = 'Connection error';
+                errDiv.style.display = 'block';
+            }
+        });
 
         function formatDate(dateString) {
             if (!dateString) return 'N/A';
@@ -604,8 +728,7 @@
                 return `
                 <div class="photo-card" onclick="openLightbox(${globalIndex})">
                     <div class="photo-thumbnail">
-                        <img src="/images/${photo.id}" alt="${photo.name}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
-                        <span class="photo-icon" style="display: none;">📷</span>
+                        <img src="/images/${photo.id}/thumb" alt="${photo.name}" loading="lazy" onerror="this.src='/images/${photo.id}'; this.onerror=null;">
                     </div>
                     <div class="photo-info">
                         <div class="photo-name" title="${photo.path || photo.name}">${photo.name}</div>
@@ -657,12 +780,22 @@
         async function loadPhotos() {
             const container = document.getElementById('photoContainer');
             const searchTerm = document.getElementById('searchInput').value;
-            
-            try {
-                // Build query params
-                const params = new URLSearchParams();
-                if (searchTerm) params.append('search', searchTerm);
-                if (currentFilter !== 'all') params.append('filter', currentFilter);
+                const camera = document.getElementById('cameraFilter').value;
+                const model = document.getElementById('modelFilter').value;
+                const year = document.getElementById('yearFilter').value;
+                const month = document.getElementById('monthFilter').value;
+                const days = document.getElementById('daysFilter').value;
+                
+                try {
+                    // Build query params
+                    const params = new URLSearchParams();
+                    if (searchTerm) params.append('search', searchTerm);
+                    if (currentFilter !== 'all') params.append('filter', currentFilter);
+                    if (camera) params.append('camera', camera);
+                    if (model) params.append('model', model);
+                    if (year) params.append('year', year);
+                    if (month) params.append('month', month);
+                    if (days) params.append('days', days);
                 
                 const response = await authFetch(`/api/photos?${params}`);
                 const data = await response.json();
@@ -676,6 +809,23 @@
                 document.getElementById('totalSize').textContent = data.stats.totalSize;
                 document.getElementById('uniqueCameras').textContent = data.stats.uniqueCameras;
                 document.getElementById('withGPS').textContent = data.stats.withGPS;
+                
+                // Populate filter dropdowns
+                if (data.filters) {
+                    const camSelect = document.getElementById('cameraFilter');
+                    const yearSelect = document.getElementById('yearFilter');
+                    const curCam = camSelect.value;
+                    const curYear = yearSelect.value;
+                    camSelect.innerHTML = '<option value="">All Cameras</option>' + 
+                        data.filters.cameras.map(c => `<option value="${c.name}" ${c.name===curCam?'selected':''}>${c.name} (${c.count.toLocaleString()})</option>`).join('');
+                    
+                    const modelSelect = document.getElementById('modelFilter');
+                    const curModel = modelSelect.value;
+                    modelSelect.innerHTML = '<option value="">All Models</option>' + 
+                        data.filters.models.map(m => `<option value="${m.name}" ${m.name===curModel?'selected':''}>${m.name} (${m.count.toLocaleString()})</option>`).join('');
+                    yearSelect.innerHTML = '<option value="">All Years</option>' + 
+                        data.filters.years.map(y => `<option value="${y}" ${String(y)===curYear?'selected':''}>${y}</option>`).join('');
+                }
                 
                 // Store all photos and render first page
                 if (data.photos.length === 0) {
@@ -719,9 +869,10 @@
 
         document.querySelectorAll('.filter-btn').forEach(btn => {
             btn.addEventListener('click', function() {
+                if (this.tagName === 'SELECT') return;
                 document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
                 this.classList.add('active');
-                currentFilter = this.dataset.filter;
+                currentFilter = this.dataset.filter || 'all';
                 loadPhotos();
             });
         });
@@ -730,7 +881,8 @@
 
         function renderMapView() {
             const container = document.getElementById('photoContainer');
-            const photosWithGPS = allPhotos.filter(p => p.latitude && p.longitude);
+            // For map view, show ALL photos with GPS (ignore date filters)
+            const photosWithGPS = (allPhotosData.length > 0 ? allPhotosData : allPhotos).filter(p => p.latitude && p.longitude);
             
             if (photosWithGPS.length === 0) {
                 container.innerHTML = `
@@ -765,7 +917,7 @@
             const mapList = document.getElementById('mapList');
             mapList.innerHTML = photosWithGPS.map((photo, index) => `
                 <div class="map-photo-card" onclick="selectMapPhoto(${index}, ${photo.latitude}, ${photo.longitude})" id="map-photo-${index}">
-                    <img src="/images/${photo.id}" class="map-photo-thumbnail" alt="${photo.name}">
+                    <img src="/images/${photo.id}/thumb" class="map-photo-thumbnail" alt="${photo.name}" loading="lazy" onerror="this.src='/images/${photo.id}'; this.onerror=null;">
                     <div class="map-photo-name">${photo.name}</div>
                     <div class="map-photo-location">📍 ${photo.latitude.toFixed(4)}, ${photo.longitude.toFixed(4)}</div>
                 </div>
@@ -800,7 +952,7 @@
                         </div>
                     </div>
                     <div style="padding: 1rem;">
-                        <img src="/images/${photo.id}" style="width: 100%; max-height: 200px; object-fit: contain; border-radius: 8px;" onclick="openLightbox(${allPhotos.findIndex(p => p.id === photo.id)})">
+                        <img src="/images/${photo.id}/thumb" style="width: 100%; max-height: 200px; object-fit: contain; border-radius: 8px;" onclick="openLightbox(${allPhotos.findIndex(p => p.id === photo.id)})" onerror="this.src='/images/${photo.id}'; this.onerror=null;">
                     </div>
                 </div>
             `;
@@ -828,8 +980,15 @@
             });
         });
 
-        // Initial load
-        loadPhotos();
+        // Initial load - check auth first
+        (async () => {
+            const hasToken = await checkAuth();
+            if (hasToken) {
+                loadPhotos();
+            } else {
+                showLogin();
+            }
+        })();
     </script>
 </body>
 </html>

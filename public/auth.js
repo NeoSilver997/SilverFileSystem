@@ -4,13 +4,30 @@
  */
 
 // Check if user is authenticated
-function checkAuth() {
+async function checkAuth() {
     const token = localStorage.getItem('silverfs_token');
     if (!token) {
-        // Redirect to login page
         window.location.href = '/login.html';
         return false;
     }
+
+    try {
+        const response = await fetch('/api/auth/verify', {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.valid) {
+            logout();
+            return false;
+        }
+    } catch (error) {
+        logout();
+        return false;
+    }
+
     return true;
 }
 
@@ -78,5 +95,7 @@ async function authFetch(url, options = {}) {
     }
 
     // Check authentication
-    checkAuth();
+    (async () => {
+        await checkAuth();
+    })();
 })();

@@ -1315,8 +1315,9 @@
                     headers: { 'Authorization': `Bearer ${authToken}` }
                 });
                 
-                if (!res.ok) {
-                    // Token is invalid, clear auth
+                const data = await res.json();
+                
+                if (!data.valid) {
                     signOut();
                 }
             } catch (error) {

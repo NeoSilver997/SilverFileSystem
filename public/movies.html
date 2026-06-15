@@ -244,10 +244,14 @@
         let allMoviesData = [];
 
         function formatDuration(seconds) {
-            if (!seconds) return '0m';
-            const hours = Math.floor(seconds / 3600);
-            const mins = Math.floor((seconds % 3600) / 60);
-            return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+            if (!seconds) return '0s';
+            const s = Math.floor(seconds);
+            const hours = Math.floor(s / 3600);
+            const mins = Math.floor((s % 3600) / 60);
+            const secs = s % 60;
+            if (hours > 0) return `${hours}h ${mins}m ${secs}s`;
+            if (mins > 0) return `${mins}m ${secs}s`;
+            return `${secs}s`;
         }
 
         function formatBytes(bytes) {
@@ -355,9 +359,12 @@
                 const globalIndex = startIdx + index;
                 const quality = getQualityBadge(movie);
                 return `
-                    <div class="movie-card" onclick="playMovieByIndex(${globalIndex})">
+                    <div class="movie-card" onclick="playMovieByIndex(${globalIndex})" 
+                         onmouseenter="loadGifPreview(this, ${movie.id})" 
+                         onmouseleave="unloadGifPreview(this)">
                         <div class="movie-poster">
-                            <span class="movie-icon">🎬</span>
+                            <img src="/video/${movie.id}/thumb" data-thumb="1" alt="${movie.title || movie.name}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" style="width:100%;height:100%;object-fit:cover;">
+                            <span class="movie-icon" style="display:none;">🎬</span>
                             <span class="quality-badge ${quality.class}">${quality.text}</span>
                         </div>
                         <div class="movie-info">
@@ -416,6 +423,27 @@
                 loadMovies();
             });
         });
+
+        // Hover GIF preview
+        function loadGifPreview(card, movieId) {
+            const img = card.querySelector('.movie-poster img[data-thumb]');
+            if (!img || img.dataset.loading) return;
+            img.dataset.loading = '1';
+            const gifImg = new Image();
+            gifImg.onload = () => {
+                img.dataset.originalSrc = img.src;
+                img.src = `/video/${movieId}/preview`;
+            };
+            gifImg.src = `/video/${movieId}/preview`;
+        }
+
+        function unloadGifPreview(card) {
+            const img = card.querySelector('.movie-poster img[data-thumb]');
+            if (img && img.dataset.originalSrc) {
+                img.src = img.dataset.originalSrc;
+                img.removeAttribute('data-loading');
+            }
+        }
 
         // Initial load
         loadMovies();
