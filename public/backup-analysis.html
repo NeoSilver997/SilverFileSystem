@@ -52,8 +52,8 @@
     <div class="controls">
         <button onclick="loadAnalysis()">🔍 Analyze</button>
         <div style="display:flex;gap:0.3rem;align-items:center;margin-left:0.5rem;">
-            <input type="text" id="refreshFolder" value="%2022%Lenovo y700%" placeholder="folder pattern"
-                style="width:200px;padding:0.3rem;background:#222;border:1px solid #444;border-radius:4px;color:white;font-size:0.8rem;">
+            <input type="text" id="refreshFolder" placeholder="e.g. D:\Photo\JennyiPhone\114APPLE"
+                style="width:280px;padding:0.3rem;background:#222;border:1px solid #444;border-radius:4px;color:white;font-size:0.8rem;">
             <select id="refreshMode" style="padding:0.3rem;background:#222;border:1px solid #444;border-radius:4px;color:white;font-size:0.8rem;">
                 <option value="has-copy">Has Copy Only</option>
                 <option value="all">All Files</option>
@@ -126,10 +126,12 @@
         });
 
         async function refreshDeleted() {
-            const folder = document.getElementById('refreshFolder').value || '%202004IphoneBackup%';
+            const raw = document.getElementById('refreshFolder').value.trim();
+            if (!raw) return alert('Enter a folder path first.');
+            const folder = toLikePattern(raw);
             const mode = document.getElementById('refreshMode').value;
             const modeText = mode === 'has-copy' ? 'has-copy files' : 'all files';
-            if (!confirm(`Check ${modeText} in "${folder}" against disk and remove missing?`)) return;
+            if (!confirm(`Check ${modeText} in "${raw}" against disk and remove missing?`)) return;
             showLoading();
             document.getElementById('statusText').textContent = 'Checking files against disk...';
             try {
@@ -148,11 +150,19 @@
             hideLoading();
         }
 
+        function toLikePattern(input) {
+            if (!input) return '%';
+            let p = input.replace(/\//g, '\\');
+            if (p.includes('%') || p.includes('_')) return p;
+            return p + '%';
+        }
+
         async function loadAnalysis() {
             showLoading();
             document.getElementById('statusText').textContent = 'Scanning backup files...';
             showCount = 50;
-            const folder = document.getElementById('refreshFolder').value || '%2022%Lenovo y700%';
+            const raw = document.getElementById('refreshFolder').value.trim();
+            const folder = raw ? toLikePattern(raw) : '%';
             try {
                 const res = await authFetch(`/api/backup-analysis?folder=${encodeURIComponent(folder)}&limit=500`);
                 const data = await res.json();
@@ -308,6 +318,11 @@
             a.click();
         }
 
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlFolder = urlParams.get('folder');
+        if (urlFolder) {
+            document.getElementById('refreshFolder').value = urlFolder;
+        }
         loadAnalysis();
     </script>
 </body>

@@ -125,6 +125,7 @@
             </label>
             <button onclick="goUp()" id="backBtn" style="display:none; padding:0.4rem 0.8rem; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">⬅ Back</button>
             <button onclick="refreshCurrent()" id="refreshBtn" style="display:none; padding:0.4rem 0.8rem; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">🔄 Refresh</button>
+            <button onclick="checkDeleted()" id="checkDelBtn" style="display:none; padding:0.4rem 0.8rem; background:rgba(231,76,60,0.3); border:1px solid rgba(231,76,60,0.5); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">🗑️ Check Deleted</button>
             <button onclick="rebuildTree()" id="rebuildBtn" style="padding:0.4rem 0.8rem; background:rgba(102,126,234,0.3); border:1px solid rgba(102,126,234,0.5); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">🔧 Rebuild</button>
         </div>
     </div>
@@ -138,6 +139,11 @@
         <div class="context-menu-item" onclick="contextToggleHidden()">👁️ Toggle Hidden</div>
         <div class="context-menu-item" onclick="contextEditRemark()">✏️ Edit Remark</div>
         <div class="context-menu-item" onclick="contextSetRelated()">🔗 Set Related Folder</div>
+    </div>
+    <div id="fileContextMenu" class="context-menu">
+        <div class="context-menu-item" onclick="contextCopyPath()">📋 Copy Path</div>
+        <div class="context-menu-item" onclick="contextOpenFile()">📂 Open File</div>
+        <div class="context-menu-item" style="color:#e74c3c;" onclick="contextDeleteFile()">🗑️ Delete File</div>
     </div>
     <div id="editModal" class="modal-overlay" onclick="if(event.target===this)closeModal()">
         <div class="modal-box">
@@ -173,12 +179,15 @@
         function updateButtons() {
             const backBtn = document.getElementById('backBtn');
             const refreshBtn = document.getElementById('refreshBtn');
+            const checkDelBtn = document.getElementById('checkDelBtn');
             if (currentPath) {
                 backBtn.style.display = '';
                 refreshBtn.style.display = '';
+                checkDelBtn.style.display = '';
             } else {
                 backBtn.style.display = 'none';
                 refreshBtn.style.display = 'none';
+                checkDelBtn.style.display = 'none';
             }
         }
 
@@ -291,10 +300,57 @@
             hideLoading();
         }
 
+        async function checkDeleted() {
+            if (!currentId) return alert('Navigate to a folder first.');
+            showLoading();
+            try {
+                const res = await authFetch('/api/folder-tree/check-deleted', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folderId: currentId, remove: false })
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+
+                if (data.missing === 0) {
+                    hideLoading();
+                    alert(`All ${data.total} files exist on disk. Nothing to remove.`);
+                    return;
+                }
+
+                const confirmMsg = `Found ${data.missing} missing file(s) out of ${data.total}:\n\n` +
+                    data.files.slice(0, 20).map(f => `  ${f.name}`).join('\n') +
+                    (data.files.length > 20 ? `\n  ... and ${data.files.length - 20} more` : '') +
+                    `\n\nRemove ${data.missing} entries from database?`;
+
+                if (confirm(confirmMsg)) {
+                    const delRes = await authFetch('/api/folder-tree/check-deleted', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ folderId: currentId, remove: true })
+                    });
+                    const delData = await delRes.json();
+                    alert(`Removed ${delData.removed} missing file(s) from database.`);
+                    loadTree(currentPath);
+                }
+            } catch (err) {
+                alert('Check failed: ' + err.message);
+            }
+            hideLoading();
+        }
+
         function sortData(field) {
             if (sortField === field) sortDir *= -1;
             else { sortField = field; sortDir = -1; }
             renderTree();
+        }
+
+        function copyFilePath(path) {
+            navigator.clipboard.writeText(path).then(() => {
+                showToast('Path copied!');
+            }).catch(() => {
+                prompt('Copy this path:', path);
+            });
         }
 
         function renderTree() {
@@ -318,6 +374,12 @@
                     va = a.recursiveCount || 0; vb = b.recursiveCount || 0;
                 } else if (sortField === 'recursiveSize') {
                     va = a.recursiveSize || 0; vb = b.recursiveSize || 0;
+                } else if (sortField === 'mtime') {
+                    va = a.mtime ? new Date(a.mtime).getTime() : 0;
+                    vb = b.mtime ? new Date(b.mtime).getTime() : 0;
+                } else if (sortField === 'ctime') {
+                    va = a.ctime ? new Date(a.ctime).getTime() : 0;
+                    vb = b.ctime ? new Date(b.ctime).getTime() : 0;
                 } else {
                     va = a.totalSize || a.size || 0; vb = b.totalSize || b.size || 0;
                 }
@@ -348,6 +410,8 @@
                     <th class="num" onclick="sortData('fileCount')">Files${sortIcon('fileCount')}</th>
                     <th class="num" onclick="sortData('totalSize')">Size${sortIcon('totalSize')}</th>
                     <th class="bar-cell"></th>
+                    <th onclick="sortData('mtime')" style="font-size:0.8rem;">Modified${sortIcon('mtime')}</th>
+                    <th onclick="sortData('ctime')" style="font-size:0.8rem;">Created${sortIcon('ctime')}</th>
                     <th class="num" onclick="sortData('recursiveCount')">All Files${sortIcon('recursiveCount')}</th>
                     <th class="num" onclick="sortData('recursiveSize')">All Size${sortIcon('recursiveSize')}</th>
                     <th class="bar-cell"></th>
@@ -362,6 +426,8 @@
                     <td class="num"></td>
                     <td class="num"></td>
                     <td class="bar-cell"></td>
+                    <td></td>
+                    <td></td>
                     <td class="num"></td>
                     <td class="num"></td>
                     <td class="bar-cell"></td>
@@ -380,12 +446,14 @@
                 const recPct = maxRecSize > 0 ? (recSize / maxRecSize * 100) : 0;
                 const click = item.isFolder
                     ? `navigateTo(${item.id})`
-                    : `window.open('/api/search-folder?q=${encodeURIComponent(item.path)}', '_blank')`;
+                    : `copyFilePath('${(item.path || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')`;
 
                 const nameDisplay = item.remark 
                     ? `${item.name} <span style="opacity:0.5;font-size:0.8rem;">(${item.remark})</span>`
                     : item.name;
                 const nameStyle = item.hidden ? 'opacity:0.5;' : '';
+                const mdate = item.mtime ? new Date(item.mtime).toLocaleDateString() : '';
+                const cdate = item.ctime ? new Date(item.ctime).toLocaleDateString() : '';
 
                 html += `<tr class="${item.isFolder ? 'folder' : ''}" data-folder-id="${item.id || ''}" onclick="${click}">
                     <td class="icon">${icon}</td>
@@ -393,6 +461,8 @@
                     <td class="num">${count.toLocaleString()}</td>
                     <td class="num">${formatBytes(size)}</td>
                     <td class="bar-cell"><div class="size-bar"><div class="size-bar-fill" style="width:${pct}%"></div></div></td>
+                    <td style="font-size:0.8rem;opacity:0.7;white-space:nowrap;">${mdate}</td>
+                    <td style="font-size:0.8rem;opacity:0.7;white-space:nowrap;">${cdate}</td>
                     <td class="num-sub">${recCount.toLocaleString()}</td>
                     <td class="num-sub">${formatBytes(recSize)}</td>
                     <td class="bar-cell"><div class="size-bar"><div class="size-bar-fill" style="width:${recPct}%"></div></div></td>
@@ -417,24 +487,38 @@
         }
 
         let contextItem = null;
+        let contextIsFile = false;
 
         // Context menu
         document.addEventListener('contextmenu', (e) => {
             const row = e.target.closest('tr[data-folder-id]');
             if (!row) return;
-            const folderId = parseInt(row.dataset.folderId);
-            const items = currentData?.children || [];
-            contextItem = items.find(i => i.id === folderId && i.isFolder);
-            if (!contextItem) return;
             e.preventDefault();
-            const menu = document.getElementById('contextMenu');
-            menu.style.left = e.pageX + 'px';
-            menu.style.top = e.pageY + 'px';
-            menu.classList.add('show');
+            const id = parseInt(row.dataset.folderId);
+            const items = currentData?.children || [];
+            contextItem = items.find(i => i.id === id && i.isFolder);
+            if (contextItem) {
+                contextIsFile = false;
+                const menu = document.getElementById('contextMenu');
+                menu.style.left = e.pageX + 'px';
+                menu.style.top = e.pageY + 'px';
+                menu.classList.add('show');
+            } else {
+                const fileItem = items.find(i => i.name && !i.isFolder && row.querySelector('.name')?.textContent?.includes(i.name));
+                if (fileItem) {
+                    contextItem = fileItem;
+                    contextIsFile = true;
+                    const menu = document.getElementById('fileContextMenu');
+                    menu.style.left = e.pageX + 'px';
+                    menu.style.top = e.pageY + 'px';
+                    menu.classList.add('show');
+                }
+            }
         });
 
         document.addEventListener('click', () => {
             document.getElementById('contextMenu').classList.remove('show');
+            document.getElementById('fileContextMenu').classList.remove('show');
         });
 
         async function contextToggleHidden() {
@@ -469,6 +553,49 @@
 
         function closeModal() {
             document.getElementById('editModal').classList.remove('show');
+        }
+
+        function contextCopyPath() {
+            if (!contextItem) return;
+            const path = contextItem.path || (currentPath + '\\' + contextItem.name);
+            navigator.clipboard.writeText(path).then(() => {
+                showToast('Path copied!');
+            }).catch(() => {
+                prompt('Copy this path:', path);
+            });
+        }
+
+        function contextOpenFile() {
+            if (!contextItem) return;
+            const path = contextItem.path || (currentPath + '\\' + contextItem.name);
+            window.open('file:///' + path.replace(/\\/g, '/'), '_blank');
+        }
+
+        async function contextDeleteFile() {
+            if (!contextItem || !contextIsFile) return;
+            const path = contextItem.path || (currentPath + '\\' + contextItem.name);
+            if (!confirm(`Delete this file from database?\n\n${path}\n\n(File will remain on disk)`)) return;
+            try {
+                const res = await authFetch('/api/tree/delete-file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path })
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                showToast(`Deleted ${data.deleted} file(s)`);
+                loadTree(currentPath);
+            } catch (err) {
+                alert('Delete failed: ' + err.message);
+            }
+        }
+
+        function showToast(msg) {
+            const t = document.createElement('div');
+            t.textContent = msg;
+            t.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#667eea;color:white;padding:0.5rem 1rem;border-radius:8px;z-index:9999;font-size:0.9rem;';
+            document.body.appendChild(t);
+            setTimeout(() => t.remove(), 2000);
         }
 
         function contextSetRelated() {

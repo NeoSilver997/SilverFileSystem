@@ -1073,7 +1073,7 @@ app.get('/api/folder-tree', requireAuthWrapper, async (req, res) => {
 
     // Get direct files (files in this exact folder from scanned_files)
     const [files] = await db.connection.query(`
-      SELECT name, size, extension
+      SELECT name, size, extension, mtime, ctime
       FROM scanned_files
       WHERE folder_id_int = ?
       ORDER BY size DESC
@@ -1081,6 +1081,7 @@ app.get('/api/folder-tree', requireAuthWrapper, async (req, res) => {
     `, [folderId]);
 
     res.json({
+      id: folderId,
       path: normalizedPath,
       info: currentInfo.length > 0 ? {
         fileCount: parseInt(currentInfo[0].file_count),
@@ -1112,12 +1113,102 @@ app.get('/api/folder-tree', requireAuthWrapper, async (req, res) => {
           isFolder: false,
           size: parseInt(r.size),
           sizeFormatted: formatBytes(parseInt(r.size)),
-          extension: r.extension
+          extension: r.extension,
+          mtime: r.mtime,
+          ctime: r.ctime
         }))
       ]
     });
   } catch (err) {
     console.error('Folder tree error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Check for deleted files in a folder and remove from DB
+app.post('/api/folder-tree/check-deleted', requireAuthWrapper, async (req, res) => {
+  try {
+    const { folderId, remove } = req.body;
+    if (!folderId) return res.status(400).json({ error: 'folderId required' });
+
+    const [folderRow] = await db.connection.query('SELECT folder_id FROM folder_tree WHERE id = ?', [folderId]);
+    if (folderRow.length === 0) return res.status(404).json({ error: 'Folder not found' });
+    const folderPath = folderRow[0].folder_id;
+
+    const [files] = await db.connection.query(
+      'SELECT id, name FROM scanned_files WHERE folder_id_int = ?',
+      [folderId]
+    );
+
+    if (files.length === 0) return res.json({ total: 0, missing: 0, removed: 0, files: [] });
+
+    const BATCH = 100;
+    const missing = [];
+
+    for (let i = 0; i < files.length; i += BATCH) {
+      const batch = files.slice(i, i + BATCH);
+      const checks = batch.map(f => {
+        const fullPath = folderPath + '\\' + f.name;
+        return new Promise(resolve => {
+          const timer = setTimeout(() => resolve({ ...f, exists: false, path: fullPath }), 2000);
+          fs.access(fullPath, fs.constants.F_OK, err => {
+            clearTimeout(timer);
+            resolve({ ...f, exists: !err, path: fullPath });
+          });
+        });
+      });
+      const results = await Promise.all(checks);
+      for (const r of results) {
+        if (!r.exists) missing.push(r);
+      }
+    }
+
+    let removed = 0;
+    if (remove && missing.length > 0) {
+      const DEL_BATCH = 500;
+      for (let i = 0; i < missing.length; i += DEL_BATCH) {
+        const batch = missing.slice(i, i + DEL_BATCH);
+        const ids = batch.map(f => f.id);
+        const placeholders = ids.map(() => '?').join(',');
+        await db.connection.query(`DELETE FROM scanned_files WHERE id IN (${placeholders})`, ids);
+        removed += batch.length;
+      }
+    }
+
+    res.json({
+      total: files.length,
+      missing: missing.length,
+      removed,
+      files: missing.map(f => ({ id: f.id, name: f.name, path: f.path }))
+    });
+  } catch (err) {
+    console.error('Check deleted error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete file record from database by path
+app.post('/api/tree/delete-file', requireAuthWrapper, async (req, res) => {
+  try {
+    const { path } = req.body;
+    if (!path) return res.status(400).json({ error: 'path required' });
+
+    const winPath = path.replace(/\//g, '\\');
+    const parts = winPath.replace(/\\/g, '/').split('/');
+    const fileName = parts.pop();
+    const folderPath = parts.join('\\');
+
+    const [folderRow] = await db.connection.query('SELECT id FROM folder_tree WHERE folder_id = ?', [folderPath]);
+    if (folderRow.length === 0) return res.json({ deleted: 0 });
+
+    const [result] = await db.connection.query(
+      'DELETE FROM scanned_files WHERE name = ? AND folder_id_int = ?',
+      [fileName, folderRow[0].id]
+    );
+
+    res.json({ deleted: result.affectedRows });
+  } catch (err) {
+    console.error('Delete file error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

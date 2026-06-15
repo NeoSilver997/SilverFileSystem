@@ -150,6 +150,7 @@
                         <option value="">All</option>
                         ${exts.map(e => `<option value="${e}" ${filterExt===e?'selected':''}>${e}</option>`).join('')}
                     </select>
+                    <button onclick="generateDeleteScript()" style="padding:0.4rem 0.8rem;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem;margin-left:auto;">🗑️ Generate Delete Script (>3 copies, excl. NAS/Backup)</button>
                     <span style="opacity:0.5;font-size:0.8rem;" id="groupCount"></span>
                 </div>
                 <div id="groupsList"></div>
@@ -198,6 +199,77 @@
             }).join('');
 
             document.getElementById('groupsList').innerHTML = html || '<div class="empty">No groups match filter</div>';
+        }
+
+        function generateDeleteScript() {
+            const excludePatterns = ['D:\\NAS_SYNC', 'D:\\NAS_Sync', 'H:\\', 'E:\\NAS_SYNC', 'E:\\NAS_Sync'];
+            const isExcluded = (path) => excludePatterns.some(p => path.toUpperCase().startsWith(p.toUpperCase()));
+
+            let groups = [...allGroups];
+            if (filterExt) groups = groups.filter(g => g.files.some(f => f.extension === filterExt));
+
+            const eligible = groups.filter(g => g.count > 3);
+            if (eligible.length === 0) {
+                alert('No duplicate groups with more than 3 copies found.');
+                return;
+            }
+
+            let script = '# SilverFileSystem Duplicate Delete Script\n';
+            script += `# Generated: ${new Date().toISOString()}\n`;
+            script += `# Groups: ${eligible.length} (files with >3 copies)\n`;
+            script += `# Excluded drives: D:\\NAS_SYNC, H:\\, E:\\NAS_SYNC\n`;
+            script += `# WARNING: Review carefully before running!\n\n`;
+            script += '$deleted = 0\n';
+            script += '$skipped = 0\n';
+            script += '$errors = 0\n\n';
+
+            let totalDeleteSize = 0;
+            let totalDeleteCount = 0;
+
+            for (const g of eligible) {
+                const files = g.files;
+                const excluded = files.filter(f => isExcluded(f.path));
+                const candidates = files.filter(f => !isExcluded(f.path));
+
+                if (candidates.length === 0) {
+                    script += `# SKIP group: ${g.files[0]?.name || '?'} (${g.count} copies, all on excluded drives)\n\n`;
+                    continue;
+                }
+
+                const keepCount = 1;
+                const deleteList = candidates.slice(keepCount);
+
+                if (deleteList.length === 0) {
+                    script += `# SKIP group: ${g.files[0]?.name || '?'} (${candidates.length} candidate(s), keeping all)\n\n`;
+                    continue;
+                }
+
+                script += `# Group: ${g.files[0]?.name || '?'} | ${g.count} copies | ${g.sizeFormatted} each | ${deleteList.length} to delete\n`;
+                script += `# Keep: ${files[0]?.path || '?'}\n`;
+                if (excluded.length > 0) {
+                    script += `# Excluded (on backup drives): ${excluded.length}\n`;
+                }
+                for (const f of deleteList) {
+                    const winPath = f.path.replace(/\//g, '\\');
+                    script += `if (Test-Path "${winPath}") { Remove-Item "${winPath}" -Force; $deleted++ } else { Write-Host "NOT FOUND: ${winPath}" }\n`;
+                    totalDeleteSize += g.size;
+                    totalDeleteCount++;
+                }
+                script += '\n';
+            }
+
+            script += `Write-Host "\nDone: Deleted=$deleted Skipped=$skipped Errors=$errors"\n`;
+            script += `Write-Host "Freed space: ~${formatBytes(totalDeleteSize)} (${totalDeleteCount} files)\n`;
+
+            const blob = new Blob([script], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `delete-duplicates-${new Date().toISOString().slice(0,10)}.ps1`;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            alert(`Generated delete script:\n- ${eligible.length} groups with >3 copies\n- ${totalDeleteCount} files to delete\n- ~${formatBytes(totalDeleteSize)} to free\n- Excluded: D:\\NAS_SYNC, H:\\, E:\\NAS_SYNC`);
         }
 
         loadReport();

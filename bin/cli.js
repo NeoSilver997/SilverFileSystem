@@ -917,6 +917,7 @@ program
       let processed = 0;
       let updated = 0;
       let errors = 0;
+      let deleted = 0;
       let skippedLarge = 0;
       
       for (const file of files) {
@@ -955,22 +956,31 @@ program
           processed++;
           spinner.text = `Processing ${processed}/${files.length} - Updated: ${updated}, Errors: ${errors} (${hashMethod})`;
         } catch (err) {
-          errors++;
+          if (err.code === 'ENOENT') {
+            deleted++;
+            await db.deleteFile(file.id);
+            console.warn(chalk.red(`\nDeleted (not found): ${file.path}`));
+          } else {
+            errors++;
+            console.warn(chalk.yellow(`\nWarning: ${file.path}: ${err.message}`));
+          }
           processed++;
-          spinner.text = `Processing ${processed}/${files.length} - Updated: ${updated}, Errors: ${errors} (${hashMethod})`;
-          console.warn(chalk.yellow(`\nWarning: ${file.path}: ${err.message}`));
+          spinner.text = `Processing ${processed}/${files.length} - Updated: ${updated}, Deleted: ${deleted}, Errors: ${errors} (${hashMethod})`;
         }
       }
       
       spinner.succeed('Hash update complete!');
       
       console.log(chalk.green(`\n✓ Updated ${updated} file hashes (${hashMethod} method)`));
+      if (deleted > 0) {
+        console.log(chalk.red(`✗ Deleted ${deleted} missing files from database`));
+      }
       if (useSmart) {
         console.log(chalk.cyan(`ℹ Smart optimization: Only hashed files with same size (potential duplicates)`));
         console.log(chalk.cyan(`  Use --no-smart to hash all files, or --stats to see optimization impact`));
       }
       if (errors > 0) {
-        console.log(chalk.yellow(`⚠ ${errors} files had errors (file not found or read error)`));
+        console.log(chalk.yellow(`⚠ ${errors} files had errors (read permission or other issues)`));
       }
       
       await db.close();
