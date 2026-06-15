@@ -287,6 +287,40 @@
             padding: 1rem;
             margin-bottom: 1rem;
         }
+
+        details.file-type-breakdown {
+            cursor: pointer;
+        }
+
+        details.file-type-breakdown > summary {
+            list-style: none;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        details.file-type-breakdown > summary::-webkit-details-marker {
+            display: none;
+        }
+
+        details.file-type-breakdown > summary::before {
+            content: '▶';
+            display: inline-block;
+            margin-right: 0.5rem;
+            font-size: 0.8em;
+            transition: transform 0.2s;
+            vertical-align: middle;
+        }
+
+        details.file-type-breakdown[open] > summary::before {
+            transform: rotate(90deg);
+        }
+
+        details.file-type-breakdown > summary h2 {
+            display: inline;
+            margin: 0;
+            font-size: 2rem;
+            cursor: pointer;
+        }
         
         .file-type-breakdown h2 {
             font-size: 2rem;
@@ -680,26 +714,26 @@
                 <div class="storage-legend" id="storageLegend"></div>
             </div>
             
-            <div class="file-type-breakdown">
-                <h2>📂 File Type Classification</h2>
+            <details class="file-type-breakdown" open>
+                <summary><h2>📂 File Type Classification</h2></summary>
                 <div class="file-type-grid" id="fileTypeGrid">
                     <div class="loading">Loading file type breakdown...</div>
                 </div>
-            </div>
+            </details>
 
-            <div class="file-type-breakdown">
-                <h2>📁 Top Folders by Size</h2>
+            <details class="file-type-breakdown">
+                <summary><h2>📁 Top Folders by Size</h2></summary>
                 <div id="topFoldersBySize" style="overflow-x: auto;">
                     <div class="loading">Loading...</div>
                 </div>
-            </div>
+            </details>
 
-            <div class="file-type-breakdown">
-                <h2>📊 Top Folders by File Count</h2>
+            <details class="file-type-breakdown">
+                <summary><h2>📊 Top Folders by File Count</h2></summary>
                 <div id="topFoldersByCount" style="overflow-x: auto;">
                     <div class="loading">Loading...</div>
                 </div>
-            </div>
+            </details>
 
             <div class="action-buttons">
                 <a href="/photos" class="action-btn">📷 Browse Photos</a>

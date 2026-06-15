@@ -2,6 +2,7 @@
 
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import session from 'express-session';
 import passport from 'passport';
@@ -22,6 +23,27 @@ import { promisify } from 'util';
 import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 const execFileAsync = promisify(execFile);
+
+const LOG_FILE = join(dirname(fileURLToPath(import.meta.url)), 'server.log');
+const ERR_LOG_FILE = join(dirname(fileURLToPath(import.meta.url)), 'server_err.log');
+const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
+const errLogStream = fs.createWriteStream(ERR_LOG_FILE, { flags: 'a' });
+
+function logToFile(stream, level, args) {
+  const ts = new Date().toISOString();
+  const msg = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+  stream.write(`[${ts}] [${level}] ${msg}\n`);
+}
+
+const origLog = console.log;
+const origError = console.error;
+const origWarn = console.warn;
+console.log = (...args) => { origLog(...args); logToFile(logStream, 'LOG', args); };
+console.error = (...args) => { origError(...args); logToFile(errLogStream, 'ERROR', args); logToFile(logStream, 'ERROR', args); };
+console.warn = (...args) => { origWarn(...args); logToFile(errLogStream, 'WARN', args); logToFile(logStream, 'WARN', args); };
+
+process.on('uncaughtException', (err) => { origError('Uncaught Exception:', err); logToFile(errLogStream, 'UNCAUGHT', [err.stack || err.message]); process.exit(1); });
+process.on('unhandledRejection', (reason) => { origError('Unhandled Rejection:', reason); logToFile(errLogStream, 'UNHANDLED', [String(reason)]); });
 
 function computeQuickHash(filePath) {
   try {
@@ -171,6 +193,7 @@ const authLimiter = rateLimit({
 });
 
 // Middleware
+app.use(compression());
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:4000',
   credentials: true
@@ -291,29 +314,38 @@ async function initDatabase(dbConfig = {}) {
     console.log('ℹ️  Google OAuth not configured (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable)');
   }
 
+  // Helper: get file path from scanned_files using folder_id_int + name
+  async function getFilePath(fileId) {
+    const [rows] = await db.connection.query(
+      'SELECT sf.name, ft.folder_id as folder_path FROM scanned_files sf LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id WHERE sf.id = ?',
+      [fileId]
+    );
+    console.log(`[DEBUG] getFilePath(${fileId}): rows=${JSON.stringify(rows)}`);
+    if (rows.length === 0 || !rows[0].folder_path) return null;
+    const filePath = rows[0].folder_path + '\\' + rows[0].name;
+    console.log(`[DEBUG] getFilePath(${fileId}) → "${filePath}"`);
+    return filePath;
+  }
+
   // Serve image files (after database is initialized)
   app.get('/images/:id', requireAuth, requirePhotoPermission, mediaLimiter, async (req, res) => {
     try {
       const fileId = req.params.id;
 
-      // Get file path from database
-      const photo = await db.connection.query(
-        'SELECT path FROM scanned_files WHERE id = ?',
-        [fileId]
-      );
-
-      if (photo[0].length === 0) {
+      const filePath = await getFilePath(fileId);
+      console.log(`[DEBUG] /images/${fileId} → filePath: "${filePath}"`);
+      if (!filePath) {
         return res.status(404).json({ error: 'Image not found' });
       }
-
-      const filePath = photo[0][0].path;
-
-      if (!(await fileExists(filePath))) {
+      const ext = path.extname(filePath).toLowerCase();
+      const exists = await fileExists(filePath);
+      console.log(`[DEBUG] fileExists: ${exists}, ext: ${ext}`);
+      if (!exists) {
         return res.status(404).json({ error: 'File not found on disk' });
       }
 
       // Convert HEIC to JPEG for browser compatibility
-      if (heicFormats.includes(ext)) {
+      if (['.heic', '.heif'].includes(ext)) {
         try {
           const inputBuffer = fs.readFileSync(filePath);
           const jpegBuffer = await heicConvert({ buffer: inputBuffer, format: 'JPEG', quality: 0.9 });
@@ -420,17 +452,11 @@ async function initDatabase(dbConfig = {}) {
         }
       }
 
-      // Get file path from database
-      const photo = await db.connection.query(
-        'SELECT path FROM scanned_files WHERE id = ?',
-        [fileId]
-      );
-
-      if (photo[0].length === 0) {
+      // Get file path using helper
+      const filePath = await getFilePath(fileId);
+      if (!filePath) {
         return res.status(404).json({ error: 'Image not found' });
       }
-
-      const filePath = photo[0][0].path;
 
       if (!(await fileExists(filePath))) {
         return res.status(404).json({ error: 'File not found on disk' });
@@ -469,17 +495,10 @@ async function initDatabase(dbConfig = {}) {
     try {
       const fileId = req.params.id;
 
-      // Get file path from database
-      const audio = await db.connection.query(
-        'SELECT path FROM scanned_files WHERE id = ?',
-        [fileId]
-      );
-
-      if (audio[0].length === 0) {
+      const filePath = await getFilePath(fileId);
+      if (!filePath) {
         return res.status(404).json({ error: 'Audio not found' });
       }
-
-      const filePath = audio[0][0].path;
 
       if (!(await fileExists(filePath))) {
         return res.status(404).json({ error: 'File not found on disk' });
@@ -552,17 +571,10 @@ async function initDatabase(dbConfig = {}) {
     try {
       const fileId = req.params.id;
 
-      // Get file path from database
-      const video = await db.connection.query(
-        'SELECT path FROM scanned_files WHERE id = ?',
-        [fileId]
-      );
-
-      if (video[0].length === 0) {
+      const filePath = await getFilePath(fileId);
+      if (!filePath) {
         return res.status(404).json({ error: 'Video not found' });
       }
-
-      const filePath = video[0][0].path;
 
       if (!(await fileExists(filePath))) {
         return res.status(404).json({ error: 'File not found on disk' });
@@ -703,16 +715,10 @@ async function initDatabase(dbConfig = {}) {
         }
       }
 
-      const video = await db.connection.query(
-        'SELECT path FROM scanned_files WHERE id = ?',
-        [fileId]
-      );
-
-      if (video[0].length === 0) {
+      const filePath = await getFilePath(fileId);
+      if (!filePath) {
         return res.status(404).json({ error: 'Video not found' });
       }
-
-      const filePath = video[0][0].path;
 
       if (!(await fileExists(filePath))) {
         return res.status(404).json({ error: 'File not found on disk' });
@@ -781,16 +787,10 @@ async function initDatabase(dbConfig = {}) {
         return res.send(cached);
       }
 
-      const video = await db.connection.query(
-        'SELECT path FROM scanned_files WHERE id = ?',
-        [fileId]
-      );
-
-      if (video[0].length === 0) {
+      const filePath = await getFilePath(fileId);
+      if (!filePath) {
         return res.status(404).json({ error: 'Video not found' });
       }
-
-      const filePath = video[0][0].path;
 
       if (!(await fileExists(filePath))) {
         return res.status(404).json({ error: 'File not found on disk' });
@@ -1075,10 +1075,10 @@ app.get('/api/folder-tree', requireAuthWrapper, async (req, res) => {
     const [files] = await db.connection.query(`
       SELECT name, size, extension
       FROM scanned_files
-      WHERE folder_id = ?
+      WHERE folder_id_int = ?
       ORDER BY size DESC
       LIMIT 50
-    `, [normalizedPath]);
+    `, [folderId]);
 
     res.json({
       path: normalizedPath,
@@ -1173,13 +1173,24 @@ app.get('/api/search-folder', requireAuthWrapper, async (req, res) => {
     if (!q) return res.status(400).json({ error: 'Query required' });
 
     const normalizedQuery = q.replace(/\//g, '\\');
-    const [rows] = await db.connection.query(
-      `SELECT id, name, path, size, extension 
-       FROM scanned_files 
-       WHERE folder_id = ?
-       ORDER BY size DESC
-       LIMIT 100`,
+    // Find folder_tree id matching the path
+    const [ftRows] = await db.connection.query(
+      'SELECT id FROM folder_tree WHERE folder_id = ?',
       [normalizedQuery]
+    );
+    if (ftRows.length === 0) {
+      return res.json({ folder: q, files: [] });
+    }
+    const folderIdInt = ftRows[0].id;
+
+    const [rows] = await db.connection.query(
+      `SELECT sf.id, sf.name, sf.size, sf.extension, ft.folder_id as folder_path
+       FROM scanned_files sf
+       LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+       WHERE sf.folder_id_int = ?
+       ORDER BY sf.size DESC
+       LIMIT 100`,
+      [folderIdInt]
     );
 
     res.json({
@@ -1187,7 +1198,7 @@ app.get('/api/search-folder', requireAuthWrapper, async (req, res) => {
       files: rows.map(r => ({
         id: r.id,
         name: r.name,
-        path: r.path,
+        path: r.folder_path ? r.folder_path + '\\' + r.name : r.name,
         size: r.size,
         sizeFormatted: formatBytes(parseInt(r.size)),
         extension: r.extension,
@@ -1220,7 +1231,7 @@ app.get('/api/duplicates', requireAuthWrapper, async (req, res) => {
     const duplicates = [];
     for (const group of groups) {
       const [files] = await db.connection.query(
-        'SELECT id, path, name, size, extension FROM scanned_files WHERE hash = ? AND size = ?',
+        'SELECT sf.id, sf.name, sf.size, sf.extension, sf.hash, ft.folder_id as folder_path FROM scanned_files sf LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id WHERE sf.hash = ? AND sf.size = ?',
         [group.hash, group.size]
       );
       duplicates.push({
@@ -1230,13 +1241,13 @@ app.get('/api/duplicates', requireAuthWrapper, async (req, res) => {
         sizeFormatted: formatBytes(parseInt(group.size)),
         wastedSpace: (group.count - 1) * parseInt(group.size),
         wastedFormatted: formatBytes((group.count - 1) * parseInt(group.size)),
-      files: files.map(f => ({
+        files: files.map(f => ({
           id: f.id,
           name: f.name,
-          path: f.path,
-          extension: f.extension,
-          folderId: f.tree_id,
-          folderName: f.folder_name || f.folder_id
+          path: f.folder_path ? f.folder_path + '\\' + f.name : f.name,
+          size: parseInt(f.size),
+          sizeFormatted: formatBytes(parseInt(f.size)),
+          extension: f.extension
         }))
       });
     }
@@ -1270,10 +1281,10 @@ app.get('/api/duplicates/report', requireAuthWrapper, async (req, res) => {
 
     // Get all duplicate files with their folder info
     const [dupFiles] = await db.connection.query(`
-      SELECT sf.id, sf.path, sf.name, sf.size, sf.extension, sf.hash,
-             sf.folder_id, ft.id as tree_id, ft.folder_name
+      SELECT sf.id, sf.name, sf.size, sf.extension, sf.hash,
+             ft.folder_id as folder_path, ft.id as tree_id, ft.folder_name
       FROM scanned_files sf
-      LEFT JOIN folder_tree ft ON sf.folder_id = ft.folder_id
+      LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
       WHERE sf.hash IS NOT NULL
         AND sf.hash IN (
           SELECT hash FROM scanned_files
@@ -1294,10 +1305,10 @@ app.get('/api/duplicates/report', requireAuthWrapper, async (req, res) => {
       hashMap.get(key).files.push({
         id: file.id,
         name: file.name,
-        path: file.path,
+        path: file.folder_path ? file.folder_path + '\\' + file.name : file.name,
         extension: file.extension,
         folderId: file.tree_id,
-        folderName: file.folder_name || file.folder_id
+        folderName: file.folder_name || ''
       });
     }
 
@@ -1402,8 +1413,9 @@ let backupAnalysisCacheTime = 0;
 
 app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
   try {
-    const folder = req.query.folder || '%202004IphoneBackup%';
+    const folderRaw = req.query.folder || '%2022%Lenovo y700%';
     const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    const folder = folderRaw.replace(/\\/g, '\\\\');
 
     // Check cache (5 min TTL)
     const now = Date.now();
@@ -1413,10 +1425,11 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
 
     // Get all files in backup folder
     const [files] = await db.connection.query(`
-      SELECT id, name, size, hash, extension, folder_id
-      FROM scanned_files
-      WHERE folder_id LIKE ?
-      ORDER BY name
+      SELECT sf.id, sf.name, sf.size, sf.hash, sf.extension, ft.folder_id as folder_path
+      FROM scanned_files sf
+      LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+      WHERE ft.folder_id LIKE ?
+      ORDER BY sf.name
     `, [folder]);
 
     // Separate hashed vs unhashed
@@ -1433,16 +1446,16 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
         const batch = hashes.slice(i, i + BATCH);
         const placeholders = batch.map(() => '?').join(',');
         const [dups] = await db.connection.query(`
-          SELECT sf.hash, sf.path, sf.name, sf.size, sf.folder_id, ft.folder_name
+          SELECT sf.hash, sf.name, sf.size, ft.folder_id as folder_path, ft.folder_name
           FROM scanned_files sf
-          LEFT JOIN folder_tree ft ON sf.folder_id = ft.folder_id
+          LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
           WHERE sf.hash IN (${placeholders})
-            AND sf.folder_id NOT LIKE ?
+            AND ft.folder_id NOT LIKE ?
         `, [...batch, folder]);
         for (const d of dups) {
           if (!dupMap.has(d.hash)) dupMap.set(d.hash, []);
           dupMap.get(d.hash).push({
-            path: d.path,
+            path: d.folder_path ? d.folder_path + '\\' + d.name : d.name,
             name: d.name,
             folder: d.folder_name || d.folder_id
           });
@@ -1460,7 +1473,7 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
         withCopy.push({
           id: file.id,
           name: file.name,
-          path: file.folder_id + '\\' + file.name,
+          path: file.folder_path ? file.folder_path + '\\' + file.name : file.name,
           size: file.size,
           sizeFormatted: formatBytes(parseInt(file.size)),
           extension: file.extension,
@@ -1471,6 +1484,7 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
         withoutCopy.push({
           id: file.id,
           name: file.name,
+          path: file.folder_path ? file.folder_path + '\\' + file.name : file.name,
           size: file.size,
           sizeFormatted: formatBytes(parseInt(file.size)),
           extension: file.extension
@@ -1499,7 +1513,7 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
       unhashed: unhashed.sort((a, b) => b.size - a.size).map(f => ({
         id: f.id,
         name: f.name,
-        path: f.folder_id + '\\' + f.name,
+        path: f.folder_path ? f.folder_path + '\\' + f.name : f.name,
         size: f.size,
         sizeFormatted: formatBytes(parseInt(f.size)),
         extension: f.extension
@@ -1509,6 +1523,81 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
     backupAnalysisCache = response;
     backupAnalysisCacheTime = now;
     res.json(response);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Mark deleted files — removes files from DB that no longer exist on disk
+app.post('/api/mark-deleted', requireAuthWrapper, async (req, res) => {
+  try {
+    const { folder: folderRaw, mode } = req.body;
+    const folder = (folderRaw || '%').replace(/\\/g, '\\\\');
+    
+    let query, params;
+    if (mode === 'has-copy') {
+      query = `SELECT sf.id, CONCAT(ft.folder_id, '\\\\', sf.name) as path FROM scanned_files sf
+               JOIN folder_tree ft ON ft.id = sf.folder_id_int
+               WHERE sf.hash IS NOT NULL
+                 AND sf.hash IN (
+                   SELECT hash FROM scanned_files
+                   WHERE hash IS NOT NULL
+                   GROUP BY hash, size HAVING COUNT(*) > 1
+                 )
+                 AND ft.folder_id LIKE ?`;
+      params = [folder || '%'];
+    } else {
+      query = `SELECT sf.id, CONCAT(ft.folder_id, '\\\\', sf.name) as path FROM scanned_files sf
+               JOIN folder_tree ft ON ft.id = sf.folder_id_int
+               WHERE ft.folder_id LIKE ?`;
+      params = [folder || '%'];
+    }
+
+    const [files] = await db.connection.query(query, params);
+
+    let deleted = 0;
+    let kept = 0;
+    const missingIds = [];
+
+    const BATCH = 100;
+    for (let i = 0; i < files.length; i += BATCH) {
+      const batch = files.slice(i, i + BATCH);
+      const checks = batch.map(file => 
+        new Promise((resolve) => {
+          const timer = setTimeout(() => resolve(false), 2000);
+          fs.access(file.path, fs.constants.F_OK, (err) => {
+            clearTimeout(timer);
+            resolve(!err);
+          });
+        })
+      );
+      const results = await Promise.all(checks);
+      
+      for (let j = 0; j < batch.length; j++) {
+        if (results[j]) {
+          kept++;
+        } else {
+          missingIds.push(batch[j].id);
+          deleted++;
+        }
+      }
+    }
+
+    if (missingIds.length > 0) {
+      const DEL_BATCH = 500;
+      for (let i = 0; i < missingIds.length; i += DEL_BATCH) {
+        const batch = missingIds.slice(i, i + DEL_BATCH);
+        const placeholders = batch.map(() => '?').join(',');
+        await db.connection.query(`DELETE FROM scanned_files WHERE id IN (${placeholders})`, batch);
+      }
+    }
+
+    backupAnalysisCache = null;
+    photosCache = null;
+    musicCache = null;
+    moviesCache = null;
+
+    res.json({ deleted, kept, total: files.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1855,25 +1944,25 @@ app.get('/api/file-type-breakdown', async (req, res) => {
       }
     }
 
-    // Get top 10 folders per category
+    // Get top folders per category (in parallel)
     const topFolders = {};
     const activeCategories = Object.entries(breakdown).filter(([_, d]) => d.count > 0);
     
-    for (const [category] of activeCategories) {
+    const folderPromises = activeCategories.map(async ([category]) => {
       const exts = fileTypeCategories[category] || [];
-      if (exts.length === 0) continue;
+      if (exts.length === 0) return;
       const placeholders = exts.map(() => '?').join(',');
       try {
         const [folderRows] = await connection.query(`
-          SELECT ft.id as folder_id, t.folder_path, t.full_path, t.file_count, t.total_size FROM (
-            SELECT 
-              SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
-              SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', ''))) as full_path,
-              COUNT(*) as file_count,
-              SUM(size) as total_size
-            FROM scanned_files WHERE LOWER(extension) IN (${placeholders})
-            GROUP BY full_path, folder_path ORDER BY total_size DESC LIMIT 10
-          ) t LEFT JOIN folder_tree ft ON ft.folder_id = REPLACE(t.full_path, '/', '\\\\')
+          SELECT ft.id as folder_id, 
+            SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(ft.folder_id, '\\\\', '/'), '/', LENGTH(REPLACE(ft.folder_id, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(ft.folder_id, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
+            ft.folder_id as full_path,
+            COUNT(*) as file_count,
+            SUM(sf.size) as total_size
+          FROM scanned_files sf
+          JOIN folder_tree ft ON sf.folder_id_int = ft.id
+          WHERE LOWER(sf.extension) IN (${placeholders})
+          GROUP BY ft.id, ft.folder_id ORDER BY total_size DESC LIMIT 5
         `, exts.map(e => e.replace('.', '')));
         topFolders[category] = folderRows.map(r => ({
           id: r.folder_id,
@@ -1886,7 +1975,8 @@ app.get('/api/file-type-breakdown', async (req, res) => {
       } catch (err) {
         console.warn(`Top folders query failed for ${category}:`, err.message);
       }
-    }
+    });
+    await Promise.all(folderPromises);
 
     // Per-extension top 5 folders for AI category
     const aiExtensions = fileTypeCategories.ai || [];
@@ -1897,12 +1987,14 @@ app.get('/api/file-type-breakdown', async (req, res) => {
         const [aiRows] = await connection.query(
           `SELECT ext, folder_path, full_path, COUNT(*) as file_count, SUM(size) as total_size FROM (
             SELECT 
-              LOWER(extension) as ext,
-              SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
-              SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', ''))) as full_path,
-              size
-            FROM scanned_files WHERE LOWER(extension) IN (${placeholders})
-          ) t GROUP BY ext, full_path, folder_path ORDER BY ext, total_size DESC`,
+              LOWER(sf.extension) as ext,
+              SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(ft.folder_id, '\\\\', '/'), '/', LENGTH(REPLACE(ft.folder_id, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(ft.folder_id, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
+              ft.folder_id as full_path,
+              sf.size
+            FROM scanned_files sf
+            JOIN folder_tree ft ON sf.folder_id_int = ft.id
+            WHERE LOWER(sf.extension) IN (${placeholders})
+          ) t GROUP BY ext, full_path, folder_path ORDER BY ext, total_size DESC LIMIT 200`,
           aiExtensions.map(e => e.replace('.', ''))
         );
         
@@ -1957,33 +2049,34 @@ app.get('/api/file-type-breakdown', async (req, res) => {
       response.categories.ai.perExtFolders = aiPerExtFolders;
     }
 
-    // Global top folders (all file types)
+    // Global top folders (all file types) - in parallel
     try {
-      const [topBySize] = await connection.query(`
-        SELECT ft.id as folder_id, t.folder_path, t.full_path, t.file_count, t.total_size FROM (
-          SELECT 
-            SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
-            SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', ''))) as full_path,
+      const [topBySize, topByCount] = await Promise.all([
+        connection.query(`
+          SELECT ft.id as folder_id, 
+            SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(ft.folder_id, '\\\\', '/'), '/', LENGTH(REPLACE(ft.folder_id, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(ft.folder_id, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
+            ft.folder_id as full_path,
             COUNT(*) as file_count,
-            SUM(size) as total_size
-          FROM scanned_files WHERE extension IS NOT NULL AND extension != ''
-          GROUP BY full_path, folder_path ORDER BY total_size DESC LIMIT 20
-        ) t LEFT JOIN folder_tree ft ON ft.folder_id = REPLACE(t.full_path, '/', '\\\\')
-      `);
-
-      const [topByCount] = await connection.query(`
-        SELECT ft.id as folder_id, t.folder_path, t.full_path, t.file_count, t.total_size FROM (
-          SELECT 
-            SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
-            SUBSTRING_INDEX(REPLACE(path, '\\\\', '/'), '/', LENGTH(REPLACE(path, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(path, '\\\\', '/'), '/', ''))) as full_path,
+            SUM(sf.size) as total_size
+          FROM scanned_files sf
+          JOIN folder_tree ft ON sf.folder_id_int = ft.id
+          WHERE sf.extension IS NOT NULL AND sf.extension != ''
+          GROUP BY ft.id, ft.folder_id ORDER BY total_size DESC LIMIT 20
+        `),
+        connection.query(`
+          SELECT ft.id as folder_id, 
+            SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(ft.folder_id, '\\\\', '/'), '/', LENGTH(REPLACE(ft.folder_id, '\\\\', '/')) - LENGTH(REPLACE(REPLACE(ft.folder_id, '\\\\', '/'), '/', '')) - 1), '/', -2) as folder_path,
+            ft.folder_id as full_path,
             COUNT(*) as file_count,
-            SUM(size) as total_size
-          FROM scanned_files WHERE extension IS NOT NULL AND extension != ''
-          GROUP BY full_path, folder_path ORDER BY file_count DESC LIMIT 10
-        ) t LEFT JOIN folder_tree ft ON ft.folder_id = REPLACE(t.full_path, '/', '\\\\')
-      `);
+            SUM(sf.size) as total_size
+          FROM scanned_files sf
+          JOIN folder_tree ft ON sf.folder_id_int = ft.id
+          WHERE sf.extension IS NOT NULL AND sf.extension != ''
+          GROUP BY ft.id, ft.folder_id ORDER BY file_count DESC LIMIT 10
+        `)
+      ]);
 
-      response.topFoldersBySize = topBySize.map(r => ({
+      response.topFoldersBySize = topBySize[0].map(r => ({
         id: r.folder_id,
         path: r.folder_path,
         fullPath: r.full_path,
@@ -1992,7 +2085,7 @@ app.get('/api/file-type-breakdown', async (req, res) => {
         sizeFormatted: formatBytes(parseInt(r.total_size))
       }));
 
-      response.topFoldersByCount = topByCount.map(r => ({
+      response.topFoldersByCount = topByCount[0].map(r => ({
         id: r.folder_id,
         path: r.folder_path,
         fullPath: r.full_path,
@@ -2016,7 +2109,7 @@ app.get('/api/file-type-breakdown', async (req, res) => {
 // Get all photos with optional search and filters
 app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
-    const { search, filter } = req.query;
+    const { search, filter, camera, model, year, month, days } = req.query;
     
     // Use cached data if available
     const now = Date.now();
@@ -2036,6 +2129,24 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
       const photoDate = new Date(photo.date_taken);
       return photoDate <= today;
     });
+    
+    // Default: last 7 days if no other filter specified (including days)
+    const hasAnyFilter = search || filter || camera || model || year || month || (days !== undefined && days !== '');
+    if (!hasAnyFilter) {
+      const sevenDaysAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+      photos = photos.filter(photo => {
+        if (!photo.date_taken) return false;
+        return new Date(photo.date_taken) >= sevenDaysAgo;
+      });
+    } else if (days !== undefined && days !== '' && parseInt(days) > 0) {
+      // Explicit days filter overrides default
+      const daysAgo = new Date(today.getTime() - parseInt(days) * 24 * 60 * 60 * 1000);
+      photos = photos.filter(photo => {
+        if (!photo.date_taken) return false;
+        return new Date(photo.date_taken) >= daysAgo;
+      });
+    }
+    // days=0 means "all time" — no date filter applied
     
     // Apply search
     if (search) {
@@ -2063,10 +2174,61 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
       });
     }
     
+    // Apply camera filter
+    if (camera) {
+      const camLower = camera.toLowerCase();
+      photos = photos.filter(photo => {
+        const make = (photo.camera_make || '').toLowerCase();
+        const model = (photo.camera_model || '').toLowerCase();
+        const combined = (make + ' ' + model).trim();
+        return make.includes(camLower) || model.includes(camLower) || combined.includes(camLower);
+      });
+    }
+    
+    // Apply model filter
+    if (model) {
+      const modelLower = model.toLowerCase();
+      photos = photos.filter(photo => 
+        (photo.camera_model && photo.camera_model.toLowerCase().includes(modelLower))
+      );
+    }
+    
+    // Apply year filter
+    if (year) {
+      photos = photos.filter(photo => {
+        if (!photo.date_taken) return false;
+        return new Date(photo.date_taken).getFullYear() === parseInt(year);
+      });
+    }
+    
+    // Apply month filter
+    if (month) {
+      photos = photos.filter(photo => {
+        if (!photo.date_taken) return false;
+        return new Date(photo.date_taken).getMonth() + 1 === parseInt(month);
+      });
+    }
+    
     // Calculate stats
     const totalSize = photos.reduce((sum, p) => sum + Number(p.size), 0);
     const uniqueCameras = new Set(photos.map(p => p.camera_make).filter(Boolean)).size;
     const withGPS = photos.filter(p => p.latitude !== null).length;
+    
+    // Build filter options from full dataset (before filtering)
+    const cameraCounts = {};
+    photosCache.forEach(p => {
+      const cam = [p.camera_make, p.camera_model].filter(Boolean).join(' ');
+      if (cam) cameraCounts[cam] = (cameraCounts[cam] || 0) + 1;
+    });
+    const allCameras = Object.entries(cameraCounts).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
+    
+    const modelCounts = {};
+    photosCache.forEach(p => {
+      if (p.camera_model) modelCounts[p.camera_model] = (modelCounts[p.camera_model] || 0) + 1;
+    });
+    const allModels = Object.entries(modelCounts).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
+    const allYears = [...new Set(photosCache.map(p => p.date_taken ? new Date(p.date_taken).getFullYear() : null).filter(Boolean))].sort((a, b) => b - a);
+    const allMonths = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     
     res.json({
       photos,
@@ -2075,6 +2237,12 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
         totalSize: formatBytes(totalSize),
         uniqueCameras,
         withGPS
+      },
+      filters: {
+        cameras: allCameras,
+        models: allModels,
+        years: allYears,
+        months: allMonths.map((name, i) => ({ name, value: i + 1 }))
       }
     });
   } catch (err) {
