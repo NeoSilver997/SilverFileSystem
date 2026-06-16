@@ -1554,6 +1554,91 @@ let backupAnalysisCache = null;
 let backupAnalysisCacheTime = 0;
 let backupAnalysisCacheFolder = null;
 
+// Preloaded duplicate groups: hash → [{id, name, path, size, extension, folderId, drive}]
+let dupGroupMap = null;
+let dupGroupLoadedAt = 0;
+
+async function preloadDupGroups() {
+  const t = Date.now();
+  const map = new Map();
+  const BATCH = 10000;
+  let offset = 0;
+  while (true) {
+    const [rows] = await db.connection.query({
+      sql: `SELECT sf.hash, sf.id, sf.name, sf.size, sf.extension,
+              sf.folder_id_int, ft.folder_id as folder_path, ft.folder_name
+            FROM scanned_files sf
+            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+            WHERE sf.hash IS NOT NULL
+            ORDER BY sf.hash
+            LIMIT ? OFFSET ?`,
+      timeout: 60000
+    }, [BATCH, offset]);
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      if (!map.has(r.hash)) map.set(r.hash, []);
+      map.get(r.hash).push({
+        id: r.id, name: r.name, size: r.size, extension: r.extension,
+        path: r.folder_path ? r.folder_path + '\\' + r.name : r.name,
+        folderId: r.folder_id_int,
+        folder: r.folder_name || r.folder_path,
+        drive: (r.folder_path || '').substring(0, 2) || '??'
+      });
+    }
+    offset += BATCH;
+    if (rows.length < BATCH) break;
+  }
+  // Only keep hashes with >1 file (actual duplicates)
+  let removed = 0;
+  for (const [hash, files] of map) {
+    if (files.length <= 1) { map.delete(hash); removed++; }
+  }
+  dupGroupMap = map;
+  dupGroupLoadedAt = Date.now();
+  console.log(`[preload] dupGroupMap: ${map.size} groups loaded, ${removed} singletons removed (${Date.now() - t}ms)`);
+}
+
+// Preload same-name groups: name → [{id, name, path, size, extension, folderId, drive}]
+let sameNameMap = null;
+
+async function preloadSameNameGroups() {
+  const t = Date.now();
+  const map = new Map();
+  const BATCH = 10000;
+  let offset = 0;
+  while (true) {
+    const [rows] = await db.connection.query({
+      sql: `SELECT sf.id, sf.name, sf.size, sf.extension,
+              sf.folder_id_int, ft.folder_id as folder_path, ft.folder_name
+            FROM scanned_files sf
+            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+            WHERE sf.hash IS NULL
+            ORDER BY sf.name
+            LIMIT ? OFFSET ?`,
+      timeout: 60000
+    }, [BATCH, offset]);
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      if (!map.has(r.name)) map.set(r.name, []);
+      map.get(r.name).push({
+        id: r.id, name: r.name, size: r.size, extension: r.extension,
+        path: r.folder_path ? r.folder_path + '\\' + r.name : r.name,
+        folderId: r.folder_id_int,
+        folder: r.folder_name || r.folder_path,
+        drive: (r.folder_path || '').substring(0, 2) || '??'
+      });
+    }
+    offset += BATCH;
+    if (rows.length < BATCH) break;
+  }
+  let removed = 0;
+  for (const [name, files] of map) {
+    if (files.length <= 1) { map.delete(name); removed++; }
+  }
+  sameNameMap = map;
+  console.log(`[preload] sameNameMap: ${map.size} groups loaded, ${removed} singletons removed (${Date.now() - t}ms)`);
+}
+
 app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
   const startTime = Date.now();
   try {
@@ -1571,14 +1656,17 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
       return res.json(backupAnalysisCache);
     }
 
-    // Get matching folder IDs first (index-friendly)
+    // Step 1: Get folder IDs
     const t1 = Date.now();
-    const [targetFolderRows] = await db.connection.query(`
-      SELECT id FROM folder_tree WHERE REPLACE(folder_id, '\\\\', '/') LIKE ?
-    `, [folder + '%']);
+    const [targetFolderRows] = await db.connection.query({
+      sql: `SELECT id, folder_id FROM folder_tree WHERE REPLACE(folder_id, '\\\\', '/') LIKE ?`,
+      timeout: 30000
+    }, [folder + '%']);
     const targetFolderIds = targetFolderRows.map(f => f.id);
+    const targetFolderIdSet = new Set(targetFolderIds);
     console.log(`[backup-analysis] folder IDs: ${targetFolderIds.length} (${Date.now() - t1}ms)`);
 
+    // Step 2: Get files in target folder
     let files = [];
     if (targetFolderIds.length > 0) {
       const t2 = Date.now();
@@ -1587,11 +1675,9 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
         const batch = targetFolderIds.slice(i, i + BATCH);
         const placeholders = batch.map(() => '?').join(',');
         const [batchFiles] = await db.connection.query({
-          sql: `SELECT sf.id, sf.name, sf.size, sf.hash, sf.extension, ft.folder_id as folder_path
+          sql: `SELECT sf.id, sf.name, sf.size, sf.hash, sf.extension, sf.folder_id_int
             FROM scanned_files sf
-            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
-            WHERE sf.folder_id_int IN (${placeholders})
-            ORDER BY sf.name`,
+            WHERE sf.folder_id_int IN (${placeholders})`,
           timeout: 30000
         }, batch);
         files.push(...batchFiles);
@@ -1599,155 +1685,57 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
       console.log(`[backup-analysis] files: ${files.length} (${Date.now() - t2}ms)`);
     }
 
-    // Separate hashed vs unhashed
+    // Step 3: Classify using preloaded maps (instant)
+    const t3 = Date.now();
     const hashed = files.filter(f => f.hash);
     const unhashed = files.filter(f => !f.hash);
-
-    // Check hashed files for copies within the same folder tree
-    const hashes = [...new Set(hashed.map(f => f.hash))];
-    const dupMap = new Map();
-
-    if (hashes.length > 0) {
-      const t3 = Date.now();
-      // Find copies WITHIN the target folder (same hash, different file)
-      const BATCH = 500;
-      for (let i = 0; i < hashes.length; i += BATCH) {
-        const batch = hashes.slice(i, i + BATCH);
-        const placeholders = batch.map(() => '?').join(',');
-        let dupQuery, dupParams;
-        if (targetFolderIds.length > 0) {
-          const exPh = targetFolderIds.map(() => '?').join(',');
-          dupQuery = `
-            SELECT sf.hash, sf.name, sf.size, ft.folder_id as folder_path, ft.folder_name
-            FROM scanned_files sf
-            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
-            WHERE sf.hash IN (${placeholders})
-              AND sf.folder_id_int IN (${exPh})
-          `;
-          dupParams = [...batch, ...targetFolderIds];
-        } else {
-          dupQuery = `
-            SELECT sf.hash, sf.name, sf.size, ft.folder_id as folder_path, ft.folder_name
-            FROM scanned_files sf
-            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
-            WHERE sf.hash IN (${placeholders})
-          `;
-          dupParams = batch;
-        }
-        const [dups] = await db.connection.query({ sql: dupQuery, timeout: 30000 }, dupParams);
-        for (const d of dups) {
-          if (!dupMap.has(d.hash)) dupMap.set(d.hash, []);
-          const fullPath = d.folder_path ? d.folder_path + '\\' + d.name : d.name;
-          const drive = (d.folder_path || '').substring(0, 2) || '??';
-          dupMap.get(d.hash).push({
-            path: fullPath,
-            name: d.name,
-            folder: d.folder_name || d.folder_id,
-            drive: drive
-          });
-        }
-      }
-    }
-
-    // Find unhashed files with same name elsewhere (potential duplicates without hash)
-    const sameName = [];
-    try {
-    if (unhashed.length > 0 && targetFolderIds.length > 0) {
-      const t4 = Date.now();
-      // Group unhashed files by name
-      const nameMap = new Map();
-      for (const f of unhashed) {
-        if (!nameMap.has(f.name)) nameMap.set(f.name, []);
-        nameMap.get(f.name).push(f);
-      }
-      // For each unique name, check if it exists in other folders
-      const uniqueNames = [...nameMap.keys()];
-      const BATCH = 200;
-      for (let i = 0; i < uniqueNames.length; i += BATCH) {
-        const batch = uniqueNames.slice(i, i + BATCH);
-        const placeholders = batch.map(() => '?').join(',');
-        const exPh = targetFolderIds.map(() => '?').join(',');
-        const [matches] = await db.connection.query({
-          sql: `SELECT sf.name, sf.size, sf.extension, ft.folder_id as folder_path, ft.folder_name
-            FROM scanned_files sf
-            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
-            WHERE sf.name IN (${placeholders})
-              AND sf.folder_id_int NOT IN (${exPh})`,
-          timeout: 30000
-        }, [...batch, ...targetFolderIds]);
-        // Build a map of name -> locations outside the folder
-        const matchMap = new Map();
-        for (const m of matches) {
-          if (!matchMap.has(m.name)) matchMap.set(m.name, []);
-          const drive = (m.folder_path || '').substring(0, 2) || '??';
-          matchMap.get(m.name).push({
-            path: m.folder_path ? m.folder_path + '\\' + m.name : m.name,
-            name: m.name,
-            folder: m.folder_name || m.folder_id,
-            drive: drive,
-            size: m.size
-          });
-        }
-        // For each file in our folder with a matching name outside
-        for (const name of batch) {
-          const localFiles = nameMap.get(name);
-          const outsideCopies = matchMap.get(name);
-          if (localFiles && outsideCopies && outsideCopies.length > 0) {
-            for (const lf of localFiles) {
-              sameName.push({
-                id: lf.id,
-                name: lf.name,
-                path: lf.folder_path ? lf.folder_path + '\\' + lf.name : lf.name,
-                size: lf.size,
-                sizeFormatted: formatBytes(parseInt(lf.size)),
-                extension: lf.extension,
-                copies: outsideCopies.length,
-                copyLocations: outsideCopies.slice(0, 5)
-              });
-            }
-          }
-        }
-      }
-      sameName.sort((a, b) => b.size - a.size);
-      console.log(`[backup-analysis] sameName: ${sameName.length} (${Date.now() - t4}ms)`);
-    }
-    } catch (e) { console.warn('[backup-analysis] sameName failed:', e.message); }
-
-    // Build results
     const withCopy = [];
     const withoutCopy = [];
 
     for (const file of hashed) {
-      const others = dupMap.get(file.hash);
-      if (others && others.length > 0) {
-        withCopy.push({
-          id: file.id,
-          name: file.name,
-          path: file.folder_path ? file.folder_path + '\\' + file.name : file.name,
-          size: file.size,
-          sizeFormatted: formatBytes(parseInt(file.size)),
-          extension: file.extension,
-          copies: others.length,
-          copyLocations: others.slice(0, 5)
-        });
+      const allCopies = dupGroupMap ? dupGroupMap.get(file.hash) : null;
+      if (allCopies && allCopies.length > 1) {
+        const outsideCopies = allCopies.filter(c => c.id !== file.id && !targetFolderIdSet.has(c.folderId));
+        if (outsideCopies.length > 0) {
+          withCopy.push({
+            id: file.id, name: file.name, path: file.name,
+            size: file.size, sizeFormatted: formatBytes(parseInt(file.size)),
+            extension: file.extension, copies: outsideCopies.length,
+            copyLocations: outsideCopies.slice(0, 5)
+          });
+        } else {
+          withoutCopy.push({ id: file.id, name: file.name, path: file.name, size: file.size, sizeFormatted: formatBytes(parseInt(file.size)), extension: file.extension });
+        }
       } else {
-        withoutCopy.push({
-          id: file.id,
-          name: file.name,
-          path: file.folder_path ? file.folder_path + '\\' + file.name : file.name,
-          size: file.size,
-          sizeFormatted: formatBytes(parseInt(file.size)),
-          extension: file.extension
-        });
+        withoutCopy.push({ id: file.id, name: file.name, path: file.name, size: file.size, sizeFormatted: formatBytes(parseInt(file.size)), extension: file.extension });
       }
     }
+    console.log(`[backup-analysis] classify: ${withCopy.length} withCopy, ${withoutCopy.length} unique (${Date.now() - t3}ms)`);
 
-    // Sort by size
-    withCopy.sort((a, b) => b.size - a.size);
-    withoutCopy.sort((a, b) => b.size - a.size);
+    // Step 4: Same name groups (instant from preloaded map)
+    const t4 = Date.now();
+    const sameName = [];
+    if (sameNameMap) {
+      for (const f of unhashed) {
+        const allCopies = sameNameMap.get(f.name);
+        if (allCopies && allCopies.length > 1) {
+          const outsideCopies = allCopies.filter(c => c.id !== f.id && !targetFolderIdSet.has(c.folderId));
+          if (outsideCopies.length > 0) {
+            sameName.push({
+              id: f.id, name: f.name, path: f.name,
+              size: f.size, sizeFormatted: formatBytes(parseInt(f.size)),
+              extension: f.extension, copies: outsideCopies.length,
+              copyLocations: outsideCopies.slice(0, 5)
+            });
+          }
+        }
+      }
+      sameName.sort((a, b) => b.size - a.size);
+    }
+    console.log(`[backup-analysis] sameName: ${sameName.length} (${Date.now() - t4}ms)`);
 
-    const wastedByCopies = withCopy.reduce((sum, f) => sum + f.size * (f.copies), 0);
-
+    // Step 5: Build response
+    const wastedByCopies = withCopy.reduce((sum, f) => sum + f.size * f.copies, 0);
     const response = {
       summary: {
         totalFiles: files.length,
@@ -1757,25 +1745,23 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
         withoutCopy: withoutCopy.length,
         sameName: sameName.length,
         wastedSpace: wastedByCopies,
-        wastedFormatted: formatBytes(wastedByCopies)
+        wastedFormatted: formatBytes(wastedByCopies),
+        dupGroupsLoaded: dupGroupMap ? dupGroupMap.size : 0,
+        sameNameGroupsLoaded: sameNameMap ? sameNameMap.size : 0
       },
       withCopy: withCopy.slice(0, limit),
       withoutCopy: withoutCopy.slice(0, limit),
       sameName: sameName.slice(0, limit),
       unhashed: unhashed.sort((a, b) => b.size - a.size).map(f => ({
-        id: f.id,
-        name: f.name,
-        path: f.folder_path ? f.folder_path + '\\' + f.name : f.name,
-        size: f.size,
-        sizeFormatted: formatBytes(parseInt(f.size)),
-        extension: f.extension
+        id: f.id, name: f.name, path: f.name,
+        size: f.size, sizeFormatted: formatBytes(parseInt(f.size)), extension: f.extension
       }))
     };
 
     backupAnalysisCache = response;
     backupAnalysisCacheTime = now;
     backupAnalysisCacheFolder = folder;
-    console.log(`[backup-analysis] done: ${response.summary.totalFiles} files, ${response.summary.withCopy} withCopy, ${response.summary.withoutCopy} unique (${Date.now() - startTime}ms)`);
+    console.log(`[backup-analysis] done: ${response.summary.totalFiles} files (${Date.now() - startTime}ms)`);
     res.json(response);
   } catch (err) {
     console.error(`[backup-analysis] ERROR after ${Date.now() - startTime}ms:`, err.message);
@@ -3458,6 +3444,8 @@ async function startServer() {
       console.log(`\n🔌 API Endpoints: http://localhost:${PORT}/about`);
       console.log(`📖 See SERVER_GUIDE.md for full API documentation\n`);
       startDriveUsageJob();
+      // Preload duplicate groups for instant backup analysis
+      preloadDupGroups().then(() => preloadSameNameGroups());
     });
   } catch (err) {
     console.error('❌ Failed to start server:', err.message);
