@@ -1598,46 +1598,7 @@ async function preloadDupGroups() {
   console.log(`[preload] dupGroupMap: ${map.size} groups loaded, ${removed} singletons removed (${Date.now() - t}ms)`);
 }
 
-// Preload same-name groups: name → [{id, name, path, size, extension, folderId, drive}]
-let sameNameMap = null;
-
-async function preloadSameNameGroups() {
-  const t = Date.now();
-  const map = new Map();
-  const BATCH = 10000;
-  let offset = 0;
-  while (true) {
-    const [rows] = await db.connection.query({
-      sql: `SELECT sf.id, sf.name, sf.size, sf.extension,
-              sf.folder_id_int, ft.folder_id as folder_path, ft.folder_name
-            FROM scanned_files sf
-            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
-            WHERE sf.hash IS NULL
-            ORDER BY sf.name
-            LIMIT ? OFFSET ?`,
-      timeout: 60000
-    }, [BATCH, offset]);
-    if (rows.length === 0) break;
-    for (const r of rows) {
-      if (!map.has(r.name)) map.set(r.name, []);
-      map.get(r.name).push({
-        id: r.id, name: r.name, size: r.size, extension: r.extension,
-        path: r.folder_path ? r.folder_path + '\\' + r.name : r.name,
-        folderId: r.folder_id_int,
-        folder: r.folder_name || r.folder_path,
-        drive: (r.folder_path || '').substring(0, 2) || '??'
-      });
-    }
-    offset += BATCH;
-    if (rows.length < BATCH) break;
-  }
-  let removed = 0;
-  for (const [name, files] of map) {
-    if (files.length <= 1) { map.delete(name); removed++; }
-  }
-  sameNameMap = map;
-  console.log(`[preload] sameNameMap: ${map.size} groups loaded, ${removed} singletons removed (${Date.now() - t}ms)`);
-}
+// Preload same-name groups skipped — too many unhashed files. Computed on-the-fly per request.
 
 app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
   const startTime = Date.now();
@@ -1712,25 +1673,57 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
     }
     console.log(`[backup-analysis] classify: ${withCopy.length} withCopy, ${withoutCopy.length} unique (${Date.now() - t3}ms)`);
 
-    // Step 4: Same name groups (instant from preloaded map)
+    // Step 4: Same name groups — query unhashed files outside target folder
     const t4 = Date.now();
     const sameName = [];
-    if (sameNameMap) {
-      for (const f of unhashed) {
-        const allCopies = sameNameMap.get(f.name);
-        if (allCopies && allCopies.length > 1) {
-          const outsideCopies = allCopies.filter(c => c.id !== f.id && !targetFolderIdSet.has(c.folderId));
-          if (outsideCopies.length > 0) {
-            sameName.push({
-              id: f.id, name: f.name, path: f.name,
-              size: f.size, sizeFormatted: formatBytes(parseInt(f.size)),
-              extension: f.extension, copies: outsideCopies.length,
-              copyLocations: outsideCopies.slice(0, 5)
+    if (unhashed.length > 0 && targetFolderIds.length > 0) {
+      try {
+        const nameMap = new Map();
+        for (const f of unhashed) {
+          if (!nameMap.has(f.name)) nameMap.set(f.name, []);
+          nameMap.get(f.name).push(f);
+        }
+        const uniqueNames = [...nameMap.keys()];
+        const BATCH = 200;
+        for (let i = 0; i < uniqueNames.length; i += BATCH) {
+          const batch = uniqueNames.slice(i, i + BATCH);
+          const placeholders = batch.map(() => '?').join(',');
+          const exPh = targetFolderIds.map(() => '?').join(',');
+          const [matches] = await db.connection.query({
+            sql: `SELECT sf.id, sf.name, sf.size, sf.extension,
+                    sf.folder_id_int, ft.folder_id as folder_path, ft.folder_name
+                  FROM scanned_files sf
+                  LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+                  WHERE sf.name IN (${placeholders})
+                    AND sf.folder_id_int NOT IN (${exPh})`,
+            timeout: 30000
+          }, [...batch, ...targetFolderIds]);
+          const matchMap = new Map();
+          for (const m of matches) {
+            if (!matchMap.has(m.name)) matchMap.set(m.name, []);
+            matchMap.get(m.name).push({
+              id: m.id, path: m.folder_path ? m.folder_path + '\\' + m.name : m.name,
+              name: m.name, folder: m.folder_name || m.folder_path,
+              drive: (m.folder_path || '').substring(0, 2) || '??', size: m.size
             });
           }
+          for (const name of batch) {
+            const localFiles = nameMap.get(name);
+            const outsideCopies = matchMap.get(name);
+            if (localFiles && outsideCopies && outsideCopies.length > 0) {
+              for (const lf of localFiles) {
+                sameName.push({
+                  id: lf.id, name: lf.name, path: lf.name,
+                  size: lf.size, sizeFormatted: formatBytes(parseInt(lf.size)),
+                  extension: lf.extension, copies: outsideCopies.length,
+                  copyLocations: outsideCopies.slice(0, 5)
+                });
+              }
+            }
+          }
         }
-      }
-      sameName.sort((a, b) => b.size - a.size);
+        sameName.sort((a, b) => b.size - a.size);
+      } catch (e) { console.warn('[backup-analysis] sameName failed:', e.message); }
     }
     console.log(`[backup-analysis] sameName: ${sameName.length} (${Date.now() - t4}ms)`);
 
@@ -1746,8 +1739,7 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
         sameName: sameName.length,
         wastedSpace: wastedByCopies,
         wastedFormatted: formatBytes(wastedByCopies),
-        dupGroupsLoaded: dupGroupMap ? dupGroupMap.size : 0,
-        sameNameGroupsLoaded: sameNameMap ? sameNameMap.size : 0
+        dupGroupsLoaded: dupGroupMap ? dupGroupMap.size : 0
       },
       withCopy: withCopy.slice(0, limit),
       withoutCopy: withoutCopy.slice(0, limit),
@@ -3445,7 +3437,7 @@ async function startServer() {
       console.log(`📖 See SERVER_GUIDE.md for full API documentation\n`);
       startDriveUsageJob();
       // Preload duplicate groups for instant backup analysis
-      preloadDupGroups().then(() => preloadSameNameGroups());
+      preloadDupGroups();
     });
   } catch (err) {
     console.error('❌ Failed to start server:', err.message);
