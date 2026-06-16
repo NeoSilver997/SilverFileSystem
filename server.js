@@ -1651,6 +1651,7 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
 
     // Find unhashed files with same name elsewhere (potential duplicates without hash)
     const sameName = [];
+    try {
     if (unhashed.length > 0 && targetFolderIds.length > 0) {
       const t4 = Date.now();
       // Group unhashed files by name
@@ -1710,6 +1711,7 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
       sameName.sort((a, b) => b.size - a.size);
       console.log(`[backup-analysis] sameName: ${sameName.length} (${Date.now() - t4}ms)`);
     }
+    } catch (e) { console.warn('[backup-analysis] sameName failed:', e.message); }
 
     // Build results
     const withCopy = [];
@@ -1773,7 +1775,7 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
     backupAnalysisCache = response;
     backupAnalysisCacheTime = now;
     backupAnalysisCacheFolder = folder;
-    console.log(`[backup-analysis] done: ${response.stats.totalFiles} files, ${response.stats.withCopy} withCopy, ${response.stats.withoutCopy} unique (${Date.now() - startTime}ms)`);
+    console.log(`[backup-analysis] done: ${response.summary.totalFiles} files, ${response.summary.withCopy} withCopy, ${response.summary.withoutCopy} unique (${Date.now() - startTime}ms)`);
     res.json(response);
   } catch (err) {
     console.error(`[backup-analysis] ERROR after ${Date.now() - startTime}ms:`, err.message);
