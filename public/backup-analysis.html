@@ -185,7 +185,7 @@
                 <div class="stat-card"><div class="stat-value">${summary.unhashed.toLocaleString()}</div><div class="stat-label">Unhashed</div></div>
                 <div class="stat-card"><div class="stat-value stat-ok">${summary.withCopy.toLocaleString()}</div><div class="stat-label">Has Copy Elsewhere</div></div>
                 <div class="stat-card"><div class="stat-value stat-warn">${multiCopy.length.toLocaleString()}</div><div class="stat-label">Multiple Copies (>1)</div></div>
-                <div class="stat-card"><div class="stat-value" style="color:#f39c12;">${(sameName||[]).length.toLocaleString()}</div><div class="stat-label">Same Name (No Hash)</div></div>
+                <div class="stat-card"><div class="stat-value" style="color:#f39c12;">${(sameName||[]).length.toLocaleString()}</div><div class="stat-label">Same Name+Size (No Hash)</div></div>
                 <div class="stat-card"><div class="stat-value">${summary.wastedFormatted}</div><div class="stat-label">Wasted by Copies</div></div>
             </div>`;
 
@@ -193,7 +193,7 @@
                 <div class="tabs">
                     <button class="tab ${currentTab==='withCopy'?'active':''}" onclick="switchTab('withCopy')">✅ Has Copy (${withCopy.length})</button>
                     <button class="tab ${currentTab==='multiCopy'?'active':''}" onclick="switchTab('multiCopy')">🔁 Multiple Copies (${multiCopy.length})</button>
-                    <button class="tab ${currentTab==='sameName'?'active':''}" onclick="switchTab('sameName')">📛 Same Name (${(sameName||[]).length})</button>
+                    <button class="tab ${currentTab==='sameName'?'active':''}" onclick="switchTab('sameName')">📛 Same Name+Size (${(sameName||[]).length})</button>
                     <button class="tab ${currentTab==='withoutCopy'?'active':''}" onclick="switchTab('withoutCopy')">⚠️ Unique (${withoutCopy.length})</button>
                     <button class="tab ${currentTab==='unknown'?'active':''}" onclick="switchTab('unknown')">❓ Unknown (${summary.unhashed})</button>
                     <button onclick="generateDeleteScript()" style="margin-left:auto;padding:0.3rem 0.8rem;background:#f39c12;color:white;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem;">🗑️ Generate Delete Script</button>

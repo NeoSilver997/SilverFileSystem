@@ -1673,43 +1673,51 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
     }
     console.log(`[backup-analysis] classify: ${withCopy.length} withCopy, ${withoutCopy.length} unique (${Date.now() - t3}ms)`);
 
-    // Step 4: Same name groups — query unhashed files outside target folder
+    // Step 4: Same name+size groups — query unhashed files outside target folder
     const t4 = Date.now();
     const sameName = [];
     if (unhashed.length > 0 && targetFolderIds.length > 0) {
       try {
-        const nameMap = new Map();
+        const nameSizeMap = new Map();
         for (const f of unhashed) {
-          if (!nameMap.has(f.name)) nameMap.set(f.name, []);
-          nameMap.get(f.name).push(f);
+          const key = f.name + '_' + f.size;
+          if (!nameSizeMap.has(key)) nameSizeMap.set(key, []);
+          nameSizeMap.get(key).push(f);
         }
-        const uniqueNames = [...nameMap.keys()];
+        const uniqueNames = [...nameSizeMap.keys()];
         const BATCH = 200;
         for (let i = 0; i < uniqueNames.length; i += BATCH) {
           const batch = uniqueNames.slice(i, i + BATCH);
-          const placeholders = batch.map(() => '?').join(',');
+          // Batch query: find files with matching name+size outside target folder
+          const nameSizeConditions = batch.map(() => '(sf.name = ? AND sf.size = ?)').join(' OR ');
+          const nameSizeParams = [];
+          for (const key of batch) {
+            const lastUnderscore = key.lastIndexOf('_');
+            nameSizeParams.push(key.substring(0, lastUnderscore), parseInt(key.substring(lastUnderscore + 1)));
+          }
           const exPh = targetFolderIds.map(() => '?').join(',');
           const [matches] = await db.connection.query({
             sql: `SELECT sf.id, sf.name, sf.size, sf.extension,
                     sf.folder_id_int, ft.folder_id as folder_path, ft.folder_name
                   FROM scanned_files sf
                   LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
-                  WHERE sf.name IN (${placeholders})
+                  WHERE (${nameSizeConditions})
                     AND sf.folder_id_int NOT IN (${exPh})`,
             timeout: 30000
-          }, [...batch, ...targetFolderIds]);
+          }, [...nameSizeParams, ...targetFolderIds]);
           const matchMap = new Map();
           for (const m of matches) {
-            if (!matchMap.has(m.name)) matchMap.set(m.name, []);
-            matchMap.get(m.name).push({
+            const key = m.name + '_' + m.size;
+            if (!matchMap.has(key)) matchMap.set(key, []);
+            matchMap.get(key).push({
               id: m.id, path: m.folder_path ? m.folder_path + '\\' + m.name : m.name,
               name: m.name, folder: m.folder_name || m.folder_path,
               drive: (m.folder_path || '').substring(0, 2) || '??', size: m.size
             });
           }
-          for (const name of batch) {
-            const localFiles = nameMap.get(name);
-            const outsideCopies = matchMap.get(name);
+          for (const key of batch) {
+            const localFiles = nameSizeMap.get(key);
+            const outsideCopies = matchMap.get(key);
             if (localFiles && outsideCopies && outsideCopies.length > 0) {
               for (const lf of localFiles) {
                 sameName.push({
