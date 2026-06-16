@@ -167,7 +167,7 @@ app.use(morgan('combined', { stream: fs.createWriteStream('access.log', { flags:
 // Rate limiting middleware
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  max: 10000, // Limit each IP to 100 requests per windowMs
   message: 'Too many requests from this IP, please try again later.'
 });
 
@@ -180,7 +180,7 @@ const strictLimiter = rateLimit({
 // Higher limit for media streaming (images, audio, video)
 const mediaLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 500, // Higher limit for media files
+  max: 5000, // Higher limit for media files
   message: 'Too many media requests from this IP, please try again later.'
 });
 
@@ -3702,6 +3702,36 @@ app.get('/api/faces/groups', requireAuthWrapper, requirePhotoPermission, async (
   }
 });
 
+// Get ignored faces
+app.get('/api/faces/ignored', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { limit = 100, offset = 0 } = req.query;
+    const [faces] = await db.connection.execute(`
+      SELECT df.id, df.file_id, df.face_index, df.confidence, df.gender, df.age, df.expression,
+             df.face_descriptor, sf.name
+      FROM detected_faces df
+      JOIN scanned_files sf ON df.file_id = sf.id
+      WHERE df.all_expressions IS NOT NULL
+      AND JSON_EXTRACT(df.all_expressions, '$.invalid') = true
+      ORDER BY df.file_id DESC
+      LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}
+    `);
+
+    const [total] = await db.connection.execute(
+      "SELECT COUNT(*) as c FROM detected_faces WHERE all_expressions IS NOT NULL AND JSON_EXTRACT(all_expressions, '$.invalid') = true"
+    );
+
+    const parsed = faces.map(f => {
+      const desc = typeof f.face_descriptor === 'string' ? JSON.parse(f.face_descriptor) : (f.face_descriptor || {});
+      return { ...f, thumb: desc?.thumbnail, phash: desc?.phash };
+    });
+
+    res.json({ faces: parsed, total: total[0].c });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get faces not yet grouped (orphan faces)
 app.get('/api/faces/unassigned', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
@@ -3869,7 +3899,6 @@ app.put('/api/faces/:faceId/invalid', requireAuthWrapper, async (req, res) => {
   try {
     const faceId = parseInt(req.params.faceId);
     const { invalid } = req.body;
-    // Store in all_expressions JSON field as {"invalid": true}
     const [rows] = await db.connection.execute('SELECT all_expressions FROM detected_faces WHERE id = ?', [faceId]);
     if (rows.length === 0) return res.status(404).json({ error: 'Face not found' });
     let meta = {};
@@ -3877,6 +3906,25 @@ app.put('/api/faces/:faceId/invalid', requireAuthWrapper, async (req, res) => {
     meta.invalid = !!invalid;
     await db.connection.execute('UPDATE detected_faces SET all_expressions = ? WHERE id = ?', [JSON.stringify(meta), faceId]);
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Mark multiple faces as ignored
+app.post('/api/faces/ignore', requireAuthWrapper, async (req, res) => {
+  try {
+    const { faceIds } = req.body;
+    if (!Array.isArray(faceIds)) return res.status(400).json({ error: 'faceIds array required' });
+    for (const faceId of faceIds) {
+      const [rows] = await db.connection.execute('SELECT all_expressions FROM detected_faces WHERE id = ?', [faceId]);
+      if (rows.length === 0) continue;
+      let meta = {};
+      try { meta = typeof rows[0].all_expressions === 'string' ? JSON.parse(rows[0].all_expressions) : (rows[0].all_expressions || {}); } catch {}
+      meta.invalid = true;
+      await db.connection.execute('UPDATE detected_faces SET all_expressions = ? WHERE id = ?', [JSON.stringify(meta), faceId]);
+    }
+    res.json({ success: true, ignored: faceIds.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

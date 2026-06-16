@@ -1832,10 +1832,11 @@ program
 // Face detection scan command
 program
   .command('face-scan')
-  .description('Detect faces in photos and save to database (defaults to from-db mode)')
+  .description('Detect faces in photos and save to database (defaults to from-db mode, multi-threaded)')
   .argument('[directory]', 'Directory to scan (omit for from-db mode, reads from .env DB)')
   .option('-l, --limit <n>', 'Max number of images to process', '50')
   .option('-c, --min-confidence <n>', 'Minimum face confidence to save (0-1)', '0.65')
+  .option('-t, --threads <n>', 'Number of parallel worker threads', String(Math.min(4, (await import('os')).cpus().length)))
   .option('--filesystem', 'Force filesystem scan mode (otherwise from-db by default)')
   .option('--group', 'Show face grouping results after scan')
   .action(async (directory, options) => {
@@ -1875,8 +1876,10 @@ program
           `SELECT sf.id, sf.name, sf.size, sf.extension, ft.folder_id
            FROM scanned_files sf
            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
-           WHERE sf.extension IN ('jpg','jpeg','png','heic','webp','gif','bmp','tiff')
-           AND ft.folder_id LIKE '%Camera%'
+           LEFT JOIN photo_metadata pm ON sf.id = pm.file_id
+           WHERE sf.extension IN ('jpg','jpeg','heic')
+           and sf.size > 500000
+           AND pm.camera_make IS NOT NULL
            AND sf.id NOT IN (SELECT DISTINCT file_id FROM detected_faces)
            ORDER BY sf.id DESC
            LIMIT ${limit}`
@@ -1929,54 +1932,65 @@ program
       const allResults = [];
       let totalFaces = 0;
       let scanned = 0;
+      const minConf = parseFloat(options.minConfidence) || 0.65;
+      const numThreads = parseInt(options.threads) || 4;
+      const WORKER_SCRIPT = join(__dirname, '..', 'scripts', 'face-worker.js');
 
-      for (let i = 0; i < toProcess.length; i++) {
-        const item = toProcess[i];
-        const filePath = item.filePath;
-        const fname = item.name;
+      spinner.text = `Scanning with ${numThreads} threads...`;
 
-        try {
-          const exists = await fsAsync.access(filePath).then(() => true).catch(() => false);
-          if (!exists) {
-            spinner.text = `[${i + 1}/${toProcess.length}] SKIP (not found) | ${fname}`;
-            continue;
-          }
+      // Split items into chunks for parallel workers
+      const chunkSize = Math.ceil(toProcess.length / numThreads);
+      const chunks = [];
+      for (let i = 0; i < toProcess.length; i += chunkSize) {
+        chunks.push(toProcess.slice(i, i + chunkSize));
+      }
 
-          const t0 = Date.now();
-          const result = await detector.detect(filePath);
-          const ms = Date.now() - t0;
+      // Launch workers in parallel
+      const { Worker } = await import('worker_threads');
+      const workers = chunks.map(chunk => {
+        return new Promise((resolve, reject) => {
+          const worker = new Worker(WORKER_SCRIPT, {
+            workerData: { items: chunk, minConfidence: minConf }
+          });
+          const chunkResults = [];
+          worker.on('message', (msg) => {
+            if (msg.type === 'progress') {
+              spinner.text = `[${scanned + msg.current}/${toProcess.length}] Processing with ${numThreads} threads...`;
+            }
+            if (msg.type === 'done') {
+              resolve(msg.results);
+            }
+          });
+          worker.on('error', reject);
+        });
+      });
 
-          // Filter faces by confidence
-          const minConf = parseFloat(options.minConfidence) || 0.65;
-          const highConfFaces = (result.faces || []).filter(f => f.confidence >= minConf);
-          const filteredResult = { ...result, faces: highConfFaces, summary: { ...result.summary, faceCount: highConfFaces.length } };
+      const allWorkerResults = await Promise.all(workers);
 
-          const fc = highConfFaces.length;
-          totalFaces += fc;
+      // Flatten results and save to DB
+      for (const results of allWorkerResults) {
+        for (const result of results) {
           scanned++;
-          spinner.text = `[${i + 1}/${toProcess.length}] ${ms}ms | faces=${fc} (conf>=${minConf}) | ${fname}`;
+          totalFaces += result.faces?.length || 0;
+          allResults.push(result);
 
-          allResults.push({ ...filteredResult, filePath });
-
-          if (dbManager && result.success && fc > 0) {
+          if (dbManager && result.success && result.faces?.length > 0) {
             try {
-              const fileId = item.fileId || null;
+              const fileId = result.fileId || null;
               if (fileId) {
-                await dbManager.storeDetectedFaces(fileId, filteredResult);
+                await dbManager.storeDetectedFaces(fileId, result);
               } else {
-                const st = await fsAsync.stat(filePath);
+                const st = await fsAsync.stat(result.filePath);
                 const [ins] = await dbManager.connection.execute(
                   'INSERT INTO scanned_files (name, size, extension, mtime, created_at) VALUES (?, ?, ?, NOW(), NOW())',
-                  [fname, st.size, pathMod.default.extname(filePath).slice(1)]
+                  [result.name, st.size, pathMod.default.extname(result.filePath).slice(1)]
                 );
-                await dbManager.storeDetectedFaces(ins.insertId, filteredResult);
+                await dbManager.storeDetectedFaces(ins.insertId, result);
               }
             } catch (e) {
               // silent
             }
           }
-        } catch (e) {
-          // skip file on error
         }
       }
 
