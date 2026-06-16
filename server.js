@@ -1649,6 +1649,68 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
       }
     }
 
+    // Find unhashed files with same name elsewhere (potential duplicates without hash)
+    const sameName = [];
+    if (unhashed.length > 0 && targetFolderIds.length > 0) {
+      const t4 = Date.now();
+      // Group unhashed files by name
+      const nameMap = new Map();
+      for (const f of unhashed) {
+        if (!nameMap.has(f.name)) nameMap.set(f.name, []);
+        nameMap.get(f.name).push(f);
+      }
+      // For each unique name, check if it exists in other folders
+      const uniqueNames = [...nameMap.keys()];
+      const BATCH = 200;
+      for (let i = 0; i < uniqueNames.length; i += BATCH) {
+        const batch = uniqueNames.slice(i, i + BATCH);
+        const placeholders = batch.map(() => '?').join(',');
+        const exPh = targetFolderIds.map(() => '?').join(',');
+        const [matches] = await db.connection.query({
+          sql: `SELECT sf.name, sf.size, sf.extension, ft.folder_id as folder_path, ft.folder_name
+            FROM scanned_files sf
+            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+            WHERE sf.name IN (${placeholders})
+              AND sf.folder_id_int NOT IN (${exPh})`,
+          timeout: 30000
+        }, [...batch, ...targetFolderIds]);
+        // Build a map of name -> locations outside the folder
+        const matchMap = new Map();
+        for (const m of matches) {
+          if (!matchMap.has(m.name)) matchMap.set(m.name, []);
+          const drive = (m.folder_path || '').substring(0, 2) || '??';
+          matchMap.get(m.name).push({
+            path: m.folder_path ? m.folder_path + '\\' + m.name : m.name,
+            name: m.name,
+            folder: m.folder_name || m.folder_id,
+            drive: drive,
+            size: m.size
+          });
+        }
+        // For each file in our folder with a matching name outside
+        for (const name of batch) {
+          const localFiles = nameMap.get(name);
+          const outsideCopies = matchMap.get(name);
+          if (localFiles && outsideCopies && outsideCopies.length > 0) {
+            for (const lf of localFiles) {
+              sameName.push({
+                id: lf.id,
+                name: lf.name,
+                path: lf.folder_path ? lf.folder_path + '\\' + lf.name : lf.name,
+                size: lf.size,
+                sizeFormatted: formatBytes(parseInt(lf.size)),
+                extension: lf.extension,
+                copies: outsideCopies.length,
+                copyLocations: outsideCopies.slice(0, 5)
+              });
+            }
+          }
+        }
+      }
+      sameName.sort((a, b) => b.size - a.size);
+      console.log(`[backup-analysis] sameName: ${sameName.length} (${Date.now() - t4}ms)`);
+    }
+
     // Build results
     const withCopy = [];
     const withoutCopy = [];
@@ -1691,11 +1753,13 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
         unhashed: unhashed.length,
         withCopy: withCopy.length,
         withoutCopy: withoutCopy.length,
+        sameName: sameName.length,
         wastedSpace: wastedByCopies,
         wastedFormatted: formatBytes(wastedByCopies)
       },
       withCopy: withCopy.slice(0, limit),
       withoutCopy: withoutCopy.slice(0, limit),
+      sameName: sameName.slice(0, limit),
       unhashed: unhashed.sort((a, b) => b.size - a.size).map(f => ({
         id: f.id,
         name: f.name,
