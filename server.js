@@ -1555,26 +1555,33 @@ let backupAnalysisCacheTime = 0;
 let backupAnalysisCacheFolder = null;
 
 app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
+  const startTime = Date.now();
   try {
     const folderRaw = req.query.folder;
     if (!folderRaw) return res.status(400).json({ error: 'folder parameter required' });
     const limit = Math.min(parseInt(req.query.limit) || 100, 500);
     const folder = folderRaw.replace(/\\/g, '/').replace(/\/+$/, '');
 
+    console.log(`[backup-analysis] folder=${folder} limit=${limit}`);
+
     // Check cache (5 min TTL)
     const now = Date.now();
     if (backupAnalysisCache && backupAnalysisCacheFolder === folder && (now - backupAnalysisCacheTime) < 300000) {
+      console.log(`[backup-analysis] cache hit (${Date.now() - startTime}ms)`);
       return res.json(backupAnalysisCache);
     }
 
     // Get matching folder IDs first (index-friendly)
+    const t1 = Date.now();
     const [targetFolderRows] = await db.connection.query(`
       SELECT id FROM folder_tree WHERE REPLACE(folder_id, '\\\\', '/') LIKE ?
     `, [folder + '%']);
     const targetFolderIds = targetFolderRows.map(f => f.id);
+    console.log(`[backup-analysis] folder IDs: ${targetFolderIds.length} (${Date.now() - t1}ms)`);
 
     let files = [];
     if (targetFolderIds.length > 0) {
+      const t2 = Date.now();
       const BATCH = 500;
       for (let i = 0; i < targetFolderIds.length; i += BATCH) {
         const batch = targetFolderIds.slice(i, i + BATCH);
@@ -1589,6 +1596,7 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
         }, batch);
         files.push(...batchFiles);
       }
+      console.log(`[backup-analysis] files: ${files.length} (${Date.now() - t2}ms)`);
     }
 
     // Separate hashed vs unhashed
@@ -1600,6 +1608,7 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
     const dupMap = new Map();
 
     if (hashes.length > 0) {
+      const t3 = Date.now();
       // Find copies WITHIN the target folder (same hash, different file)
       const BATCH = 500;
       for (let i = 0; i < hashes.length; i += BATCH) {
@@ -1700,8 +1709,10 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
     backupAnalysisCache = response;
     backupAnalysisCacheTime = now;
     backupAnalysisCacheFolder = folder;
+    console.log(`[backup-analysis] done: ${response.stats.totalFiles} files, ${response.stats.withCopy} withCopy, ${response.stats.withoutCopy} unique (${Date.now() - startTime}ms)`);
     res.json(response);
   } catch (err) {
+    console.error(`[backup-analysis] ERROR after ${Date.now() - startTime}ms:`, err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1846,9 +1857,10 @@ app.post('/api/deleted-archive/restore', requireAuthWrapper, async (req, res) =>
               [fileName, f.size, f.hash, f.extension, folderRow[0].id]
             );
             restored++;
-          }
         }
       }
+      console.log(`[backup-analysis] hashes: ${hashes.length}, dups: ${dupMap.size} (${Date.now() - t3}ms)`);
+    }
     }
     if (restored > 0) {
       await db.connection.query(`DELETE FROM deleted_files_archive WHERE id IN (${placeholders})`, ids);
