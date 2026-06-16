@@ -1579,13 +1579,14 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
       for (let i = 0; i < targetFolderIds.length; i += BATCH) {
         const batch = targetFolderIds.slice(i, i + BATCH);
         const placeholders = batch.map(() => '?').join(',');
-        const [batchFiles] = await db.connection.query(`
-          SELECT sf.id, sf.name, sf.size, sf.hash, sf.extension, ft.folder_id as folder_path
-          FROM scanned_files sf
-          LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
-          WHERE sf.folder_id_int IN (${placeholders})
-          ORDER BY sf.name
-        `, batch);
+        const [batchFiles] = await db.connection.query({
+          sql: `SELECT sf.id, sf.name, sf.size, sf.hash, sf.extension, ft.folder_id as folder_path
+            FROM scanned_files sf
+            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+            WHERE sf.folder_id_int IN (${placeholders})
+            ORDER BY sf.name`,
+          timeout: 30000
+        }, batch);
         files.push(...batchFiles);
       }
     }
@@ -1624,7 +1625,7 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
           `;
           dupParams = batch;
         }
-        const [dups] = await db.connection.query(dupQuery, dupParams);
+        const [dups] = await db.connection.query({ sql: dupQuery, timeout: 30000 }, dupParams);
         for (const d of dups) {
           if (!dupMap.has(d.hash)) dupMap.set(d.hash, []);
           const fullPath = d.folder_path ? d.folder_path + '\\' + d.name : d.name;
