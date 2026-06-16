@@ -1594,32 +1594,27 @@ app.get('/api/backup-analysis', requireAuthWrapper, async (req, res) => {
     const hashed = files.filter(f => f.hash);
     const unhashed = files.filter(f => !f.hash);
 
-    // Check hashed files for copies elsewhere
+    // Check hashed files for copies within the same folder tree
     const hashes = [...new Set(hashed.map(f => f.hash))];
     const dupMap = new Map();
 
     if (hashes.length > 0) {
-      // Build folder_ids to exclude (all folder_ids matching our target path)
-      const [excludeFolders] = await db.connection.query(`
-        SELECT id FROM folder_tree WHERE REPLACE(folder_id, '\\\\', '/') LIKE ?
-      `, [folder + '%']);
-      const excludeIds = excludeFolders.map(f => f.id);
-
+      // Find copies WITHIN the target folder (same hash, different file)
       const BATCH = 500;
       for (let i = 0; i < hashes.length; i += BATCH) {
         const batch = hashes.slice(i, i + BATCH);
         const placeholders = batch.map(() => '?').join(',');
         let dupQuery, dupParams;
-        if (excludeIds.length > 0) {
-          const exPh = excludeIds.map(() => '?').join(',');
+        if (targetFolderIds.length > 0) {
+          const exPh = targetFolderIds.map(() => '?').join(',');
           dupQuery = `
             SELECT sf.hash, sf.name, sf.size, ft.folder_id as folder_path, ft.folder_name
             FROM scanned_files sf
             LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
             WHERE sf.hash IN (${placeholders})
-              AND sf.folder_id_int NOT IN (${exPh})
+              AND sf.folder_id_int IN (${exPh})
           `;
-          dupParams = [...batch, ...excludeIds];
+          dupParams = [...batch, ...targetFolderIds];
         } else {
           dupQuery = `
             SELECT sf.hash, sf.name, sf.size, ft.folder_id as folder_path, ft.folder_name
