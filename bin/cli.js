@@ -1624,4 +1624,386 @@ program
     }
   });
 
+// VLM Photo Classification command
+program
+  .command('classify')
+  .description('Classify photos using local VLM (LM Studio)')
+  .argument('<directory>', 'Directory containing photos to classify')
+  .option('-o, --output <path>', 'Output directory for classified photos', './photo_library')
+  .option('-m, --model <name>', 'VLM model name', 'google/gemma-4-12b-qat')
+  .option('--lmstudio-url <url>', 'LM Studio API URL', 'http://localhost:12355')
+  .option('--dry-run', 'Preview classification without moving files')
+  .option('--db', 'Store results in database')
+  .option('--db-host <host>', 'Database host')
+  .option('--db-port <port>', 'Database port')
+  .option('--db-user <user>', 'Database user')
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', 'Database name')
+  .action(async (directory, options) => {
+    await initDatabase(options);
+
+    const { PhotoClassifier } = await import('../lib/photo-classifier.js');
+    const { exiftool } = await import('exiftool-vendored');
+    const path = await import('path');
+    const fsAsync = await import('fs/promises');
+
+    const classifier = new PhotoClassifier({
+      vlm: {
+        lmstudioUrl: options.lmstudioUrl,
+        model: options.model
+      },
+      outputBase: options.output,
+      dryRun: options.dryRun
+    });
+
+    console.log(chalk.cyan('\nSilverFileSystem VLM Photo Classifier'));
+    console.log(chalk.gray(`  Source:  ${directory}`));
+    console.log(chalk.gray(`  Output: ${options.output}`));
+    console.log(chalk.gray(`  Model:  ${options.model}`));
+    console.log(chalk.gray(`  Mode:   ${options.dryRun ? 'DRY RUN' : 'LIVE'}\n`));
+
+    const spinner = ora('Scanning for images...').start();
+
+    try {
+      const imageExtensions = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp', 'heic', 'heif']);
+      const files = [];
+
+      const walk = async (dir) => {
+        const entries = await fsAsync.readdir(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.default.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            if (!entry.name.startsWith('.') && entry.name !== 'node_modules' && entry.name !== 'photo_library') {
+              await walk(fullPath);
+            }
+          } else {
+            const ext = path.default.extname(entry.name).toLowerCase().slice(1);
+            if (imageExtensions.has(ext)) {
+              files.push(fullPath);
+            }
+          }
+        }
+      };
+
+      await walk(directory);
+      spinner.text = `Found ${files.length} images. Starting classification...`;
+
+      if (files.length === 0) {
+        spinner.warn('No images found in directory');
+        await closeDatabase();
+        return;
+      }
+
+      const exifDataMap = {};
+      for (const file of files) {
+        try {
+          const exif = await exiftool.read(file);
+          exifDataMap[file] = {
+            datetime: { taken: exif.DateTimeOriginal || exif.CreateDate },
+            location: { latitude: exif.GPSLatitude, longitude: exif.GPSLongitude }
+          };
+        } catch {}
+      }
+
+      let classified = 0;
+      let failed = 0;
+      const categories = {};
+
+      const { results, summary } = await classifier.batchClassify(files, exifDataMap, (progress) => {
+        spinner.text = `[${progress.current}/${progress.total}] ${progress.filename} → ${progress.category || 'processing'}...`;
+      });
+
+      spinner.succeed(`Classification complete!`);
+
+      console.log(chalk.green(`\n  ✅ Successful: ${summary.successful}`));
+      console.log(chalk.red(`  ❌ Failed: ${summary.failed}`));
+      console.log(chalk.cyan(`  📦 Compressed: ${summary.compressed}\n`));
+
+      console.log(chalk.cyan('  Categories:'));
+      for (const [cat, count] of Object.entries(summary.categories)) {
+        console.log(chalk.gray(`    ${cat}: ${count}`));
+      }
+
+      console.log(chalk.cyan('\n  Detailed Results:'));
+      for (const result of results) {
+        if (result.success && result.vlmResult) {
+          const v = result.vlmResult;
+          console.log(chalk.white(`\n  ── ${result.filename} ──`));
+          console.log(chalk.gray(`    Category:    ${v.category}`));
+          if (v.subject) console.log(chalk.gray(`    Subject:     ${v.subject.slice(0, 120)}${v.subject.length > 120 ? '...' : ''}`));
+          if (v.action) console.log(chalk.gray(`    Action:      ${v.action.slice(0, 120)}${v.action.length > 120 ? '...' : ''}`));
+          if (v.background) console.log(chalk.gray(`    Background:  ${v.background.slice(0, 120)}${v.background.length > 120 ? '...' : ''}`));
+          if (v.style) console.log(chalk.gray(`    Style:       ${v.style.slice(0, 120)}${v.style.length > 120 ? '...' : ''}`));
+          if (v.tags?.length) console.log(chalk.gray(`    Tags:        ${v.tags.join(', ')}`));
+          if (v.mood) console.log(chalk.gray(`    Mood:        ${v.mood}`));
+          if (v.color_palette) console.log(chalk.gray(`    Colors:      ${v.color_palette}`));
+          if (v.lighting) console.log(chalk.gray(`    Lighting:    ${v.lighting}`));
+          if (v.camera_angle) console.log(chalk.gray(`    Camera:      ${v.camera_angle}`));
+          if (v.ai_prompt) console.log(chalk.yellow(`    AI Prompt:   ${v.ai_prompt.slice(0, 150)}${v.ai_prompt.length > 150 ? '...' : ''}`));
+          console.log(chalk.gray(`    → ${result.destinationPath || 'dry run'}`));
+        }
+      }
+
+      if (dbManager && options.db) {
+        console.log(chalk.gray('\n  Saving to database...'));
+        for (const result of results) {
+          if (result.success && result.vlmResult) {
+            try {
+              const [existing] = await dbManager.connection.execute(
+                'SELECT id FROM scanned_files WHERE path = ?', [result.originalPath]
+              );
+              if (existing.length > 0) {
+                await dbManager.storePhotoClassification(existing[0].id, result.vlmResult, {
+                  ...result,
+                  model: options.model,
+                  rawResponse: result.vlmResult?.rawResponse || ''
+                });
+              }
+            } catch {}
+          }
+        }
+        console.log(chalk.green('  Database saved!'));
+      }
+
+      await closeDatabase();
+    } catch (err) {
+      spinner.fail('Classification failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      await closeDatabase();
+    }
+  });
+
+// Watch directory for new photos command
+program
+  .command('watch')
+  .description('Watch a directory and auto-classify new photos')
+  .argument('<directory>', 'Directory to watch')
+  .option('-o, --output <path>', 'Output directory for classified photos', './photo_library')
+  .option('-m, --model <name>', 'VLM model name', 'google/gemma-4-12b-qat')
+  .option('--lmstudio-url <url>', 'LM Studio API URL', 'http://localhost:12355')
+  .option('--db', 'Store results in database')
+  .option('--db-host <host>', 'Database host')
+  .option('--db-port <port>', 'Database port')
+  .option('--db-user <user>', 'Database user')
+  .option('--db-password <password>', 'Database password')
+  .option('--db-name <name>', 'Database name')
+  .action(async (directory, options) => {
+    await initDatabase(options);
+
+    const { FileWatcher } = await import('../lib/file-watcher.js');
+
+    console.log(chalk.cyan('\nSilverFileSystem VLM Photo Watcher'));
+    console.log(chalk.gray(`  Watching: ${directory}`));
+    console.log(chalk.gray(`  Output:  ${options.output}`));
+    console.log(chalk.gray(`  Model:   ${options.model}\n`));
+
+    const watcher = new FileWatcher({
+      watchDir: directory,
+      outputBase: options.output,
+      vlm: {
+        lmstudioUrl: options.lmstudioUrl,
+        model: options.model
+      },
+      db: dbManager,
+      onFileClassified: (result) => {
+        console.log(chalk.green(`  ✅ ${result.filename} → ${result.category}`));
+      }
+    });
+
+    try {
+      await watcher.start();
+      console.log(chalk.green('  Watching for new images... (Press Ctrl+C to stop)\n'));
+
+      process.on('SIGINT', async () => {
+        console.log(chalk.yellow('\n  Stopping watcher...'));
+        const stats = watcher.getStats();
+        console.log(chalk.gray(`  Stats: ${stats.classified} classified, ${stats.failed} failed`));
+        await watcher.stop();
+        await closeDatabase();
+        process.exit(0);
+      });
+
+    } catch (err) {
+      console.error(chalk.red(`Error: ${err.message}`));
+      await closeDatabase();
+    }
+  });
+
+// Face detection scan command
+program
+  .command('face-scan')
+  .description('Detect faces in photos and save to database (defaults to from-db mode)')
+  .argument('[directory]', 'Directory to scan (omit for from-db mode, reads from .env DB)')
+  .option('-l, --limit <n>', 'Max number of images to process', '50')
+  .option('-c, --min-confidence <n>', 'Minimum face confidence to save (0-1)', '0.65')
+  .option('--filesystem', 'Force filesystem scan mode (otherwise from-db by default)')
+  .option('--group', 'Show face grouping results after scan')
+  .action(async (directory, options) => {
+    // Auto-detect mode: if no directory and not --filesystem, use from-db
+    const useFromDb = !directory || (!options.filesystem && !directory);
+    if (useFromDb) options.fromDb = true;
+    if (directory && !options.filesystem) options.fromDb = false;
+
+    // Auto-load DB from .env if --db flags not provided
+    if (!options.dbHost) options.db = true;
+
+    await initDatabase(options);
+
+    const { FaceDetector } = await import('../lib/face-detector.js');
+    const fsAsync = await import('fs/promises');
+    const pathMod = await import('path');
+
+    const detector = new FaceDetector();
+    const limit = parseInt(options.limit) || 50;
+
+    console.log(chalk.cyan('\nSilverFileSystem Face Detection Scan'));
+    console.log(chalk.gray(`  Mode:   ${options.fromDb ? 'from-db' : 'filesystem'}`));
+    console.log(chalk.gray(`  Limit:  ${limit} images\n`));
+
+    const spinner = ora('Loading images...').start();
+
+    try {
+      let toProcess = [];
+
+      if (options.fromDb) {
+        if (!dbManager) {
+          spinner.fail('Database connection required. Use --db flag.');
+          process.exit(1);
+        }
+
+        const [rows] = await dbManager.connection.execute(
+          `SELECT sf.id, sf.name, sf.size, sf.extension, ft.folder_id
+           FROM scanned_files sf
+           LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+           WHERE sf.extension IN ('jpg','jpeg','png','heic','webp','gif','bmp','tiff')
+           AND ft.folder_id LIKE '%Camera%'
+           AND sf.id NOT IN (SELECT DISTINCT file_id FROM detected_faces)
+           ORDER BY sf.id DESC
+           LIMIT ${limit}`
+        );
+
+        for (const row of rows) {
+          const folderPath = row.folder_id || '';
+          const fullPath = folderPath ? folderPath + '\\' + row.name : row.name;
+          toProcess.push({ fileId: row.id, filePath: fullPath, name: row.name, fromDb: true });
+        }
+
+        spinner.text = `Loaded ${toProcess.length} photos from database`;
+      } else {
+        if (!directory) {
+          spinner.fail('Directory argument required in filesystem mode.');
+          process.exit(1);
+        }
+
+        const imageExtensions = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp', 'heic', 'heif']);
+        const files = [];
+
+        const walk = async (dir) => {
+          const entries = await fsAsync.readdir(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = pathMod.default.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              if (!entry.name.startsWith('.') && entry.name !== 'node_modules' && entry.name !== 'photo_library') {
+                await walk(fullPath);
+              }
+            } else {
+              const ext = pathMod.default.extname(entry.name).toLowerCase().slice(1);
+              if (imageExtensions.has(ext)) {
+                files.push(fullPath);
+              }
+            }
+          }
+        };
+
+        await walk(directory);
+        toProcess = files.slice(0, limit).map(f => ({ filePath: f, name: pathMod.default.basename(f), fromDb: false }));
+        spinner.text = `Found ${files.length} images, processing ${toProcess.length}...`;
+      }
+
+      if (toProcess.length === 0) {
+        spinner.warn('No images found');
+        await closeDatabase();
+        return;
+      }
+
+      const allResults = [];
+      let totalFaces = 0;
+      let scanned = 0;
+
+      for (let i = 0; i < toProcess.length; i++) {
+        const item = toProcess[i];
+        const filePath = item.filePath;
+        const fname = item.name;
+
+        try {
+          const exists = await fsAsync.access(filePath).then(() => true).catch(() => false);
+          if (!exists) {
+            spinner.text = `[${i + 1}/${toProcess.length}] SKIP (not found) | ${fname}`;
+            continue;
+          }
+
+          const t0 = Date.now();
+          const result = await detector.detect(filePath);
+          const ms = Date.now() - t0;
+
+          // Filter faces by confidence
+          const minConf = parseFloat(options.minConfidence) || 0.65;
+          const highConfFaces = (result.faces || []).filter(f => f.confidence >= minConf);
+          const filteredResult = { ...result, faces: highConfFaces, summary: { ...result.summary, faceCount: highConfFaces.length } };
+
+          const fc = highConfFaces.length;
+          totalFaces += fc;
+          scanned++;
+          spinner.text = `[${i + 1}/${toProcess.length}] ${ms}ms | faces=${fc} (conf>=${minConf}) | ${fname}`;
+
+          allResults.push({ ...filteredResult, filePath });
+
+          if (dbManager && result.success && fc > 0) {
+            try {
+              const fileId = item.fileId || null;
+              if (fileId) {
+                await dbManager.storeDetectedFaces(fileId, filteredResult);
+              } else {
+                const st = await fsAsync.stat(filePath);
+                const [ins] = await dbManager.connection.execute(
+                  'INSERT INTO scanned_files (name, size, extension, mtime, created_at) VALUES (?, ?, ?, NOW(), NOW())',
+                  [fname, st.size, pathMod.default.extname(filePath).slice(1)]
+                );
+                await dbManager.storeDetectedFaces(ins.insertId, filteredResult);
+              }
+            } catch (e) {
+              // silent
+            }
+          }
+        } catch (e) {
+          // skip file on error
+        }
+      }
+
+      spinner.succeed(`Scan complete!`);
+
+      console.log(chalk.green(`\n  ✅ Total faces: ${totalFaces}`));
+      console.log(chalk.gray(`  📸 Images scanned: ${scanned}`));
+
+      if (options.group && allResults.length > 0) {
+        console.log(chalk.cyan('\n  Face Groups:'));
+        const groups = detector.groupFaces(allResults);
+        for (const g of groups) {
+          console.log(chalk.gray(`    ${g.label}: ${g.faceCount} faces in ${g.files.length} photos`));
+        }
+      }
+
+      if (dbManager) {
+        const [fc] = await dbManager.connection.execute('SELECT COUNT(*) as c FROM detected_faces');
+        console.log(chalk.gray(`\n  💾 DB detected_faces: ${fc[0].c} rows`));
+      }
+
+      await closeDatabase();
+    } catch (err) {
+      spinner.fail('Scan failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      await closeDatabase();
+    }
+  });
+
 program.parse();

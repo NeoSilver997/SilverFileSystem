@@ -2601,6 +2601,215 @@ app.delete('/api/photos/:id', requireAuthWrapper, requirePhotoPermission, async 
   }
 });
 
+// ─── VLM Photo Classification Endpoints ─────────────────────────────────────
+
+import { VLMClient } from './lib/vlm-client.js';
+import { PhotoClassifier } from './lib/photo-classifier.js';
+import { FileWatcher } from './lib/file-watcher.js';
+
+const vlmConfig = {
+  lmstudioUrl: process.env.LMSTUDIO_URL || 'http://localhost:12355',
+  model: process.env.VLM_MODEL || 'google/gemma-4-12b-qat',
+  timeout: parseInt(process.env.VLM_TIMEOUT) || 180000
+};
+
+let fileWatcher = null;
+
+// Check VLM connection status
+app.get('/api/vlm/status', requireAuthWrapper, async (req, res) => {
+  try {
+    const client = new VLMClient(vlmConfig);
+    const connected = await client.checkConnection();
+    const models = connected ? await client.getAvailableModels() : [];
+    res.json({
+      connected,
+      model: vlmConfig.model,
+      lmstudioUrl: vlmConfig.lmstudioUrl,
+      availableModels: models,
+      watcherRunning: fileWatcher?.running || false,
+      watcherStats: fileWatcher?.getStats() || null
+    });
+  } catch (err) {
+    res.json({ connected: false, error: err.message });
+  }
+});
+
+// Classify a single image via VLM
+app.post('/api/vlm/classify', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { filePath, outputPath } = req.body;
+    if (!filePath) {
+      return res.status(400).json({ error: 'filePath is required' });
+    }
+
+    const exists = await fs.promises.access(filePath).then(() => true).catch(() => false);
+    if (!exists) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const classifier = new PhotoClassifier({
+      vlm: vlmConfig,
+      outputBase: outputPath || process.env.PHOTO_OUTPUT_DIR || path.join(process.cwd(), 'photo_library')
+    });
+
+    let exifData = {};
+    try {
+      const { exiftool: et } = await import('exiftool-vendored');
+      const exif = await et.read(filePath);
+      exifData = {
+        datetime: { taken: exif.DateTimeOriginal || exif.CreateDate },
+        location: { latitude: exif.GPSLatitude, longitude: exif.GPSLongitude }
+      };
+    } catch {}
+
+    const result = await classifier.classifyAndRoute(filePath, exifData);
+    res.json(result);
+  } catch (err) {
+    console.error('VLM classify error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batch classify images in a directory
+app.post('/api/vlm/batch-classify', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { directory, outputPath } = req.body;
+    if (!directory) {
+      return res.status(400).json({ error: 'directory is required' });
+    }
+
+    const exists = await fs.promises.access(directory).then(() => true).catch(() => false);
+    if (!exists) {
+      return res.status(404).json({ error: 'Directory not found' });
+    }
+
+    const classifier = new PhotoClassifier({
+      vlm: vlmConfig,
+      outputBase: outputPath || process.env.PHOTO_OUTPUT_DIR || path.join(process.cwd(), 'photo_library')
+    });
+
+    const result = await classifier.classifyExistingFiles(directory);
+    res.json(result);
+  } catch (err) {
+    console.error('VLM batch classify error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get classification statistics
+app.get('/api/vlm/stats', requireAuthWrapper, async (req, res) => {
+  try {
+    const stats = await db.getClassificationStats();
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get classified photos with filters (including detailed vision fields)
+app.get('/api/vlm/classifications', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { category, hasText, minConfidence, since, limit, tag, mood, style, search } = req.query;
+    const filters = {};
+    if (category) filters.category = category;
+    if (hasText !== undefined) filters.hasText = hasText === 'true';
+    if (minConfidence) filters.minConfidence = parseFloat(minConfidence);
+    if (since) filters.since = since;
+    if (limit) filters.limit = parseInt(limit);
+    if (tag) filters.tag = tag;
+    if (mood) filters.mood = mood;
+    if (style) filters.style = style;
+    if (search) filters.search = search;
+
+    const results = await db.getPhotoClassifications(filters);
+    res.json({ results, total: results.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Search photos by AI prompt content
+app.get('/api/vlm/search', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q) {
+      return res.status(400).json({ error: 'Query parameter q is required' });
+    }
+    const results = await db.searchByPrompt(q);
+    res.json({ results, total: results.length, query: q });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all unique tags
+app.get('/api/vlm/tags', requireAuthWrapper, async (req, res) => {
+  try {
+    const tags = await db.getAllTags();
+    res.json({ tags, total: tags.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Start file watcher
+app.post('/api/vlm/watcher/start', requireAuthWrapper, async (req, res) => {
+  try {
+    const { watchDir, outputPath } = req.body;
+    if (!watchDir) {
+      return res.status(400).json({ error: 'watchDir is required' });
+    }
+
+    if (fileWatcher?.running) {
+      return res.json({ status: 'already_running', stats: fileWatcher.getStats() });
+    }
+
+    fileWatcher = new FileWatcher({
+      watchDir,
+      outputBase: outputPath || process.env.PHOTO_OUTPUT_DIR || path.join(process.cwd(), 'photo_library'),
+      vlm: vlmConfig,
+      db
+    });
+
+    await fileWatcher.start();
+    res.json({ status: 'started', watchDir });
+  } catch (err) {
+    console.error('Watcher start error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Stop file watcher
+app.post('/api/vlm/watcher/stop', requireAuthWrapper, async (req, res) => {
+  try {
+    if (fileWatcher) {
+      await fileWatcher.stop();
+      const stats = fileWatcher.getStats();
+      fileWatcher = null;
+      res.json({ status: 'stopped', stats });
+    } else {
+      res.json({ status: 'not_running' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Cleanup expired data (receipts/screenshots)
+app.post('/api/vlm/cleanup', requireAuthWrapper, async (req, res) => {
+  try {
+    const { expiryDays } = req.body;
+    const classifier = new PhotoClassifier({
+      vlm: vlmConfig,
+      outputBase: process.env.PHOTO_OUTPUT_DIR || path.join(process.cwd(), 'photo_library')
+    });
+    const result = await classifier.cleanupExpiredData(expiryDays || 90);
+    res.json({ status: 'completed', ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get all music tracks with optional search and filters
 app.get('/api/music', requireAuthWrapper, requireMusicPermission, async (req, res) => {
   try {
@@ -3223,6 +3432,12 @@ app.get('/photos', (req, res) => {
   res.send(html);
 });
 
+// Serve face groups page
+app.get('/faces', (req, res) => {
+  const html = fs.readFileSync(join(__dirname, 'public', 'faces.html'), 'utf8');
+  res.send(html);
+});
+
 // Serve music player page
 app.get('/music', (req, res) => {
   const html = fs.readFileSync(join(__dirname, 'public', 'music.html'), 'utf8');
@@ -3416,6 +3631,309 @@ app.post('/api/drive-usage/check', requireAuthWrapper, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ==================== FACE GROUPING APIs ====================
+
+function hammingHash(h1, h2) {
+  let xor = BigInt(h1) ^ BigInt(h2);
+  let c = 0;
+  while (xor) { c++; xor &= xor - 1n; }
+  return c;
+}
+
+// Get face groups (server-side grouped, paginated)
+app.get('/api/faces/groups', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { limit = 100, offset = 0, named } = req.query;
+
+    // Get groups from face_groups table
+    let groupQuery = 'SELECT * FROM face_groups';
+    const groupParams = [];
+    if (named === '1') {
+      groupQuery += ' WHERE label IS NOT NULL AND label != ""';
+    } else if (named === '0') {
+      groupQuery += ' WHERE label IS NULL OR label = ""';
+    }
+    groupQuery += ` ORDER BY face_count DESC LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}`;
+
+    const [dbGroups] = await db.connection.execute(groupQuery, groupParams);
+    const [totalCount] = await db.connection.execute(
+      named === '1' ? 'SELECT COUNT(*) as c FROM face_groups WHERE label IS NOT NULL AND label != ""' :
+      named === '0' ? 'SELECT COUNT(*) as c FROM face_groups WHERE label IS NULL OR label = ""' :
+      'SELECT COUNT(*) as c FROM face_groups'
+    );
+
+    // For each group, get its faces
+    const groups = [];
+    for (const grp of dbGroups) {
+      const [faces] = await db.connection.execute(`
+        SELECT df.id, df.file_id, df.face_index, df.confidence, df.gender, df.age, df.expression,
+               df.face_descriptor, sf.name
+        FROM detected_faces df
+        JOIN scanned_files sf ON df.file_id = sf.id
+        WHERE df.face_group_id = ?
+        ORDER BY df.confidence DESC
+        LIMIT 20
+      `, [grp.id]);
+
+      const parsedFaces = faces.map(f => {
+        const desc = typeof f.face_descriptor === 'string' ? JSON.parse(f.face_descriptor) : (f.face_descriptor || {});
+        return { ...f, thumb: desc?.thumbnail, phash: desc?.phash, has_glasses: desc?.has_glasses, age_group: desc?.age_group };
+      });
+
+      const files = [...new Set(parsedFaces.map(f => f.name))];
+      const genderCount = {};
+      for (const f of parsedFaces) { if (f.gender) genderCount[f.gender] = (genderCount[f.gender] || 0) + 1; }
+
+      groups.push({
+        id: grp.id,
+        label: grp.label,
+        faceCount: grp.face_count || parsedFaces.length,
+        files,
+        dominantGender: Object.entries(genderCount).sort((a, b) => b[1] - a[1])[0]?.[0] || null,
+        faces: parsedFaces
+      });
+    }
+
+    res.json({ groups, total: totalCount[0].c, limit: parseInt(limit), offset: parseInt(offset) });
+  } catch (err) {
+    console.error('Face groups error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get faces not yet grouped (orphan faces)
+app.get('/api/faces/unassigned', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { limit = 100, offset = 0, minConfidence = 0 } = req.query;
+    const [faces] = await db.connection.execute(`
+      SELECT df.id, df.file_id, df.face_index, df.confidence, df.gender, df.age, df.expression,
+             df.face_descriptor, sf.name
+      FROM detected_faces df
+      JOIN scanned_files sf ON df.file_id = sf.id
+      WHERE df.face_group_id IS NULL
+      AND df.face_descriptor IS NOT NULL
+      AND (df.all_expressions IS NULL OR JSON_EXTRACT(df.all_expressions, '$.invalid') IS NULL OR JSON_EXTRACT(df.all_expressions, '$.invalid') = false)
+      AND df.confidence >= ?
+      ORDER BY df.file_id DESC
+      LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}
+    `, [parseFloat(minConfidence)]);
+
+    const [total] = await db.connection.execute(
+      'SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id IS NULL AND face_descriptor IS NOT NULL AND (all_expressions IS NULL OR JSON_EXTRACT(all_expressions, "$.invalid") IS NULL OR JSON_EXTRACT(all_expressions, "$.invalid") = false) AND confidence >= ?',
+      [parseFloat(minConfidence)]
+    );
+
+    const parsed = faces.map(f => {
+      const desc = typeof f.face_descriptor === 'string' ? JSON.parse(f.face_descriptor) : (f.face_descriptor || {});
+      return { ...f, thumb: desc?.thumbnail, phash: desc?.phash, has_glasses: desc?.has_glasses };
+    });
+
+    // Auto-group by phash similarity
+    const groups = [];
+    const assigned = new Set();
+    for (let i = 0; i < parsed.length; i++) {
+      if (assigned.has(i)) continue;
+      const a = parsed[i];
+      if (!a.phash) continue;
+      const group = { faces: [a] };
+      assigned.add(i);
+      for (let j = i + 1; j < parsed.length; j++) {
+        if (assigned.has(j)) continue;
+        const b = parsed[j];
+        if (!b.phash) continue;
+        if (hammingHash(a.phash, b.phash) <= 10) {
+          group.faces.push(b);
+          assigned.add(j);
+        }
+      }
+      group.faceCount = group.faces.length;
+      group.files = [...new Set(group.faces.map(f => f.name))];
+      groups.push(group);
+    }
+    groups.sort((a, b) => b.faceCount - a.faceCount);
+
+    res.json({ groups, totalUnassigned: total[0].c });
+  } catch (err) {
+    console.error('Unassigned faces error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get single face group detail
+app.get('/api/faces/groups/:groupId', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.groupId);
+    const [grp] = await db.connection.execute('SELECT * FROM face_groups WHERE id = ?', [groupId]);
+    if (grp.length === 0) return res.status(404).json({ error: 'Group not found' });
+
+    const [faces] = await db.connection.execute(`
+      SELECT df.id, df.file_id, df.face_index, df.confidence, df.gender, df.age, df.expression,
+             df.face_descriptor, sf.name
+      FROM detected_faces df
+      JOIN scanned_files sf ON df.file_id = sf.id
+      WHERE df.face_group_id = ?
+      ORDER BY df.confidence DESC
+    `, [groupId]);
+
+    const parsedFaces = faces.map(f => {
+      const desc = typeof f.face_descriptor === 'string' ? JSON.parse(f.face_descriptor) : (f.face_descriptor || {});
+      return { ...f, thumb: desc?.thumbnail, phash: desc?.phash, has_glasses: desc?.has_glasses, age_group: desc?.age_group };
+    });
+
+    res.json({ group: { ...grp[0], faces: parsedFaces, files: [...new Set(parsedFaces.map(f => f.name))] } });
+  } catch (err) {
+    console.error('Face group detail error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create new face group
+app.post('/api/faces/groups', requireAuthWrapper, async (req, res) => {
+  try {
+    const { label } = req.body;
+    const [result] = await db.connection.execute('INSERT INTO face_groups (label) VALUES (?)', [label || null]);
+    res.json({ success: true, groupId: result.insertId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Rename a face group
+app.put('/api/faces/groups/:groupId', requireAuthWrapper, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.groupId);
+    const { label } = req.body;
+    await db.connection.execute('UPDATE face_groups SET label = ? WHERE id = ?', [label, groupId]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Assign faces to a group
+app.post('/api/faces/groups/:groupId/assign', requireAuthWrapper, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.groupId);
+    const { faceIds } = req.body;
+    if (!Array.isArray(faceIds)) return res.status(400).json({ error: 'faceIds array required' });
+
+    for (const faceId of faceIds) {
+      await db.connection.execute('UPDATE detected_faces SET face_group_id = ? WHERE id = ?', [groupId, faceId]);
+    }
+
+    // Update face_count
+    const [count] = await db.connection.execute('SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id = ?', [groupId]);
+    await db.connection.execute('UPDATE face_groups SET face_count = ? WHERE id = ?', [count[0].c, groupId]);
+
+    res.json({ success: true, faceCount: count[0].c });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remove faces from group
+app.post('/api/faces/groups/:groupId/unassign', requireAuthWrapper, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.groupId);
+    const { faceIds } = req.body;
+    if (!Array.isArray(faceIds)) return res.status(400).json({ error: 'faceIds array required' });
+
+    for (const faceId of faceIds) {
+      await db.connection.execute('UPDATE detected_faces SET face_group_id = NULL WHERE id = ? AND face_group_id = ?', [faceId, groupId]);
+    }
+
+    const [count] = await db.connection.execute('SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id = ?', [groupId]);
+    await db.connection.execute('UPDATE face_groups SET face_count = ? WHERE id = ?', [count[0].c, groupId]);
+
+    res.json({ success: true, faceCount: count[0].c });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete a face group
+app.delete('/api/faces/groups/:groupId', requireAuthWrapper, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.groupId);
+    await db.connection.execute('UPDATE detected_faces SET face_group_id = NULL WHERE face_group_id = ?', [groupId]);
+    await db.connection.execute('DELETE FROM face_groups WHERE id = ?', [groupId]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Mark face as invalid (not a real face)
+app.put('/api/faces/:faceId/invalid', requireAuthWrapper, async (req, res) => {
+  try {
+    const faceId = parseInt(req.params.faceId);
+    const { invalid } = req.body;
+    // Store in all_expressions JSON field as {"invalid": true}
+    const [rows] = await db.connection.execute('SELECT all_expressions FROM detected_faces WHERE id = ?', [faceId]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Face not found' });
+    let meta = {};
+    try { meta = typeof rows[0].all_expressions === 'string' ? JSON.parse(rows[0].all_expressions) : (rows[0].all_expressions || {}); } catch {}
+    meta.invalid = !!invalid;
+    await db.connection.execute('UPDATE detected_faces SET all_expressions = ? WHERE id = ?', [JSON.stringify(meta), faceId]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update face gender/age/expression
+app.put('/api/faces/:faceId', requireAuthWrapper, async (req, res) => {
+  try {
+    const faceId = parseInt(req.params.faceId);
+    const { gender, age, expression } = req.body;
+    if (gender !== undefined) {
+      await db.connection.execute('UPDATE detected_faces SET gender = ? WHERE id = ?',
+        [gender === 'male' || gender === 'female' ? gender : null, faceId]);
+    }
+    if (age !== undefined) {
+      await db.connection.execute('UPDATE detected_faces SET age = ? WHERE id = ?', [age, faceId]);
+    }
+    if (expression !== undefined) {
+      await db.connection.execute('UPDATE detected_faces SET expression = ? WHERE id = ?', [expression, faceId]);
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Face stats
+app.get('/api/faces/stats', requireAuthWrapper, async (req, res) => {
+  try {
+    const [total] = await db.connection.execute('SELECT COUNT(*) as c FROM detected_faces');
+    const [photos] = await db.connection.execute('SELECT COUNT(DISTINCT file_id) as c FROM detected_faces');
+    const [male] = await db.connection.execute("SELECT COUNT(*) as c FROM detected_faces WHERE gender='male'");
+    const [female] = await db.connection.execute("SELECT COUNT(*) as c FROM detected_faces WHERE gender='female'");
+    const [grouped] = await db.connection.execute('SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id IS NOT NULL');
+    const [ungrouped] = await db.connection.execute('SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id IS NULL AND face_descriptor IS NOT NULL');
+    const [groups] = await db.connection.execute('SELECT COUNT(*) as c FROM face_groups');
+    const [named] = await db.connection.execute('SELECT COUNT(*) as c FROM face_groups WHERE label IS NOT NULL AND label != ""');
+    res.json({
+      totalFaces: total[0].c,
+      totalPhotos: photos[0].c,
+      male: male[0].c,
+      female: female[0].c,
+      grouped: grouped[0].c,
+      ungrouped: ungrouped[0].c,
+      totalGroups: groups[0].c,
+      namedGroups: named[0].c
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function mode(arr) {
+  const freq = {};
+  for (const v of arr) { if (v) freq[v] = (freq[v] || 0) + 1; }
+  return Object.entries(freq).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+}
 
 // ==================== START SERVER ====================
 

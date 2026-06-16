@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Groups - SilverFileSystem</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 0.5rem 1rem; display: flex; align-items: center; gap: 1rem; }
+        .header h1 { font-size: 1.5rem; font-weight: 700; }
+        .header .back { color: white; text-decoration: none; font-size: 0.9rem; }
+        .stats-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 0.5rem; padding: 0.5rem; background: #1a1a1a; border-bottom: 1px solid #2a2a2a; }
+        .stat-card { text-align: center; padding: 0.3rem; }
+        .stat-number { font-size: 1.3rem; font-weight: bold; color: #667eea; }
+        .stat-label { font-size: 0.7rem; color: #888; }
+        .controls { background: #1a1a1a; padding: 0.5rem 1rem; border-bottom: 1px solid #2a2a2a; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+        .controls input, .controls select { padding: 0.4rem 0.6rem; border: 1px solid #444; background: #222; color: white; border-radius: 4px; font-size: 0.8rem; }
+        .controls input:focus, .controls select:focus { outline: none; border-color: #667eea; }
+        .controls button { padding: 0.4rem 0.8rem; border: 1px solid #444; background: #222; color: white; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+        .controls button:hover { background: #333; }
+        .controls button.primary { background: #667eea; border-color: #667eea; }
+        .tab-bar { display: flex; gap: 0; border-bottom: 1px solid #2a2a2a; background: #1a1a1a; }
+        .tab { padding: 0.5rem 1rem; cursor: pointer; font-size: 0.85rem; color: #888; border-bottom: 2px solid transparent; }
+        .tab.active { color: #667eea; border-bottom-color: #667eea; }
+        .container { padding: 0.5rem; max-width: 1600px; margin: 0 auto; }
+        .groups-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.5rem; }
+        .group-card { background: #1a1a1a; border-radius: 8px; border: 1px solid #2a2a2a; overflow: hidden; transition: transform 0.2s; cursor: pointer; }
+        .group-card:hover { transform: translateY(-2px); border-color: #667eea; }
+        .group-header { padding: 0.5rem; display: flex; justify-content: space-between; align-items: center; }
+        .group-label { font-weight: 600; font-size: 0.9rem; color: #667eea; }
+        .group-count { font-size: 0.7rem; color: #888; }
+        .group-meta { padding: 0 0.5rem 0.3rem; font-size: 0.7rem; color: #888; display: flex; gap: 0.3rem; flex-wrap: wrap; }
+        .group-meta .tag { padding: 0.1rem 0.3rem; background: rgba(102,126,234,0.15); color: #667eea; border-radius: 3px; }
+        .group-thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 2px; }
+        .group-thumbs img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 3px; }
+        .loading { text-align: center; padding: 3rem; opacity: 0.5; }
+        .no-results { text-align: center; padding: 3rem; opacity: 0.5; }
+        .pagination { display: flex; justify-content: center; gap: 0.5rem; padding: 1rem; }
+        .pagination button { padding: 0.4rem 1rem; border: 1px solid #444; background: #222; color: white; border-radius: 4px; cursor: pointer; }
+        .pagination button:disabled { opacity: 0.3; cursor: not-allowed; }
+        .pagination span { padding: 0.4rem 0.8rem; color: #888; font-size: 0.85rem; }
+        /* Modal */
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.92); z-index: 9999; align-items: center; justify-content: center; }
+        .modal.active { display: flex; }
+        .modal-box { background: #1a1a1a; border-radius: 12px; max-width: 900px; width: 95%; max-height: 90vh; overflow-y: auto; padding: 1.5rem; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+        .modal-header h2 { color: #667eea; font-size: 1.2rem; }
+        .modal-close { background: none; border: none; color: #888; font-size: 1.5rem; cursor: pointer; }
+        .face-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 0.4rem; }
+        .face-item { position: relative; border-radius: 6px; overflow: hidden; cursor: pointer; border: 2px solid transparent; transition: border-color 0.2s; }
+        .face-item:hover { border-color: #667eea; }
+        .face-item img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+        .face-item .face-info { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.7); padding: 0.15rem 0.2rem; font-size: 0.6rem; text-align: center; color: white; }
+        .face-item .face-remove { position: absolute; top: 2px; right: 2px; background: rgba(231,76,60,0.8); border: none; color: white; width: 20px; height: 20px; border-radius: 50%; font-size: 0.7rem; cursor: pointer; display: none; }
+        .face-item:hover .face-remove { display: block; }
+        .face-item.invalid { opacity: 0.3; border: 2px solid #e74c3c; }
+        .edit-section { margin-top: 1rem; padding: 1rem; background: #222; border-radius: 8px; }
+        .edit-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+        .edit-row label { width: 70px; font-size: 0.8rem; color: #888; }
+        .edit-row input, .edit-row select { flex: 1; padding: 0.4rem; border: 1px solid #444; background: #333; color: white; border-radius: 4px; font-size: 0.8rem; }
+        .btn { padding: 0.4rem 1rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+        .btn-primary { background: #667eea; color: white; }
+        .btn-danger { background: #e74c3c; color: white; }
+        .btn-ghost { background: transparent; color: #888; border: 1px solid #444; }
+        .toast { position: fixed; bottom: 20px; right: 20px; background: #27ae60; color: white; padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.85rem; z-index: 10000; opacity: 0; transition: opacity 0.3s; }
+        .toast.show { opacity: 1; }
+        @media (max-width: 700px) {
+            .groups-grid { grid-template-columns: 1fr; }
+            .face-grid { grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a href="/" class="back">Dashboard</a>
+        <a href="/photos" class="back">Photos</a>
+        <h1>👥 Face Groups</h1>
+    </div>
+
+    <div class="stats-bar" id="statsBar">
+        <div class="stat-card"><div class="stat-number" id="statFaces">-</div><div class="stat-label">Faces</div></div>
+        <div class="stat-card"><div class="stat-number" id="statPhotos">-</div><div class="stat-label">Photos</div></div>
+        <div class="stat-card"><div class="stat-number" id="statGroups">-</div><div class="stat-label">Groups</div></div>
+        <div class="stat-card"><div class="stat-number" id="statNamed">-</div><div class="stat-label">Named</div></div>
+        <div class="stat-card"><div class="stat-number" id="statMale">-</div><div class="stat-label">Male</div></div>
+        <div class="stat-card"><div class="stat-number" id="statFemale">-</div><div class="stat-label">Female</div></div>
+        <div class="stat-card" style="display:flex;flex-direction:column;align-items:center;gap:0.2rem;">
+            <div style="font-size:0.7rem;color:#888;">Default Face</div>
+            <select id="defaultFaceSelect" onchange="saveDefaultFace()" style="padding:0.2rem 0.4rem;border:1px solid #444;background:#222;color:#667eea;border-radius:4px;font-size:0.75rem;font-weight:600;">
+                <option value="">None</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="tab-bar">
+        <div class="tab active" data-tab="named" onclick="switchTab('named')">Named Groups</div>
+        <div class="tab" data-tab="unnamed" onclick="switchTab('unnamed')">Unnamed</div>
+        <div class="tab" data-tab="all" onclick="switchTab('all')">All Groups</div>
+    </div>
+
+    <div class="controls">
+        <input type="text" id="searchInput" placeholder="Search by name..." oninput="debounceSearch()">
+        <select id="minFacesFilter" onchange="loadCurrentTab()">
+            <option value="1">1+ faces</option>
+            <option value="2">2+ faces</option>
+            <option value="3">3+ faces</option>
+        </select>
+        <div style="display:flex;align-items:center;gap:0.3rem;">
+            <label style="font-size:0.75rem;color:#888;">Min confidence:</label>
+            <input type="range" id="confidenceFilter" min="0" max="1" step="0.05" value="0.9" onchange="updateConfLabel();loadCurrentTab()" style="width:80px;">
+            <span id="confLabel" style="font-size:0.75rem;color:#667eea;width:30px;">0.9</span>
+        </div>
+        <button onclick="loadCurrentTab()" class="primary">🔄 Refresh</button>
+    </div>
+
+    <div class="container">
+        <div id="groupsContainer" class="groups-grid"><div class="loading">Loading...</div></div>
+        <div id="pagination" class="pagination"></div>
+    </div>
+
+    <!-- Face Detail Modal -->
+    <div id="faceModal" class="modal" onclick="if(event.target===this)closeModal()">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h2 id="modalTitle">Group</h2>
+                <div style="display:flex;gap:0.5rem;align-items:center;">
+                    <button class="btn btn-danger" id="deleteGroupBtn" onclick="deleteGroup()" style="display:none;font-size:0.75rem;padding:0.3rem 0.6rem;">🗑 Delete</button>
+                    <button class="modal-close" onclick="closeModal()">×</button>
+                </div>
+            </div>
+            <div class="edit-section" id="editSection"></div>
+            <div id="faceGrid" class="face-grid"></div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="/auth.js"></script>
+    <script>
+        let currentTab = 'named';
+        let currentPage = 0;
+        const PAGE_SIZE = 50;
+        let searchTimeout = null;
+        let selectedGroupId = null;
+        let defaultFaceId = null;
+
+        function getCookie(n) { const m = document.cookie.match('(^|;)\\s*' + n + '\\s*=\\s*([^;]+)'); return m ? m.pop() : null; }
+        function getToken() { return localStorage.getItem('silverfs_token') || getCookie('silverfs_token'); }
+        async function api(url, opts = {}) {
+            const t = getToken();
+            if (!t) { window.location.href = '/login.html'; return; }
+            opts.headers = { ...opts.headers, 'Authorization': 'Bearer ' + t };
+            const r = await fetch(url, opts);
+            if (r.status === 401) { window.location.href = '/login.html'; return; }
+            return r.json();
+        }
+        function toast(msg) {
+            const el = document.getElementById('toast');
+            el.textContent = msg; el.classList.add('show');
+            setTimeout(() => el.classList.remove('show'), 2000);
+        }
+        function debounceSearch() { clearTimeout(searchTimeout); searchTimeout = setTimeout(loadCurrentTab, 300); }
+        function updateConfLabel() { document.getElementById('confLabel').textContent = document.getElementById('confidenceFilter').value; }
+
+        async function loadStats() {
+            try {
+                const d = await api('/api/faces/stats');
+                document.getElementById('statFaces').textContent = d.totalFaces.toLocaleString();
+                document.getElementById('statPhotos').textContent = d.totalPhotos.toLocaleString();
+                document.getElementById('statGroups').textContent = d.totalGroups.toLocaleString();
+                document.getElementById('statNamed').textContent = d.namedGroups.toLocaleString();
+                document.getElementById('statMale').textContent = d.male.toLocaleString();
+                document.getElementById('statFemale').textContent = d.female.toLocaleString();
+            } catch (e) {}
+        }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            currentPage = 0;
+            document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+            loadCurrentTab();
+        }
+
+        async function loadCurrentTab() {
+            const container = document.getElementById('groupsContainer');
+            container.innerHTML = '<div class="loading">Loading...</div>';
+
+            try {
+                const minFaces = document.getElementById('minFacesFilter').value;
+                const search = document.getElementById('searchInput').value;
+                const minConf = document.getElementById('confidenceFilter').value;
+
+                let data;
+                if (currentTab === 'unnamed') {
+                    data = await api(`/api/faces/unassigned?limit=${PAGE_SIZE}&offset=${currentPage * PAGE_SIZE}&minConfidence=${minConf}`);
+                    renderUnassignedGroups(data.groups);
+                    renderPagination(data.totalUnassigned);
+                } else {
+                    const named = currentTab === 'named' ? '1' : '';
+                    data = await api(`/api/faces/groups?limit=${PAGE_SIZE}&offset=${currentPage * PAGE_SIZE}&named=${named}`);
+                    let groups = data.groups || [];
+                    if (minFaces > 1) groups = groups.filter(g => g.faceCount >= minFaces);
+                    if (search) groups = groups.filter(g => (g.label || '').toLowerCase().includes(search.toLowerCase()));
+                    renderGroups(groups);
+                    renderPagination(data.total);
+                }
+            } catch (e) {
+                container.innerHTML = '<div class="no-results">Error: ' + e.message + '</div>';
+            }
+        }
+
+        function renderGroups(groups) {
+            const c = document.getElementById('groupsContainer');
+            if (!groups.length) { c.innerHTML = '<div class="no-results">No groups found</div>'; return; }
+            c.innerHTML = groups.map(g => `
+                <div class="group-card" onclick="openGroup(${g.id})">
+                    <div class="group-header">
+                        <span class="group-label">${g.label || 'Unnamed'}</span>
+                        <span class="group-count">${g.faceCount} faces · ${g.files.length} photos</span>
+                    </div>
+                    <div class="group-meta">
+                        ${g.dominantGender ? '<span class="tag">' + g.dominantGender + '</span>' : ''}
+                    </div>
+                    <div class="group-thumbs">
+                        ${g.faces.slice(0, 8).map(f => f.thumb ? '<img src="data:image/jpeg;base64,' + f.thumb + '" loading="lazy">' : '').join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderUnassignedGroups(groups) {
+            const c = document.getElementById('groupsContainer');
+            if (!groups.length) { c.innerHTML = '<div class="no-results">No unassigned faces</div>'; return; }
+            c.innerHTML = groups.map((g, i) => `
+                <div class="group-card" onclick="openUnassignedGroup(${i})" data-idx="${i}">
+                    <div class="group-header">
+                        <span class="group-label">Potential Group</span>
+                        <span class="group-count">${g.faceCount} faces</span>
+                    </div>
+                    <div class="group-thumbs">
+                        ${g.faces.slice(0, 8).map(f => f.thumb ? '<img src="data:image/jpeg;base64,' + f.thumb + '" loading="lazy">' : '').join('')}
+                    </div>
+                </div>
+            `).join('');
+            window._unassignedGroups = groups;
+        }
+
+        function renderPagination(total) {
+            const el = document.getElementById('pagination');
+            const pages = Math.ceil(total / PAGE_SIZE);
+            if (pages <= 1) { el.innerHTML = ''; return; }
+            el.innerHTML = `
+                <button ${currentPage === 0 ? 'disabled' : ''} onclick="currentPage--;loadCurrentTab()">← Prev</button>
+                <span>${currentPage + 1} / ${pages} (${total} total)</span>
+                <button ${currentPage >= pages - 1 ? 'disabled' : ''} onclick="currentPage++;loadCurrentTab()">Next →</button>
+            `;
+        }
+
+        async function openGroup(groupId) {
+            selectedGroupId = groupId;
+            try {
+                const data = await api(`/api/faces/groups/${groupId}`);
+                const g = data.group;
+                document.getElementById('modalTitle').textContent = g.label || 'Unnamed Group';
+                document.getElementById('deleteGroupBtn').style.display = 'inline-block';
+
+                // Load unassigned faces for the "add to group" dropdown
+                const unassignedData = await api('/api/faces/unassigned?limit=200');
+                window._unassignedFaces = unassignedData.groups?.flatMap(grp => grp.faces) || [];
+
+                const unassignedOptions = window._unassignedFaces.map(f =>
+                    `<option value="${f.id}">${f.name || 'face_' + f.id} (${f.gender || '?'}, ${f.age || '?'})</option>`
+                ).join('');
+
+                document.getElementById('editSection').innerHTML = `
+                    <div class="edit-row">
+                        <label>Name</label>
+                        <input id="editLabel" value="${g.label || ''}" placeholder="Enter name...">
+                    </div>
+                    <div style="display:flex;gap:0.5rem;margin-top:0.5rem;align-items:center;">
+                        <button class="btn btn-primary" onclick="saveGroup()">Save Name</button>
+                    </div>
+                    <div style="margin-top:0.8rem;padding-top:0.5rem;border-top:1px solid #333;">
+                        <div style="font-size:0.8rem;color:#888;margin-bottom:0.3rem;">Add faces from unassigned:</div>
+                        <div style="display:flex;gap:0.3rem;">
+                            <select id="addFaceSelect" style="flex:1;padding:0.4rem;border:1px solid #444;background:#333;color:white;border-radius:4px;font-size:0.8rem;">
+                                <option value="">-- Select face --</option>
+                                ${unassignedOptions}
+                            </select>
+                            <button class="btn btn-primary" onclick="addFaceToGroup()" style="white-space:nowrap;">+ Add</button>
+                        </div>
+                        <div id="addFaceStatus" style="font-size:0.75rem;margin-top:0.3rem;color:#888;"></div>
+                    </div>
+                `;
+
+                document.getElementById('faceGrid').innerHTML = g.faces.map(f => `
+                    <div class="face-item" title="${f.name || ''}\nGender: ${f.gender || '?'}\nAge: ${f.age || '?'}" data-id="${f.id}">
+                        ${f.thumb ? '<img src="data:image/jpeg;base64,' + f.thumb + '">' : ''}
+                        <div class="face-info">${f.gender || '?'} · ${f.age || '?'}</div>
+                        <button class="face-remove" onclick="event.stopPropagation();removeFromGroup(${f.id})" title="Remove from group">✕</button>
+                    </div>
+                `).join('');
+
+                document.getElementById('faceModal').classList.add('active');
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        function openUnassignedGroup(idx) {
+            const g = window._unassignedGroups?.[idx];
+            if (!g) return;
+            selectedGroupId = null;
+
+            // Load existing groups for the "assign to group" dropdown
+            let groupOptions = '';
+            api('/api/faces/groups?limit=500&named=1').then(data => {
+                window._existingGroups = data.groups || [];
+                const sel = document.getElementById('assignGroupSelect');
+                if (sel) {
+                    sel.innerHTML = '<option value="">-- New group --</option>' +
+                        window._existingGroups.map(grp => `<option value="${grp.id}">${grp.label || 'Group ' + grp.id}</option>`).join('');
+                }
+            }).catch(() => {});
+
+            document.getElementById('modalTitle').textContent = 'Potential Group — ' + g.faceCount + ' faces';
+            document.getElementById('deleteGroupBtn').style.display = 'none';
+            document.getElementById('editSection').innerHTML = `
+                <div class="edit-row">
+                    <label>Name</label>
+                    <input id="editLabel" value="" placeholder="Enter name for this person...">
+                </div>
+                <div style="margin-top:0.5rem;">
+                    <button class="btn btn-primary" onclick="createGroupFromUnassigned()">Create New Group</button>
+                </div>
+                <div style="margin-top:0.8rem;padding-top:0.5rem;border-top:1px solid #333;">
+                    <div style="font-size:0.8rem;color:#888;margin-bottom:0.3rem;">Or assign to existing group:</div>
+                    <div style="display:flex;gap:0.3rem;">
+                        <select id="assignGroupSelect" style="flex:1;padding:0.4rem;border:1px solid #444;background:#333;color:white;border-radius:4px;font-size:0.8rem;">
+                            <option value="">Loading groups...</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="assignToExistingGroup()" style="white-space:nowrap;">Assign</button>
+                    </div>
+                    <div id="assignStatus" style="font-size:0.75rem;margin-top:0.3rem;color:#888;"></div>
+                </div>
+            `;
+            window._pendingUnassigned = g;
+
+            document.getElementById('faceGrid').innerHTML = g.faces.map(f => `
+                <div class="face-item" title="${f.name || ''}\nGender: ${f.gender || '?'}\nAge: ${f.age || '?'}">
+                    ${f.thumb ? '<img src="data:image/jpeg;base64,' + f.thumb + '">' : ''}
+                    <div class="face-info">${f.gender || '?'} · ${f.age || '?'}</div>
+                </div>
+            `).join('');
+
+            document.getElementById('faceModal').classList.add('active');
+        }
+
+        async function assignToExistingGroup() {
+            const g = window._pendingUnassigned;
+            if (!g) return;
+            const groupId = parseInt(document.getElementById('assignGroupSelect').value);
+            const status = document.getElementById('assignStatus');
+            if (!groupId) { status.textContent = 'Select a group first'; status.style.color = '#e74c3c'; return; }
+            try {
+                status.textContent = 'Assigning...';
+                const faceIds = g.faces.map(f => f.id);
+                await api(`/api/faces/groups/${groupId}/assign`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ faceIds })
+                });
+                status.textContent = 'Assigned ' + faceIds.length + ' faces! Refresh to see changes.';
+                status.style.color = '#27ae60';
+                loadStats();
+            } catch (e) { status.textContent = 'Error: ' + e.message; status.style.color = '#e74c3c'; }
+        }
+
+        async function createGroupFromUnassigned() {
+            const label = document.getElementById('editLabel').value;
+            const g = window._pendingUnassigned;
+            if (!g) return;
+            try {
+                const data = await api('/api/faces/groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) });
+                const faceIds = g.faces.map(f => f.id);
+                await api(`/api/faces/groups/${data.groupId}/assign`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ faceIds }) });
+                toast('Group created with ' + faceIds.length + ' faces');
+                closeModal();
+                loadStats();
+                loadCurrentTab();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        async function addFaceToGroup() {
+            if (!selectedGroupId) return;
+            const select = document.getElementById('addFaceSelect');
+            const faceId = parseInt(select.value);
+            if (!faceId) return;
+            const status = document.getElementById('addFaceStatus');
+            try {
+                status.textContent = 'Adding...';
+                await api(`/api/faces/groups/${selectedGroupId}/assign`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ faceIds: [faceId] })
+                });
+                // Remove from dropdown
+                select.remove(select.selectedIndex);
+                select.value = '';
+                status.textContent = 'Added! Refresh to see in grid.';
+                status.style.color = '#27ae60';
+                loadStats();
+            } catch (e) {
+                status.textContent = 'Error: ' + e.message;
+                status.style.color = '#e74c3c';
+            }
+        }
+
+        async function removeFromGroup(faceId) {
+            if (!selectedGroupId) return;
+            if (!confirm('Remove this face from the group?')) return;
+            try {
+                await api(`/api/faces/groups/${selectedGroupId}/unassign`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ faceIds: [faceId] })
+                });
+                // Remove from grid
+                document.querySelector(`.face-item[data-id="${faceId}"]`)?.remove();
+                toast('Face removed from group');
+                loadStats();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        async function saveGroup() {
+            if (!selectedGroupId) return;
+            const label = document.getElementById('editLabel').value;
+            try {
+                await api(`/api/faces/groups/${selectedGroupId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) });
+                toast('Saved!');
+                document.getElementById('modalTitle').textContent = label || 'Unnamed Group';
+                loadStats();
+                loadCurrentTab();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        async function deleteGroup() {
+            if (!selectedGroupId) return;
+            if (!confirm('Delete this group? Faces will be unassigned, not deleted.')) return;
+            try {
+                await api(`/api/faces/groups/${selectedGroupId}`, { method: 'DELETE' });
+                toast('Group deleted');
+                closeModal();
+                loadStats();
+                loadCurrentTab();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        function closeModal() {
+            document.getElementById('faceModal').classList.remove('active');
+            selectedGroupId = null;
+        }
+
+        async function markInvalid(faceId, el) {
+            if (!confirm('Mark this as not a face?')) return;
+            try {
+                await api(`/api/faces/${faceId}/invalid`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invalid: true }) });
+                el.classList.add('invalid');
+                el.querySelector('.face-remove').style.display = 'none';
+                toast('Marked as not a face');
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        loadStats();
+        loadCurrentTab();
+
+        // Default face functions
+        async function loadDefaultFaceOptions() {
+            try {
+                const data = await api('/api/faces/groups?limit=500&named=1');
+                const sel = document.getElementById('defaultFaceSelect');
+                sel.innerHTML = '<option value="">None</option>' +
+                    (data.groups || []).map(g => `<option value="${g.id}">${g.label || 'Group ' + g.id}</option>`).join('');
+                const saved = localStorage.getItem('defaultFaceId');
+                if (saved) { sel.value = saved; defaultFaceId = parseInt(saved); }
+            } catch (e) {}
+        }
+
+        function saveDefaultFace() {
+            const sel = document.getElementById('defaultFaceSelect');
+            defaultFaceId = sel.value ? parseInt(sel.value) : null;
+            if (defaultFaceId) localStorage.setItem('defaultFaceId', defaultFaceId);
+            else localStorage.removeItem('defaultFaceId');
+            renderUnassignedGroups(window._lastUnassignedGroups || []);
+        }
+
+        function addToDefault(faceId) {
+            if (!defaultFaceId) { toast('Select a default face first'); return; }
+            assignFacesToGroup(defaultFaceId, [faceId]);
+        }
+
+        async function assignFacesToGroup(groupId, faceIds) {
+            try {
+                await api(`/api/faces/groups/${groupId}/assign`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ faceIds })
+                });
+                toast('Assigned ' + faceIds.length + ' face(s)');
+                loadStats();
+                loadCurrentTab();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        // Override renderUnassignedGroups to add "Add to Default" button
+        const _origRenderUnassigned = renderUnassignedGroups;
+        renderUnassignedGroups = function(groups) {
+            window._lastUnassignedGroups = groups;
+            const c = document.getElementById('groupsContainer');
+            if (!groups.length) { c.innerHTML = '<div class="no-results">No unassigned faces</div>'; return; }
+            c.innerHTML = groups.map((g, i) => `
+                <div class="group-card" onclick="openUnassignedGroup(${i})" data-idx="${i}">
+                    <div class="group-header">
+                        <span class="group-label">Potential Group</span>
+                        <span class="group-count">${g.faceCount} faces</span>
+                    </div>
+                    <div class="group-meta">
+                        ${defaultFaceId ? `<button class="btn btn-primary" onclick="event.stopPropagation();assignAllToDefault(${i})" style="font-size:0.7rem;padding:0.2rem 0.5rem;">+ Add All to Default</button>` : ''}
+                    </div>
+                    <div class="group-thumbs">
+                        ${g.faces.slice(0, 8).map(f => f.thumb ? `
+                            <div style="position:relative;display:inline-block;width:100%;">
+                                <img src="data:image/jpeg;base64,${f.thumb}" loading="lazy" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:3px;">
+                                ${defaultFaceId ? `<button onclick="event.stopPropagation();addToDefault(${f.id})" style="position:absolute;top:0;right:0;background:rgba(102,126,234,0.9);border:none;color:white;width:18px;height:18px;border-radius:50%;font-size:0.6rem;cursor:pointer;display:none;" class="add-btn">+</button>` : ''}
+                            </div>
+                        ` : '').join('')}
+                    </div>
+                </div>
+            `).join('');
+
+            // Show add buttons on hover
+            c.querySelectorAll('.group-thumbs').forEach(gt => {
+                gt.addEventListener('mouseenter', () => gt.querySelectorAll('.add-btn').forEach(b => b.style.display = 'block'));
+                gt.addEventListener('mouseleave', () => gt.querySelectorAll('.add-btn').forEach(b => b.style.display = 'none'));
+            });
+        };
+
+        async function assignAllToDefault(groupIdx) {
+            const g = window._lastUnassignedGroups?.[groupIdx];
+            if (!g || !defaultFaceId) return;
+            await assignFacesToGroup(defaultFaceId, g.faces.map(f => f.id));
+        }
+
+        loadDefaultFaceOptions();
+    </script>
+</body>
+</html>
