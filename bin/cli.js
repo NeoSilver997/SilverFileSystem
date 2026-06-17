@@ -2000,48 +2000,37 @@ program
               if (result.faces?.length > 0) {
                 await dbManager.storeDetectedFaces(dbFileId, result);
 
-                // Auto-assign faces to matching named groups
                 if (namedGroups.length > 0) {
+                  // Load ignored face phashes to skip
+                  const [ignoredRows] = await dbManager.connection.execute(`
+                    SELECT JSON_EXTRACT(face_descriptor, '$.phash') as phash
+                    FROM detected_faces
+                    WHERE all_expressions IS NOT NULL
+                    AND JSON_EXTRACT(all_expressions, '$.invalid') = true
+                    AND face_descriptor IS NOT NULL
+                  `);
+                  const ignoredPhashes = new Set(ignoredRows.map(r => r.phash).filter(Boolean));
+
                   for (const face of result.faces) {
-                    if (face.phash) {
-                      const matchGroupId = detector.findMatchingGroup(face.phash, namedGroups);
+                    if (face.no_faces || face.confidence === 0) continue;
+                    const facePhash = face.perceptual_hash || face.face_descriptor?.phash;
+                    if (facePhash && ignoredPhashes.has(facePhash)) continue;
+                    if (facePhash) {
+                      const { groupId: matchGroupId, score: matchScore } = detector.findMatchingGroup(face, namedGroups);
                       if (matchGroupId) {
                         await dbManager.connection.execute(
-                          'UPDATE detected_faces SET face_group_id = ? WHERE file_id = ? AND face_index = ?',
-                          [matchGroupId, dbFileId, face.index]
+                          'UPDATE detected_faces SET suggested_group_id = ?, match_source = ?, match_confidence = ?, match_reviewed = 0 WHERE file_id = ? AND face_index = ?',
+                          [matchGroupId, 'auto', matchScore, dbFileId, face.index]
                         );
-                        const [cnt] = await dbManager.connection.execute('SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id = ?', [matchGroupId]);
-                        await dbManager.connection.execute('UPDATE face_groups SET face_count = ? WHERE id = ?', [cnt[0].c, matchGroupId]);
                       }
                     }
                   }
                 }
               } else {
-                // No faces found - insert a marker record so file won't be scanned again
                 await dbManager.connection.execute(
                   'INSERT INTO detected_faces (file_id, face_index, confidence, face_descriptor) VALUES (?, 0, 0, ?)',
                   [dbFileId, JSON.stringify({ no_faces: true })]
                 );
-              }
-
-              await dbManager.storeDetectedFaces(dbFileId, result);
-
-              // Auto-assign faces to matching named groups
-              if (namedGroups.length > 0) {
-                for (const face of result.faces) {
-                  if (face.phash) {
-                    const matchGroupId = detector.findMatchingGroup(face.phash, namedGroups);
-                    if (matchGroupId) {
-                      await dbManager.connection.execute(
-                        'UPDATE detected_faces SET face_group_id = ? WHERE file_id = ? AND face_index = ?',
-                        [matchGroupId, dbFileId, face.index]
-                      );
-                      // Update face_count
-                      const [cnt] = await dbManager.connection.execute('SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id = ?', [matchGroupId]);
-                      await dbManager.connection.execute('UPDATE face_groups SET face_count = ? WHERE id = ?', [cnt[0].c, matchGroupId]);
-                    }
-                  }
-                }
               }
             } catch (e) {
               // silent

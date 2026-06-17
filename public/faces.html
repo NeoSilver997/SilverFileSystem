@@ -60,6 +60,14 @@
         .ctx-menu-item { padding: 0.4rem 0.8rem; cursor: pointer; font-size: 0.8rem; color: #e0e0e0; }
         .ctx-menu-item:hover { background: #333; }
         .ctx-menu-item.danger { color: #e74c3c; }
+        .ctx-menu-item.ctx-ignore[data-type="unknown_face"] { color: #e67e22; }
+        .ctx-menu-item.ctx-ignore[data-type="friend_face"] { color: #3498db; }
+        .ctx-menu-item.ctx-ignore[data-type="non_face"] { color: #e74c3c; }
+        .ctx-menu-sep { height: 1px; background: #333; margin: 0.2rem 0; }
+        .ignore-badge { display: inline-block; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.6rem; font-weight: bold; }
+        .ignore-badge.unknown_face { background: rgba(230,126,34,0.2); color: #e67e22; }
+        .ignore-badge.friend_face { background: rgba(52,152,219,0.2); color: #3498db; }
+        .ignore-badge.non_face { background: rgba(231,76,60,0.2); color: #e74c3c; }
         .edit-section { margin-top: 1rem; padding: 1rem; background: #222; border-radius: 8px; }
         .edit-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
         .edit-row label { width: 70px; font-size: 0.8rem; color: #888; }
@@ -73,7 +81,27 @@
         @media (max-width: 700px) {
             .groups-grid { grid-template-columns: 1fr; }
             .face-grid { grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); }
+            .review-group-card { flex-direction: column; }
         }
+        /* Review tab styles */
+        .review-group-card { background: #1a1a1a; border-radius: 8px; border: 1px solid #2a2a2a; margin-bottom: 0.5rem; overflow: hidden; }
+        .review-group-header { padding: 0.5rem 0.8rem; display: flex; justify-content: space-between; align-items: center; background: #151515; border-bottom: 1px solid #2a2a2a; }
+        .review-faces { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.5rem; }
+        .review-face-item { background: #222; border-radius: 6px; width: 100px; overflow: hidden; border: 1px solid #333; transition: border-color 0.2s; }
+        .review-face-item:hover { border-color: #667eea; }
+        .review-face-img { position: relative; width: 100%; aspect-ratio: 1; }
+        .review-face-img img { width: 100%; height: 100%; object-fit: cover; }
+        .review-face-conf { position: absolute; top: 2px; right: 2px; padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.6rem; font-weight: bold; color: white; }
+        .review-face-info { padding: 0.2rem 0.3rem; }
+        .review-face-actions { display: flex; gap: 0.15rem; padding: 0.2rem 0.3rem 0.3rem; justify-content: center; }
+        /* Master photo indicator */
+        .master-badge { position: absolute; top: 2px; left: 2px; background: #f39c12; color: white; font-size: 0.5rem; padding: 0.1rem 0.2rem; border-radius: 3px; font-weight: bold; }
+        .set-master-btn { position: absolute; top: 2px; left: 2px; background: rgba(243,156,18,0.9); border: none; color: white; width: 18px; height: 18px; border-radius: 50%; font-size: 0.6rem; cursor: pointer; display: none; }
+        .face-item:hover .set-master-btn { display: block; }
+        .face-item.is-master { border: 2px solid #f39c12; }
+        .face-item.is-secondary { border: 2px solid #3498db; }
+        .set-sec-btn { position: absolute; top: 2px; right: 20px; background: rgba(52,152,219,0.9); border: none; color: white; width: 18px; height: 18px; border-radius: 50%; font-size: 0.6rem; cursor: pointer; display: none; }
+        .face-item:hover .set-sec-btn { display: block; }
     </style>
 </head>
 <body>
@@ -92,7 +120,7 @@
         <div class="stat-card"><div class="stat-number" id="statFemale">-</div><div class="stat-label">Female</div></div>
         <div class="stat-card" style="display:flex;flex-direction:column;align-items:center;gap:0.2rem;">
             <div style="font-size:0.7rem;color:#888;">Default Face</div>
-            <select id="defaultFaceSelect" onchange="saveDefaultFace()" style="padding:0.2rem 0.4rem;border:1px solid #444;background:#222;color:#667eea;border-radius:4px;font-size:0.75rem;font-weight:600;">
+            <select id="defaultFaceSelect" onchange="saveDefaultFace()" onwheel="scrollDefaultFace(event)" style="padding:0.2rem 0.4rem;border:1px solid #444;background:#222;color:#667eea;border-radius:4px;font-size:0.75rem;font-weight:600;cursor:pointer;">
                 <option value="">None</option>
             </select>
         </div>
@@ -100,6 +128,7 @@
 
     <div class="tab-bar">
         <div class="tab active" data-tab="named" onclick="switchTab('named')">Named Groups</div>
+        <div class="tab" data-tab="review" onclick="switchTab('review')">Review <span id="reviewCount" class="tag" style="display:none;"></span></div>
         <div class="tab" data-tab="unnamed" onclick="switchTab('unnamed')">Unnamed</div>
         <div class="tab" data-tab="all" onclick="switchTab('all')">All Groups</div>
         <div class="tab" data-tab="ignored" onclick="switchTab('ignored')">Ignored</div>
@@ -148,7 +177,11 @@
         <div class="ctx-menu-item" onclick="ctxOpenImage()">Open Image</div>
         <div class="ctx-menu-item" onclick="ctxCopyPath()">Copy Path</div>
         <div class="ctx-menu-item" onclick="ctxOpenFolder()">Open Folder</div>
-        <div class="ctx-menu-item danger" onclick="ctxMarkInvalid()">Mark Invalid</div>
+        <div class="ctx-menu-sep"></div>
+        <div class="ctx-menu-item ctx-ignore" data-type="unknown_face" onclick="ctxIgnoreAs('unknown_face')">🚫 Unknown Face</div>
+        <div class="ctx-menu-item ctx-ignore" data-type="friend_face" onclick="ctxIgnoreAs('friend_face')">👋 Friend Face</div>
+        <div class="ctx-menu-item ctx-ignore" data-type="non_face" onclick="ctxIgnoreAs('non_face')">❌ Non Face</div>
+        <div class="ctx-menu-item" onclick="ctxRestore()" style="color:#27ae60;">♻ Restore</div>
     </div>
 
     <!-- Group Context Menu -->
@@ -161,14 +194,18 @@
     <div id="faceCtxMenu" class="ctx-menu">
         <div class="ctx-menu-item" onclick="ctxViewFullPhoto()">View Full Photo</div>
         <div class="ctx-menu-item" onclick="ctxCopyPath()">Copy Path</div>
-        <div class="ctx-menu-item danger" onclick="ctxMarkInvalid()">Mark Invalid</div>
+        <div class="ctx-menu-sep"></div>
+        <div class="ctx-menu-item ctx-ignore" data-type="unknown_face" onclick="ctxIgnoreAs('unknown_face')">🚫 Unknown Face</div>
+        <div class="ctx-menu-item ctx-ignore" data-type="friend_face" onclick="ctxIgnoreAs('friend_face')">👋 Friend Face</div>
+        <div class="ctx-menu-item ctx-ignore" data-type="non_face" onclick="ctxIgnoreAs('non_face')">❌ Non Face</div>
+        <div class="ctx-menu-item" onclick="ctxRestore()" style="color:#27ae60;">♻ Restore</div>
     </div>
 
     <script src="/auth.js"></script>
     <script>
         let currentTab = 'named';
         let currentPage = 0;
-        const PAGE_SIZE = 30;
+        const PAGE_SIZE = 40;
         let searchTimeout = null;
         let selectedGroupId = null;
         let defaultFaceId = null;
@@ -221,12 +258,16 @@
                 const minConf = document.getElementById('confidenceFilter').value;
 
                 let data;
-                if (currentTab === 'unnamed') {
+                if (currentTab === 'review') {
+                    await loadReviewTab();
+                    return;
+                } else if (currentTab === 'unnamed') {
                     data = await api(`/api/faces/unassigned?limit=${PAGE_SIZE}&offset=${currentPage * PAGE_SIZE}&minConfidence=${minConf}`);
                     renderUnassignedGroups(data.groups);
                     renderPagination(data.totalUnassigned);
                 } else if (currentTab === 'ignored') {
-                    data = await api(`/api/faces/ignored?limit=${PAGE_SIZE}&offset=${currentPage * PAGE_SIZE}`);
+                    const typeFilter = window._ignoredFilter || '';
+                    data = await api(`/api/faces/ignored?limit=${PAGE_SIZE}&offset=${currentPage * PAGE_SIZE}${typeFilter ? '&type=' + typeFilter : ''}`);
                     renderIgnoredFaces(data.faces);
                     renderPagination(data.total);
                 } else {
@@ -246,17 +287,29 @@
         function renderGroups(groups) {
             const c = document.getElementById('groupsContainer');
             if (!groups.length) { c.innerHTML = '<div class="no-results">No groups found</div>'; return; }
+            const typeEmoji = { male: '👨', female: '👩', unknown: '' };
+            const relEmoji = { friend: '👋', teammate: '🤝', relation: '👨‍👩‍👧', partner: '❤️', other: '' };
+            const relLabel = { friend: 'Friend', teammate: 'Teammate', relation: 'Relation', partner: 'Partner', other: '' };
             c.innerHTML = groups.map(g => `
                 <div class="group-card" onclick="openGroup(${g.id})">
-                    <div class="group-header">
-                        <span class="group-label">${g.label || 'Unnamed'}</span>
-                        <span class="group-count">${g.faceCount} faces · ${g.files.length} photos</span>
-                    </div>
-                    <div class="group-meta">
-                        ${g.dominantGender ? '<span class="tag">' + g.dominantGender + '</span>' : ''}
+                    <div style="display:flex;gap:0.5rem;padding:0.5rem;">
+                        ${g.masterThumb ? `
+                            <div style="position:relative;flex-shrink:0;width:80px;height:80px;">
+                                <img src="data:image/jpeg;base64,${g.masterThumb}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid #f39c12;" loading="lazy">
+                                <div style="position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);background:#f39c12;color:white;font-size:0.5rem;padding:0.1rem 0.3rem;border-radius:3px;font-weight:bold;white-space:nowrap;">MASTER</div>
+                            </div>
+                        ` : ''}
+                        <div style="flex:1;min-width:0;">
+                            <div class="group-label" style="font-size:1rem;">${typeEmoji[g.groupType] || ''} ${g.label || 'Unnamed'}</div>
+                            <div style="font-size:0.75rem;color:#888;margin-top:0.2rem;">${g.faceCount} faces · ${g.files.length} photos</div>
+                            <div style="margin-top:0.3rem;display:flex;gap:0.3rem;flex-wrap:wrap;">
+                                ${g.groupType && g.groupType !== 'unknown' ? '<span class="tag">' + g.groupType + '</span>' : ''}
+                                ${g.relationship ? '<span class="tag" style="background:rgba(52,152,219,0.15);color:#3498db;">' + (relEmoji[g.relationship] || '') + ' ' + (relLabel[g.relationship] || g.relationship) + '</span>' : ''}
+                            </div>
+                        </div>
                     </div>
                     <div class="group-thumbs">
-                        ${g.faces.slice(0, 8).map(f => f.thumb ? '<img src="data:image/jpeg;base64,' + f.thumb + '" loading="lazy">' : '').join('')}
+                        ${g.faces.filter(f => !g.masterThumb || f.thumb !== g.masterThumb).slice(0, 7).map(f => f.thumb ? '<img src="data:image/jpeg;base64,' + f.thumb + '" loading="lazy">' : '').join('')}
                     </div>
                 </div>
             `).join('');
@@ -297,15 +350,20 @@
         function renderIgnoredFaces(faces) {
             const c = document.getElementById('groupsContainer');
             if (!faces.length) { c.innerHTML = '<div class="no-results">No ignored faces</div>'; return; }
+            const ignoreLabels = { unknown_face: '🚫 Unknown', friend_face: '👋 Friend', non_face: '❌ Non-face' };
             c.innerHTML = `
-                <div style="grid-column:1/-1;margin-bottom:0.5rem;">
+                <div style="grid-column:1/-1;margin-bottom:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
                     <button class="btn btn-ghost" onclick="unignoreAll()" style="font-size:0.8rem;padding:0.3rem 0.8rem;">♻ Restore All</button>
+                    <button class="btn btn-ghost" onclick="filterIgnored('')" style="font-size:0.75rem;padding:0.3rem 0.6rem;">All</button>
+                    <button class="btn btn-ghost" onclick="filterIgnored('unknown_face')" style="font-size:0.75rem;padding:0.3rem 0.6rem;color:#e67e22;">🚫 Unknown</button>
+                    <button class="btn btn-ghost" onclick="filterIgnored('friend_face')" style="font-size:0.75rem;padding:0.3rem 0.6rem;color:#3498db;">👋 Friend</button>
+                    <button class="btn btn-ghost" onclick="filterIgnored('non_face')" style="font-size:0.75rem;padding:0.3rem 0.6rem;color:#e74c3c;">❌ Non-face</button>
                 </div>
                 ${faces.map(f => `
                     <div class="group-card" style="opacity:0.7;">
-                        <div class="group-header">
+                        <div class="group-header" style="display:flex;justify-content:space-between;align-items:center;">
                             <span class="group-label" style="color:#888;">${f.name || 'face_' + f.id}</span>
-                            <span class="group-count">conf: ${f.confidence}</span>
+                            <span class="ignore-badge ${f.ignoreType || 'unknown_face'}">${ignoreLabels[f.ignoreType] || f.ignoreType}</span>
                         </div>
                         <div style="padding:2px;">
                             <img src="/images/${f.file_id}" style="width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:4px;filter:grayscale(0.5);" onerror="this.style.display='none'" loading="lazy">
@@ -317,6 +375,12 @@
                     </div>
                 `).join('')}
             `;
+        }
+
+        function filterIgnored(type) {
+            window._ignoredFilter = type;
+            currentPage = 0;
+            loadCurrentTab();
         }
 
         function renderPagination(total) {
@@ -333,12 +397,17 @@
         async function openGroup(groupId) {
             selectedGroupId = groupId;
             try {
-                const data = await api(`/api/faces/groups/${groupId}`);
+                const [data, masterData, secData] = await Promise.all([
+                    api(`/api/faces/groups/${groupId}`),
+                    api(`/api/faces/groups/${groupId}/master`),
+                    api(`/api/faces/groups/${groupId}/secondary`)
+                ]);
                 const g = data.group;
+                window._masterFaceId = masterData.master?.id || null;
+                window._secondaryIds = (secData.secondary || []).map(f => f.id);
                 document.getElementById('modalTitle').textContent = g.label || 'Unnamed Group';
                 document.getElementById('deleteGroupBtn').style.display = 'inline-block';
 
-                // Load unassigned faces for the "add to group" dropdown
                 const unassignedData = await api('/api/faces/unassigned?limit=200');
                 window._unassignedFaces = unassignedData.groups?.flatMap(grp => grp.faces) || [];
 
@@ -346,13 +415,40 @@
                     `<option value="${f.id}">${f.name || 'face_' + f.id} (${f.gender || '?'}, ${f.age || '?'})</option>`
                 ).join('');
 
+                const secCount = window._secondaryIds.length;
+                const gt = g.groupType || 'unknown';
+                const rel = g.relationship || '';
                 document.getElementById('editSection').innerHTML = `
                     <div class="edit-row">
                         <label>Name</label>
                         <input id="editLabel" value="${g.label || ''}" placeholder="Enter name...">
                     </div>
-                    <div style="display:flex;gap:0.5rem;margin-top:0.5rem;align-items:center;">
-                        <button class="btn btn-primary" onclick="saveGroup()">Save Name</button>
+                    <div style="display:flex;gap:0.5rem;margin-top:0.4rem;flex-wrap:wrap;">
+                        <div class="edit-row" style="flex:1;min-width:120px;">
+                            <label>Type</label>
+                            <select id="editGroupType" style="flex:1;padding:0.4rem;border:1px solid #444;background:#333;color:white;border-radius:4px;font-size:0.8rem;">
+                                <option value="unknown" ${gt === 'unknown' ? 'selected' : ''}>Unknown</option>
+                                <option value="male" ${gt === 'male' ? 'selected' : ''}>👨 Male</option>
+                                <option value="female" ${gt === 'female' ? 'selected' : ''}>👩 Female</option>
+                            </select>
+                        </div>
+                        <div class="edit-row" style="flex:1;min-width:120px;">
+                            <label>Relation</label>
+                            <select id="editRelationship" style="flex:1;padding:0.4rem;border:1px solid #444;background:#333;color:white;border-radius:4px;font-size:0.8rem;">
+                                <option value="" ${!rel ? 'selected' : ''}>None</option>
+                                <option value="friend" ${rel === 'friend' ? 'selected' : ''}>👋 Friend</option>
+                                <option value="teammate" ${rel === 'teammate' ? 'selected' : ''}>🤝 Teammate</option>
+                                <option value="relation" ${rel === 'relation' ? 'selected' : ''}>👨‍👩‍👧 Relation</option>
+                                <option value="partner" ${rel === 'partner' ? 'selected' : ''}>❤️ Partner</option>
+                                <option value="other" ${rel === 'other' ? 'selected' : ''}>Other</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:0.5rem;margin-top:0.5rem;align-items:center;flex-wrap:wrap;">
+                        <button class="btn btn-primary" onclick="saveGroup()">Save</button>
+                        <span style="font-size:0.75rem;color:#888;">${window._masterFaceId ? '⭐ Master' : 'No master'}</span>
+                        <span style="font-size:0.75rem;color:#888;">|</span>
+                        <span style="font-size:0.75rem;color:#888;">📸 Secondary: ${secCount}/5</span>
                     </div>
                     <div style="margin-top:0.8rem;padding-top:0.5rem;border-top:1px solid #333;">
                         <div style="font-size:0.8rem;color:#888;margin-bottom:0.3rem;">Add faces from unassigned:</div>
@@ -367,14 +463,26 @@
                     </div>
                 `;
 
-                document.getElementById('faceGrid').innerHTML = g.faces.map(f => `
-                    <div class="face-item" title="${f.name || ''}\nPath: ${f.name || ''}\nGender: ${f.gender || '?'}\nAge: ${f.age || '?'}\nConfidence: ${f.confidence}"
-                         oncontextmenu="showFaceCtx(event, ${f.id}, '${(f.name || '').replace(/'/g, "\\'")}', ${f.file_id || 0})">
-                        ${f.thumb ? '<img src="data:image/jpeg;base64,' + f.thumb + '">' : ''}
-                        <div class="face-info">${f.gender || '?'} · ${f.age || '?'}</div>
-                        <button class="face-remove" onclick="event.stopPropagation();removeFromGroup(${f.id})" title="Remove from group">✕</button>
-                    </div>
-                `).join('');
+                document.getElementById('faceGrid').innerHTML = g.faces.map(f => {
+                    const fid = Number(f.id);
+                    const isMaster = fid === Number(window._masterFaceId);
+                    const isSec = window._secondaryIds.some(id => Number(id) === fid);
+                    const badge = isMaster ? '<div class="master-badge">⭐ MASTER</div>' : isSec ? '<div style="position:absolute;top:2px;left:2px;background:#3498db;color:white;font-size:0.5rem;padding:0.1rem 0.2rem;border-radius:3px;font-weight:bold;">REF</div>' : '';
+                    const borderClass = isMaster ? 'is-master' : isSec ? 'is-secondary' : '';
+                    const title = `${f.name || ''}\nGender: ${f.gender || '?'}\nAge: ${f.age || '?'}\nConfidence: ${f.confidence}${isMaster ? '\n⭐ MASTER PHOTO' : isSec ? '\n📸 REFERENCE' : ''}`;
+                    const secBtn = !isMaster ? `<button class="set-sec-btn" onclick="event.stopPropagation();toggleSecondary(${f.id})" title="${isSec ? 'Remove from references' : 'Add as reference'}">📸</button>` : '';
+                    return `
+                        <div class="face-item ${borderClass}" title="${title}"
+                             oncontextmenu="showFaceCtx(event, ${f.id}, '${(f.name || '').replace(/'/g, "\\'")}', ${f.file_id || 0})">
+                            ${f.thumb ? '<img src="data:image/jpeg;base64,' + f.thumb + '">' : ''}
+                            ${badge}
+                            <button class="set-master-btn" onclick="event.stopPropagation();setMasterPhoto(${f.id})" title="Set as master photo">⭐</button>
+                            ${secBtn}
+                            <div class="face-info">${f.gender || '?'} · ${f.age || '?'}</div>
+                            <button class="face-remove" onclick="event.stopPropagation();removeFromGroup(${f.id})" title="Remove from group">✕</button>
+                        </div>
+                    `;
+                }).join('');
 
                 document.getElementById('faceModal').classList.add('active');
             } catch (e) { toast('Error: ' + e.message); }
@@ -490,7 +598,6 @@
 
         async function removeFromGroup(faceId) {
             if (!selectedGroupId) return;
-            if (!confirm('Remove this face from the group?')) return;
             try {
                 await api(`/api/faces/groups/${selectedGroupId}/unassign`, {
                     method: 'POST',
@@ -507,12 +614,56 @@
         async function saveGroup() {
             if (!selectedGroupId) return;
             const label = document.getElementById('editLabel').value;
+            const groupType = document.getElementById('editGroupType')?.value || 'unknown';
+            const relationship = document.getElementById('editRelationship')?.value || null;
             try {
-                await api(`/api/faces/groups/${selectedGroupId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) });
+                await api(`/api/faces/groups/${selectedGroupId}`, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ label, groupType, relationship })
+                });
                 toast('Saved!');
                 document.getElementById('modalTitle').textContent = label || 'Unnamed Group';
                 loadStats();
                 loadCurrentTab();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        async function setMasterPhoto(faceId) {
+            if (!selectedGroupId) return;
+            try {
+                await api(`/api/faces/groups/${selectedGroupId}/master`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ faceId })
+                });
+                window._masterFaceId = faceId;
+                toast('Master photo set!');
+                openGroup(selectedGroupId);
+                loadStats();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        async function toggleSecondary(faceId) {
+            if (!selectedGroupId) return;
+            const isSec = window._secondaryIds.includes(faceId);
+            try {
+                if (isSec) {
+                    await api(`/api/faces/groups/${selectedGroupId}/secondary/remove`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ faceId })
+                    });
+                    window._secondaryIds = window._secondaryIds.filter(id => id !== faceId);
+                    toast('Removed from references');
+                } else {
+                    if (window._secondaryIds.length >= 5) { toast('Max 5 secondary images'); return; }
+                    await api(`/api/faces/groups/${selectedGroupId}/secondary/add`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ faceId })
+                    });
+                    window._secondaryIds.push(faceId);
+                    toast('Added as reference');
+                }
+                openGroup(selectedGroupId);
+                loadStats();
             } catch (e) { toast('Error: ' + e.message); }
         }
 
@@ -609,12 +760,51 @@
         async function ctxMarkInvalid() {
             if (!ctxFaceId) return;
             try {
-                await api(`/api/faces/${ctxFaceId}/invalid`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invalid: true }) });
+                await api(`/api/faces/${ctxFaceId}/invalid`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invalid: true, ignoreType: 'unknown_face' }) });
                 toast('Marked as invalid');
                 document.querySelector(`.face-item[oncontextmenu*="${ctxFaceId}"]`)?.remove();
                 document.getElementById('faceCtxMenu').classList.remove('active');
                 loadStats();
             } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        async function ctxIgnoreAs(type) {
+            if (!ctxFaceId) return;
+            const labels = { unknown_face: 'Unknown', friend_face: 'Friend', non_face: 'Non-face' };
+            try {
+                await api(`/api/faces/${ctxFaceId}/invalid`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invalid: true, ignoreType: type }) });
+                toast(`Marked as ${labels[type] || type}`);
+                document.querySelector(`.face-item[oncontextmenu*="${ctxFaceId}"]`)?.remove();
+                document.getElementById('ctxMenu').classList.remove('active');
+                document.getElementById('faceCtxMenu').classList.remove('active');
+                loadStats();
+                if (currentTab === 'ignored') loadCurrentTab();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        async function ctxRestore() {
+            if (!ctxFaceId) return;
+            try {
+                await api(`/api/faces/${ctxFaceId}/invalid`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invalid: false }) });
+                toast('Restored');
+                document.querySelector(`.face-item[oncontextmenu*="${ctxFaceId}"]`)?.remove();
+                document.getElementById('ctxMenu').classList.remove('active');
+                document.getElementById('faceCtxMenu').classList.remove('active');
+                loadStats();
+                if (currentTab === 'ignored') loadCurrentTab();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        function scrollDefaultFace(e) {
+            const sel = document.getElementById('defaultFaceSelect');
+            const opts = sel.options;
+            const dir = e.deltaY > 0 ? 1 : -1;
+            const next = sel.selectedIndex + dir;
+            if (next >= 0 && next < opts.length) {
+                sel.selectedIndex = next;
+                saveDefaultFace();
+            }
+            e.preventDefault();
         }
 
         function ctxViewFullPhoto() {
@@ -649,34 +839,6 @@
         async function ctxIgnoreGroup() {
             if (ctxGroupIdx === null) return;
             await ignoreGroup(ctxGroupIdx);
-        }
-
-        function ctxOpenImage() {
-            if (!ctxFaceName) return;
-            window.open('/api/images/by-name/' + encodeURIComponent(ctxFaceName), '_blank');
-        }
-
-        function ctxCopyPath() {
-            if (!ctxFaceName) return;
-            navigator.clipboard.writeText(ctxFaceName).then(() => toast('Path copied'));
-        }
-
-        function ctxOpenFolder() {
-            if (!ctxFaceName) return;
-            const folder = ctxFaceName.replace(/\\\\[^\\\\]+$/, '');
-            window.open('/tree?path=' + encodeURIComponent(folder), '_blank');
-        }
-
-        async function ctxMarkInvalid() {
-            if (!ctxFaceId) return;
-            try {
-                await api(`/api/faces/${ctxFaceId}/invalid`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invalid: true }) });
-                toast('Marked as invalid');
-                // Remove face from grid
-                document.querySelector(`.face-item[oncontextmenu*="${ctxFaceId}"]`)?.remove();
-                document.getElementById('ctxMenu').classList.remove('active');
-                loadStats();
-            } catch (e) { toast('Error: ' + e.message); }
         }
 
         loadStats();
@@ -766,20 +928,6 @@
         async function ignoreAllVisible() {
             const groups = window._lastUnassignedGroups || [];
             if (!groups.length) { toast('No faces to ignore'); return; }
-            try {
-                const allFaceIds = groups.flatMap(g => g.faces.map(f => f.id));
-                await api('/api/faces/ignore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ faceIds: allFaceIds }) });
-                toast('Ignored ' + allFaceIds.length + ' faces');
-                // Remove all cards
-                document.getElementById('groupsContainer').innerHTML = '<div class="no-results">No unassigned faces</div>';
-                window._lastUnassignedGroups = [];
-                loadStats();
-            } catch (e) { toast('Error: ' + e.message); }
-        }
-
-        async function ignoreAllVisible() {
-            const groups = window._lastUnassignedGroups || [];
-            if (!groups.length) { toast('No faces to ignore'); return; }
             const allFaceIds = groups.flatMap(g => g.faces.map(f => f.id));
             try {
                 await api('/api/faces/ignore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ faceIds: allFaceIds }) });
@@ -819,6 +967,151 @@
         }
 
         loadDefaultFaceOptions();
+
+        // ==================== REVIEW TAB ====================
+        let reviewGroupId = null;
+
+        async function loadReviewTab() {
+            const container = document.getElementById('groupsContainer');
+            container.innerHTML = '<div class="loading">Loading review items...</div>';
+
+            try {
+                const params = new URLSearchParams({ limit: PAGE_SIZE, offset: currentPage * PAGE_SIZE });
+                if (reviewGroupId) params.set('groupId', reviewGroupId);
+
+                const data = await api(`/api/faces/review?${params}`);
+                renderReviewFaces(data.faces || []);
+                renderPagination(data.total || 0);
+
+                const countEl = document.getElementById('reviewCount');
+                if (data.total > 0) {
+                    countEl.textContent = data.total;
+                    countEl.style.display = 'inline';
+                } else {
+                    countEl.style.display = 'none';
+                }
+            } catch (e) {
+                container.innerHTML = '<div class="no-results">Error: ' + e.message + '</div>';
+            }
+        }
+
+        function renderReviewFaces(faces) {
+            const c = document.getElementById('groupsContainer');
+            if (!faces.length) { c.innerHTML = '<div class="no-results">No pending reviews. All auto-matches reviewed!</div>'; return; }
+
+            const byGroup = {};
+            for (const f of faces) {
+                if (!byGroup[f.groupId]) byGroup[f.groupId] = { label: f.groupLabel, faces: [] };
+                byGroup[f.groupId].faces.push(f);
+            }
+
+            c.innerHTML = Object.entries(byGroup).map(([gId, g]) => `
+                <div class="review-group-card">
+                    <div class="review-group-header">
+                        <div>
+                            <span class="group-label">${g.label}</span>
+                            <span class="group-count" style="margin-left:0.5rem;">${g.faces.length} pending</span>
+                        </div>
+                        <div style="display:flex;gap:0.3rem;">
+                            <button class="btn btn-primary" onclick="bulkConfirmReview(${gId})" style="font-size:0.7rem;padding:0.2rem 0.5rem;">✓ Confirm All</button>
+                            <button class="btn btn-ghost" onclick="bulkRejectReview(${gId})" style="font-size:0.7rem;padding:0.2rem 0.5rem;color:#e74c3c;border-color:rgba(231,76,60,0.4);">✕ Reject All</button>
+                        </div>
+                    </div>
+                    <div class="review-faces">
+                        ${g.faces.map(f => renderReviewFaceCard(f)).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderReviewFaceCard(f) {
+            const conf = f.matchConfidence ? (f.matchConfidence * 100).toFixed(0) : '?';
+            const confColor = f.matchConfidence >= 0.85 ? '#27ae60' : f.matchConfidence >= 0.7 ? '#f39c12' : '#e74c3c';
+            return `
+                <div class="review-face-item" data-id="${f.id}">
+                    <div class="review-face-img">
+                        ${f.thumb ? `<img src="data:image/jpeg;base64,${f.thumb}" loading="lazy">` : ''}
+                        <div class="review-face-conf" style="background:${confColor};">${conf}%</div>
+                    </div>
+                    <div class="review-face-info">
+                        <div style="font-size:0.7rem;color:#888;">${f.fileName ? f.fileName.split(/[/\\\\]/).pop().substring(0, 20) : ''}</div>
+                        <div style="font-size:0.65rem;color:#666;">${f.gender || '?'} · ${f.age || '?'}</div>
+                    </div>
+                    <div class="review-face-actions">
+                        <button class="btn btn-primary" onclick="confirmReview(${f.id})" style="font-size:0.65rem;padding:0.15rem 0.4rem;">✓</button>
+                        <button class="btn btn-ghost" onclick="rejectReview(${f.id})" style="font-size:0.65rem;padding:0.15rem 0.4rem;color:#e74c3c;">✕</button>
+                        <button class="btn btn-ghost" onclick="showReassignModal(${f.id}, '${f.groupLabel}')" style="font-size:0.65rem;padding:0.15rem 0.4rem;">↗</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function confirmReview(faceId) {
+            try {
+                await api(`/api/faces/review/${faceId}/confirm`, { method: 'POST' });
+                document.querySelector(`.review-face-item[data-id="${faceId}"]`)?.remove();
+                toast('Confirmed');
+                loadStats();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        async function rejectReview(faceId) {
+            try {
+                await api(`/api/faces/review/${faceId}/reject`, { method: 'POST' });
+                document.querySelector(`.review-face-item[data-id="${faceId}"]`)?.remove();
+                toast('Rejected — removed from group');
+                loadStats();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        async function showReassignModal(faceId, currentGroup) {
+            const data = await api('/api/faces/named-list');
+            const groups = (data.groups || []).filter(g => g.label !== currentGroup);
+            if (!groups.length) { toast('No other groups to reassign to'); return; }
+
+            const options = groups.map(g => `<option value="${g.id}">${g.label} (${g.face_count} faces)</option>`).join('');
+            const newGroup = prompt(`Reassign face from "${currentGroup}" to:\n\n${groups.map(g => `- ${g.label}`).join('\n')}\n\nEnter group name:`);
+            if (!newGroup) return;
+
+            const match = groups.find(g => g.label.toLowerCase() === newGroup.toLowerCase());
+            if (!match) { toast('Group not found'); return; }
+
+            try {
+                await api(`/api/faces/review/${faceId}/reassign`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ groupId: match.id })
+                });
+                document.querySelector(`.review-face-item[data-id="${faceId}"]`)?.remove();
+                toast(`Reassigned to ${match.label}`);
+                loadStats();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        async function bulkConfirmReview(groupId) {
+            if (!confirm('Confirm all auto-matches for this group?')) return;
+            try {
+                await api('/api/faces/review/bulk-confirm', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ groupId })
+                });
+                toast('All matches confirmed');
+                loadStats();
+                loadCurrentTab();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
+
+        async function bulkRejectReview(groupId) {
+            if (!confirm('Reject all auto-matches for this group? Faces will be removed from the group.')) return;
+            try {
+                await api('/api/faces/review/bulk-reject', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ groupId })
+                });
+                toast('All matches rejected');
+                loadStats();
+                loadCurrentTab();
+            } catch (e) { toast('Error: ' + e.message); }
+        }
     </script>
 </body>
 </html>

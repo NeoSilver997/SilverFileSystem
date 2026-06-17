@@ -3708,6 +3708,21 @@ app.get('/api/faces/groups', requireAuthWrapper, requirePhotoPermission, async (
         return { ...f, thumb: desc?.thumbnail, phash: desc?.phash, has_glasses: desc?.has_glasses, age_group: desc?.age_group };
       });
 
+      let masterThumb = null;
+      if (grp.master_face_id) {
+        const mf = parsedFaces.find(f => f.id === grp.master_face_id);
+        if (mf) masterThumb = mf.thumb;
+        if (!masterThumb) {
+          const [mrow] = await db.connection.execute(`
+            SELECT df.face_descriptor FROM detected_faces df WHERE df.id = ?
+          `, [grp.master_face_id]);
+          if (mrow.length > 0) {
+            const desc = typeof mrow[0].face_descriptor === 'string' ? JSON.parse(mrow[0].face_descriptor) : (mrow[0].face_descriptor || {});
+            masterThumb = desc?.thumbnail || null;
+          }
+        }
+      }
+
       const files = [...new Set(parsedFaces.map(f => f.name))];
       const genderCount = {};
       for (const f of parsedFaces) { if (f.gender) genderCount[f.gender] = (genderCount[f.gender] || 0) + 1; }
@@ -3718,6 +3733,9 @@ app.get('/api/faces/groups', requireAuthWrapper, requirePhotoPermission, async (
         faceCount: grp.face_count || parsedFaces.length,
         files,
         dominantGender: Object.entries(genderCount).sort((a, b) => b[1] - a[1])[0]?.[0] || null,
+        masterThumb,
+        groupType: grp.group_type || 'unknown',
+        relationship: grp.relationship || null,
         faces: parsedFaces
       });
     }
@@ -3732,25 +3750,35 @@ app.get('/api/faces/groups', requireAuthWrapper, requirePhotoPermission, async (
 // Get ignored faces
 app.get('/api/faces/ignored', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
-    const { limit = 100, offset = 0 } = req.query;
+    const { limit = 100, offset = 0, type } = req.query;
+    let whereClause = "df.all_expressions IS NOT NULL AND JSON_EXTRACT(df.all_expressions, '$.invalid') = true";
+    const params = [];
+    if (type) {
+      whereClause += " AND JSON_EXTRACT(df.all_expressions, '$.ignore_type') = ?";
+      params.push(type);
+    }
     const [faces] = await db.connection.execute(`
       SELECT df.id, df.file_id, df.face_index, df.confidence, df.gender, df.age, df.expression,
-             df.face_descriptor, sf.name
+             df.all_expressions, df.face_descriptor, sf.name
       FROM detected_faces df
       JOIN scanned_files sf ON df.file_id = sf.id
-      WHERE df.all_expressions IS NOT NULL
-      AND JSON_EXTRACT(df.all_expressions, '$.invalid') = true
+      WHERE ${whereClause}
       ORDER BY df.file_id DESC
       LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}
-    `);
+    `, params);
 
     const [total] = await db.connection.execute(
-      "SELECT COUNT(*) as c FROM detected_faces WHERE all_expressions IS NOT NULL AND JSON_EXTRACT(all_expressions, '$.invalid') = true"
+      `SELECT COUNT(*) as c FROM detected_faces df WHERE ${whereClause}`, params
     );
 
     const parsed = faces.map(f => {
       const desc = typeof f.face_descriptor === 'string' ? JSON.parse(f.face_descriptor) : (f.face_descriptor || {});
-      return { ...f, thumb: desc?.thumbnail, phash: desc?.phash };
+      let ignoreType = 'unknown_face';
+      try {
+        const ae = typeof f.all_expressions === 'string' ? JSON.parse(f.all_expressions) : f.all_expressions;
+        ignoreType = ae?.ignore_type || 'unknown_face';
+      } catch {}
+      return { ...f, thumb: desc?.thumbnail, phash: desc?.phash, ignoreType };
     });
 
     res.json({ faces: parsed, total: total[0].c });
@@ -3772,7 +3800,7 @@ app.get('/api/faces/unassigned', requireAuthWrapper, requirePhotoPermission, asy
       AND df.face_descriptor IS NOT NULL
       AND (df.all_expressions IS NULL OR JSON_EXTRACT(df.all_expressions, '$.invalid') IS NULL OR JSON_EXTRACT(df.all_expressions, '$.invalid') = false)
       AND df.confidence >= ?
-      ORDER BY df.file_id DESC
+      ORDER BY sf.ctime
       LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}
     `, [parseFloat(minConfidence)]);
 
@@ -3838,7 +3866,7 @@ app.get('/api/faces/groups/:groupId', requireAuthWrapper, requirePhotoPermission
       return { ...f, thumb: desc?.thumbnail, phash: desc?.phash, has_glasses: desc?.has_glasses, age_group: desc?.age_group };
     });
 
-    res.json({ group: { ...grp[0], faces: parsedFaces, files: [...new Set(parsedFaces.map(f => f.name))] } });
+    res.json({ group: { ...grp[0], groupType: grp[0].group_type, relationship: grp[0].relationship, faces: parsedFaces, files: [...new Set(parsedFaces.map(f => f.name))] } });
   } catch (err) {
     console.error('Face group detail error:', err.message);
     res.status(500).json({ error: err.message });
@@ -3860,9 +3888,154 @@ app.post('/api/faces/groups', requireAuthWrapper, async (req, res) => {
 app.put('/api/faces/groups/:groupId', requireAuthWrapper, async (req, res) => {
   try {
     const groupId = parseInt(req.params.groupId);
-    const { label } = req.body;
-    await db.connection.execute('UPDATE face_groups SET label = ? WHERE id = ?', [label, groupId]);
+    const { label, groupType, relationship } = req.body;
+    if (label !== undefined) {
+      await db.connection.execute('UPDATE face_groups SET label = ? WHERE id = ?', [label, groupId]);
+    }
+    if (groupType !== undefined) {
+      await db.connection.execute('UPDATE face_groups SET group_type = ? WHERE id = ?', [groupType || 'unknown', groupId]);
+    }
+    if (relationship !== undefined) {
+      await db.connection.execute('UPDATE face_groups SET relationship = ? WHERE id = ?', [relationship || null, groupId]);
+    }
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Set master photo for a face group
+app.post('/api/faces/groups/:groupId/master', requireAuthWrapper, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.groupId);
+    const { faceId } = req.body;
+
+    if (faceId) {
+      const [face] = await db.connection.execute('SELECT id FROM detected_faces WHERE id = ? AND face_group_id = ?', [faceId, groupId]);
+      if (face.length === 0) return res.status(404).json({ error: 'Face not found in this group' });
+    }
+
+    await db.connection.execute('UPDATE face_groups SET master_face_id = ? WHERE id = ?', [faceId || null, groupId]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get master photo for a face group
+app.get('/api/faces/groups/:groupId/master', requireAuthWrapper, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.groupId);
+    const [grp] = await db.connection.execute('SELECT master_face_id FROM face_groups WHERE id = ?', [groupId]);
+    if (grp.length === 0 || !grp[0].master_face_id) return res.json({ master: null });
+
+    const [face] = await db.connection.execute(`
+      SELECT df.id, df.file_id, df.face_descriptor, df.confidence, df.gender, df.age
+      FROM detected_faces df WHERE df.id = ?
+    `, [grp[0].master_face_id]);
+
+    if (face.length === 0) return res.json({ master: null });
+
+    const desc = typeof face[0].face_descriptor === 'string' ? JSON.parse(face[0].face_descriptor) : face[0].face_descriptor;
+    res.json({ master: { ...face[0], thumb: desc?.thumbnail, phash: desc?.phash, dhash: desc?.dhash } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get secondary reference photos for a face group
+app.get('/api/faces/groups/:groupId/secondary', requireAuthWrapper, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.groupId);
+    const [grp] = await db.connection.execute('SELECT secondary_face_ids FROM face_groups WHERE id = ?', [groupId]);
+    if (grp.length === 0) return res.json({ secondary: [] });
+
+    const ids = grp[0].secondary_face_ids ? JSON.parse(grp[0].secondary_face_ids) : [];
+    if (!ids.length) return res.json({ secondary: [] });
+
+    const placeholders = ids.map(() => '?').join(',');
+    const [faces] = await db.connection.execute(`
+      SELECT df.id, df.file_id, df.confidence, df.gender, df.age, df.face_descriptor, sf.name
+      FROM detected_faces df
+      JOIN scanned_files sf ON df.file_id = sf.id
+      WHERE df.id IN (${placeholders})
+    `, ids);
+
+    const parsed = faces.map(f => {
+      const desc = typeof f.face_descriptor === 'string' ? JSON.parse(f.face_descriptor) : (f.face_descriptor || {});
+      return { id: f.id, fileId: f.file_id, thumb: desc?.thumbnail, phash: desc?.phash, gender: f.gender, age: f.age, fileName: f.name };
+    });
+
+    res.json({ secondary: parsed });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Set secondary reference photos for a face group (replaces all)
+app.post('/api/faces/groups/:groupId/secondary', requireAuthWrapper, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.groupId);
+    const { faceIds } = req.body;
+
+    if (!Array.isArray(faceIds) || faceIds.length > 5) {
+      return res.status(400).json({ error: 'faceIds array required, max 5' });
+    }
+
+    for (const faceId of faceIds) {
+      const [face] = await db.connection.execute('SELECT id FROM detected_faces WHERE id = ? AND face_group_id = ?', [faceId, groupId]);
+      if (face.length === 0) return res.status(404).json({ error: `Face ${faceId} not found in this group` });
+    }
+
+    await db.connection.execute('UPDATE face_groups SET secondary_face_ids = ? WHERE id = ?', [
+      faceIds.length ? JSON.stringify(faceIds) : null, groupId
+    ]);
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add a single face to secondary references
+app.post('/api/faces/groups/:groupId/secondary/add', requireAuthWrapper, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.groupId);
+    const { faceId } = req.body;
+
+    const [face] = await db.connection.execute('SELECT id FROM detected_faces WHERE id = ? AND face_group_id = ?', [faceId, groupId]);
+    if (face.length === 0) return res.status(404).json({ error: 'Face not found in this group' });
+
+    const [grp] = await db.connection.execute('SELECT secondary_face_ids FROM face_groups WHERE id = ?', [groupId]);
+    const ids = grp[0]?.secondary_face_ids ? JSON.parse(grp[0].secondary_face_ids) : [];
+
+    if (ids.includes(faceId)) return res.json({ success: true, message: 'Already added' });
+    if (ids.length >= 5) return res.status(400).json({ error: 'Maximum 5 secondary images reached' });
+
+    ids.push(faceId);
+    await db.connection.execute('UPDATE face_groups SET secondary_face_ids = ? WHERE id = ?', [JSON.stringify(ids), groupId]);
+
+    res.json({ success: true, count: ids.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remove a face from secondary references
+app.post('/api/faces/groups/:groupId/secondary/remove', requireAuthWrapper, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.groupId);
+    const { faceId } = req.body;
+
+    const [grp] = await db.connection.execute('SELECT secondary_face_ids FROM face_groups WHERE id = ?', [groupId]);
+    let ids = grp[0]?.secondary_face_ids ? JSON.parse(grp[0].secondary_face_ids) : [];
+
+    ids = ids.filter(id => id !== faceId);
+    await db.connection.execute('UPDATE face_groups SET secondary_face_ids = ? WHERE id = ?', [
+      ids.length ? JSON.stringify(ids) : null, groupId
+    ]);
+
+    res.json({ success: true, count: ids.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -3925,12 +4098,21 @@ app.delete('/api/faces/groups/:groupId', requireAuthWrapper, async (req, res) =>
 app.put('/api/faces/:faceId/invalid', requireAuthWrapper, async (req, res) => {
   try {
     const faceId = parseInt(req.params.faceId);
-    const { invalid } = req.body;
+    const { invalid, ignoreType } = req.body;
     const [rows] = await db.connection.execute('SELECT all_expressions FROM detected_faces WHERE id = ?', [faceId]);
     if (rows.length === 0) return res.status(404).json({ error: 'Face not found' });
     let meta = {};
     try { meta = typeof rows[0].all_expressions === 'string' ? JSON.parse(rows[0].all_expressions) : (rows[0].all_expressions || {}); } catch {}
-    meta.invalid = !!invalid;
+    if (invalid === false) {
+      meta.invalid = false;
+      meta.ignore_type = null;
+    } else if (ignoreType) {
+      meta.invalid = true;
+      meta.ignore_type = ignoreType;
+    } else {
+      meta.invalid = !!invalid;
+      meta.ignore_type = invalid ? (meta.ignore_type || 'unknown_face') : null;
+    }
     await db.connection.execute('UPDATE detected_faces SET all_expressions = ? WHERE id = ?', [JSON.stringify(meta), faceId]);
     res.json({ success: true });
   } catch (err) {
@@ -3938,10 +4120,10 @@ app.put('/api/faces/:faceId/invalid', requireAuthWrapper, async (req, res) => {
   }
 });
 
-// Mark multiple faces as ignored
+// Mark multiple faces as ignored with type
 app.post('/api/faces/ignore', requireAuthWrapper, async (req, res) => {
   try {
-    const { faceIds } = req.body;
+    const { faceIds, ignoreType = 'unknown_face' } = req.body;
     if (!Array.isArray(faceIds)) return res.status(400).json({ error: 'faceIds array required' });
     for (const faceId of faceIds) {
       const [rows] = await db.connection.execute('SELECT all_expressions FROM detected_faces WHERE id = ?', [faceId]);
@@ -3949,6 +4131,7 @@ app.post('/api/faces/ignore', requireAuthWrapper, async (req, res) => {
       let meta = {};
       try { meta = typeof rows[0].all_expressions === 'string' ? JSON.parse(rows[0].all_expressions) : (rows[0].all_expressions || {}); } catch {}
       meta.invalid = true;
+      meta.ignore_type = ignoreType;
       await db.connection.execute('UPDATE detected_faces SET all_expressions = ? WHERE id = ?', [JSON.stringify(meta), faceId]);
     }
     res.json({ success: true, ignored: faceIds.length });
@@ -4010,6 +4193,182 @@ app.get('/api/faces/named-list', requireAuthWrapper, async (req, res) => {
       'SELECT id, label, face_count FROM face_groups WHERE label IS NOT NULL AND label != "" ORDER BY label'
     );
     res.json({ groups });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get auto-matched faces for review (grouped by target group)
+app.get('/api/faces/review', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { limit = 50, offset = 0, groupId } = req.query;
+
+    let whereClause = `df.match_source = 'auto' AND df.match_reviewed = 0 AND df.suggested_group_id IS NOT NULL`;
+    const params = [];
+
+    if (groupId) {
+      whereClause += ' AND df.suggested_group_id = ?';
+      params.push(parseInt(groupId));
+    }
+
+    const [faces] = await db.connection.execute(`
+      SELECT df.id, df.file_id, df.face_index, df.confidence, df.gender, df.age, df.expression,
+             df.face_descriptor, df.suggested_group_id, df.match_confidence,
+             fg.label as group_label,
+             sf.name as file_name
+      FROM detected_faces df
+      JOIN face_groups fg ON df.suggested_group_id = fg.id
+      JOIN scanned_files sf ON df.file_id = sf.id
+      WHERE ${whereClause}
+      ORDER BY df.match_confidence DESC
+      LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}
+    `, params);
+
+    const [total] = await db.connection.execute(
+      `SELECT COUNT(*) as c FROM detected_faces df WHERE ${whereClause}`,
+      params
+    );
+
+    const parsed = faces.map(f => {
+      const desc = typeof f.face_descriptor === 'string' ? JSON.parse(f.face_descriptor) : (f.face_descriptor || {});
+      return {
+        id: f.id,
+        fileId: f.file_id,
+        faceIndex: f.face_index,
+        confidence: f.confidence,
+        gender: f.gender,
+        age: f.age,
+        expression: f.expression,
+        thumb: desc?.thumbnail,
+        phash: desc?.phash,
+        groupId: f.suggested_group_id,
+        groupLabel: f.group_label,
+        matchConfidence: f.match_confidence,
+        fileName: f.file_name
+      };
+    });
+
+    res.json({ faces: parsed, total: total[0].c });
+  } catch (err) {
+    console.error('Review faces error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Confirm an auto-match (move suggested_group_id → face_group_id)
+app.post('/api/faces/review/:faceId/confirm', requireAuthWrapper, async (req, res) => {
+  try {
+    const faceId = parseInt(req.params.faceId);
+    const [face] = await db.connection.execute('SELECT suggested_group_id FROM detected_faces WHERE id = ?', [faceId]);
+    if (face.length > 0 && face[0].suggested_group_id) {
+      await db.connection.execute(
+        'UPDATE detected_faces SET face_group_id = ?, match_reviewed = 1, match_source = ?, suggested_group_id = NULL WHERE id = ?',
+        [face[0].suggested_group_id, 'manual', faceId]
+      );
+      const [cnt] = await db.connection.execute('SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id = ?', [face[0].suggested_group_id]);
+      await db.connection.execute('UPDATE face_groups SET face_count = ? WHERE id = ?', [cnt[0].c, face[0].suggested_group_id]);
+    } else {
+      await db.connection.execute('UPDATE detected_faces SET match_reviewed = 1 WHERE id = ?', [faceId]);
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reject an auto-match (clear suggested group)
+app.post('/api/faces/review/:faceId/reject', requireAuthWrapper, async (req, res) => {
+  try {
+    const faceId = parseInt(req.params.faceId);
+    await db.connection.execute(
+      'UPDATE detected_faces SET suggested_group_id = NULL, match_source = NULL, match_confidence = NULL, match_reviewed = 1 WHERE id = ?',
+      [faceId]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reassign a face to a different group
+app.post('/api/faces/review/:faceId/reassign', requireAuthWrapper, async (req, res) => {
+  try {
+    const faceId = parseInt(req.params.faceId);
+    const { groupId } = req.body;
+
+    const [face] = await db.connection.execute('SELECT face_group_id FROM detected_faces WHERE id = ?', [faceId]);
+    if (face.length === 0) return res.status(404).json({ error: 'Face not found' });
+
+    const oldGroupId = face[0].face_group_id;
+
+    await db.connection.execute(
+      'UPDATE detected_faces SET face_group_id = ?, match_source = ?, match_reviewed = 1 WHERE id = ?',
+      [groupId || null, 'manual', faceId]
+    );
+
+    if (oldGroupId) {
+      const [cnt] = await db.connection.execute('SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id = ?', [oldGroupId]);
+      await db.connection.execute('UPDATE face_groups SET face_count = ? WHERE id = ?', [cnt[0].c, oldGroupId]);
+    }
+    if (groupId) {
+      const [cnt] = await db.connection.execute('SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id = ?', [groupId]);
+      await db.connection.execute('UPDATE face_groups SET face_count = ? WHERE id = ?', [cnt[0].c, groupId]);
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk confirm all auto-matches for a group
+app.post('/api/faces/review/bulk-confirm', requireAuthWrapper, async (req, res) => {
+  try {
+    const { groupId } = req.body;
+    let whereClause = "match_source = 'auto' AND match_reviewed = 0 AND suggested_group_id IS NOT NULL";
+    const params = [];
+    if (groupId) {
+      whereClause += ' AND suggested_group_id = ?';
+      params.push(parseInt(groupId));
+    }
+    // Move suggested → actual
+    await db.connection.execute(
+      `UPDATE detected_faces SET face_group_id = suggested_group_id, match_reviewed = 1, match_source = 'manual', suggested_group_id = NULL WHERE ${whereClause}`,
+      params
+    );
+    // Update group counts
+    if (groupId) {
+      const [cnt] = await db.connection.execute('SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id = ?', [groupId]);
+      await db.connection.execute('UPDATE face_groups SET face_count = ? WHERE id = ?', [cnt[0].c, groupId]);
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk reject all auto-matches for a group
+app.post('/api/faces/review/bulk-reject', requireAuthWrapper, async (req, res) => {
+  try {
+    const { groupId } = req.body;
+    let whereClause = "match_source = 'auto' AND match_reviewed = 0 AND suggested_group_id IS NOT NULL";
+    const params = [];
+    if (groupId) {
+      whereClause += ' AND suggested_group_id = ?';
+      params.push(parseInt(groupId));
+    }
+
+    const [affected] = await db.connection.execute(
+      `UPDATE detected_faces SET suggested_group_id = NULL, match_source = NULL, match_confidence = NULL, match_reviewed = 1 WHERE ${whereClause}`,
+      params
+    );
+
+    if (groupId) {
+      const [cnt] = await db.connection.execute('SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id = ?', [groupId]);
+      await db.connection.execute('UPDATE face_groups SET face_count = ? WHERE id = ?', [cnt[0].c, groupId]);
+    }
+
+    res.json({ success: true, removed: affected.affectedRows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
