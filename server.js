@@ -2440,7 +2440,7 @@ app.get('/api/file-type-breakdown', async (req, res) => {
 // Get all photos with optional search and filters
 app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
-    const { search, filter, camera, model, year, month, days } = req.query;
+    const { search, filter, camera, model, year, month, days, face } = req.query;
     
     // Use cached data if available
     const now = Date.now();
@@ -2453,6 +2453,33 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
       photosCacheTime = now;
     }
     
+    // Filter by face group
+    if (face) {
+      if (face === 'none') {
+        // Photos with no faces
+        const [rows] = await db.connection.execute(
+          'SELECT DISTINCT file_id FROM detected_faces WHERE face_group_id IS NULL AND confidence > 0'
+        );
+        const withFaces = new Set(rows.map(r => r.file_id));
+        photos = photos.filter(p => !withFaces.has(p.id));
+      } else if (face === 'ignored') {
+        // Photos with ignored faces
+        const [rows] = await db.connection.execute(
+          "SELECT DISTINCT file_id FROM detected_faces WHERE all_expressions IS NOT NULL AND JSON_EXTRACT(all_expressions, '$.invalid') = true"
+        );
+        const fileIds = new Set(rows.map(r => r.file_id));
+        photos = photos.filter(p => fileIds.has(p.id));
+      } else {
+        // Photos with specific face group
+        const groupId = parseInt(face);
+        const [rows] = await db.connection.execute(
+          'SELECT DISTINCT file_id FROM detected_faces WHERE face_group_id = ?', [groupId]
+        );
+        const fileIds = new Set(rows.map(r => r.file_id));
+        photos = photos.filter(p => fileIds.has(p.id));
+      }
+    }
+    
     // Filter out photos with future dates
     const today = new Date();
     photos = photos.filter(photo => {
@@ -2462,7 +2489,7 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
     });
     
     // Default: last 7 days if no other filter specified (including days)
-    const hasAnyFilter = search || filter || camera || model || year || month || (days !== undefined && days !== '');
+    const hasAnyFilter = search || filter || camera || model || year || month || face || (days !== undefined && days !== '');
     if (!hasAnyFilter) {
       const sevenDaysAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
       photos = photos.filter(photo => {
@@ -3946,6 +3973,43 @@ app.put('/api/faces/:faceId', requireAuthWrapper, async (req, res) => {
       await db.connection.execute('UPDATE detected_faces SET expression = ? WHERE id = ?', [expression, faceId]);
     }
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get faces for a specific photo (by file_id)
+app.get('/api/faces/by-file/:fileId', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const fileId = parseInt(req.params.fileId);
+    const [faces] = await db.connection.execute(`
+      SELECT df.id, df.face_index, df.confidence, df.gender, df.age, df.expression,
+             df.face_descriptor, df.face_group_id,
+             fg.label as group_label
+      FROM detected_faces df
+      LEFT JOIN face_groups fg ON df.face_group_id = fg.id
+      WHERE df.file_id = ?
+      ORDER BY df.face_index
+    `, [fileId]);
+
+    const parsed = faces.map(f => {
+      const desc = typeof f.face_descriptor === 'string' ? JSON.parse(f.face_descriptor) : (f.face_descriptor || {});
+      return { ...f, thumb: desc?.thumbnail, phash: desc?.phash, has_glasses: desc?.has_glasses, age_group: desc?.age_group };
+    });
+
+    res.json({ faces: parsed });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all named groups for filter dropdown
+app.get('/api/faces/named-list', requireAuthWrapper, async (req, res) => {
+  try {
+    const [groups] = await db.connection.execute(
+      'SELECT id, label, face_count FROM face_groups WHERE label IS NOT NULL AND label != "" ORDER BY label'
+    );
+    res.json({ groups });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -1877,11 +1877,11 @@ program
            FROM scanned_files sf
            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
            LEFT JOIN photo_metadata pm ON sf.id = pm.file_id
+           LEFT JOIN detected_faces df ON sf.id = df.file_id
            WHERE sf.extension IN ('jpg','jpeg','heic')
-           and sf.size > 500000
-           AND pm.camera_make IS NOT NULL
-           AND sf.id NOT IN (SELECT DISTINCT file_id FROM detected_faces)
-           ORDER BY sf.id DESC
+           AND sf.size > 500000
+           AND df.id IS NULL
+           ORDER BY pm.date_taken DESC
            LIMIT ${limit}`
         );
 
@@ -1936,7 +1936,16 @@ program
       const numThreads = parseInt(options.threads) || 4;
       const WORKER_SCRIPT = join(__dirname, '..', 'scripts', 'face-worker.js');
 
-      spinner.text = `Scanning with ${numThreads} threads...`;
+      spinner.text = `Loading images and named groups...`;
+
+      // Load named groups for auto-matching
+      let namedGroups = [];
+      if (dbManager) {
+        namedGroups = await detector.loadNamedGroups(dbManager);
+        if (namedGroups.length > 0) {
+          console.log(chalk.gray(`  📋 ${namedGroups.length} named groups loaded for auto-matching`));
+        }
+      }
 
       // Split items into chunks for parallel workers
       const chunkSize = Math.ceil(toProcess.length / numThreads);
@@ -1974,18 +1983,65 @@ program
           totalFaces += result.faces?.length || 0;
           allResults.push(result);
 
-          if (dbManager && result.success && result.faces?.length > 0) {
+          if (dbManager && result.success) {
             try {
               const fileId = result.fileId || null;
-              if (fileId) {
-                await dbManager.storeDetectedFaces(fileId, result);
-              } else {
+              let dbFileId = fileId;
+              if (!fileId) {
                 const st = await fsAsync.stat(result.filePath);
                 const [ins] = await dbManager.connection.execute(
                   'INSERT INTO scanned_files (name, size, extension, mtime, created_at) VALUES (?, ?, ?, NOW(), NOW())',
                   [result.name, st.size, pathMod.default.extname(result.filePath).slice(1)]
                 );
-                await dbManager.storeDetectedFaces(ins.insertId, result);
+                dbFileId = ins.insertId;
+              }
+
+              // Always insert a record (even if 0 faces) so file won't be scanned again
+              if (result.faces?.length > 0) {
+                await dbManager.storeDetectedFaces(dbFileId, result);
+
+                // Auto-assign faces to matching named groups
+                if (namedGroups.length > 0) {
+                  for (const face of result.faces) {
+                    if (face.phash) {
+                      const matchGroupId = detector.findMatchingGroup(face.phash, namedGroups);
+                      if (matchGroupId) {
+                        await dbManager.connection.execute(
+                          'UPDATE detected_faces SET face_group_id = ? WHERE file_id = ? AND face_index = ?',
+                          [matchGroupId, dbFileId, face.index]
+                        );
+                        const [cnt] = await dbManager.connection.execute('SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id = ?', [matchGroupId]);
+                        await dbManager.connection.execute('UPDATE face_groups SET face_count = ? WHERE id = ?', [cnt[0].c, matchGroupId]);
+                      }
+                    }
+                  }
+                }
+              } else {
+                // No faces found - insert a marker record so file won't be scanned again
+                await dbManager.connection.execute(
+                  'INSERT INTO detected_faces (file_id, face_index, confidence, face_descriptor) VALUES (?, 0, 0, ?)',
+                  [dbFileId, JSON.stringify({ no_faces: true })]
+                );
+              }
+
+              await dbManager.storeDetectedFaces(dbFileId, result);
+
+              // Auto-assign faces to matching named groups
+              if (namedGroups.length > 0) {
+                for (const face of result.faces) {
+                  if (face.phash) {
+                    const matchGroupId = detector.findMatchingGroup(face.phash, namedGroups);
+                    if (matchGroupId) {
+                      await dbManager.connection.execute(
+                        'UPDATE detected_faces SET face_group_id = ? WHERE file_id = ? AND face_index = ?',
+                        [matchGroupId, dbFileId, face.index]
+                      );
+                      // Update face_count
+                      const [cnt] = await dbManager.connection.execute('SELECT COUNT(*) as c FROM detected_faces WHERE face_group_id = ?', [matchGroupId]);
+                      await dbManager.connection.execute('UPDATE face_groups SET face_count = ? WHERE id = ?', [cnt[0].c, matchGroupId]);
+                    }
+                  }
+                }
               }
             } catch (e) {
               // silent
@@ -1998,6 +2054,9 @@ program
 
       console.log(chalk.green(`\n  ✅ Total faces: ${totalFaces}`));
       console.log(chalk.gray(`  📸 Images scanned: ${scanned}`));
+      if (namedGroups.length > 0) {
+        console.log(chalk.gray(`  📋 Named groups: ${namedGroups.length}`));
+      }
 
       if (options.group && allResults.length > 0) {
         console.log(chalk.cyan('\n  Face Groups:'));
