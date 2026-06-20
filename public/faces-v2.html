@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Faces V2 - SilverFileSystem</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+        .header { background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%); color: white; padding: 0.5rem 1rem; display: flex; align-items: center; gap: 1rem; }
+        .header h1 { font-size: 1.4rem; font-weight: 700; }
+        .header .back { color: white; text-decoration: none; font-size: 0.85rem; opacity: 0.8; }
+        .header .back:hover { opacity: 1; }
+        .stats-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 0.4rem; padding: 0.5rem; background: #1a1a1a; border-bottom: 1px solid #2a2a2a; }
+        .stat-card { text-align: center; padding: 0.3rem; }
+        .stat-number { font-size: 1.2rem; font-weight: bold; color: #e74c3c; }
+        .stat-label { font-size: 0.65rem; color: #888; }
+        .controls { background: #1a1a1a; padding: 0.5rem 1rem; border-bottom: 1px solid #2a2a2a; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+        .controls select, .controls input { padding: 0.35rem 0.5rem; border: 1px solid #444; background: #222; color: white; border-radius: 4px; font-size: 0.75rem; }
+        .controls select:focus, .controls input:focus { outline: none; border-color: #e74c3c; }
+        .controls button { padding: 0.35rem 0.7rem; border: 1px solid #444; background: #222; color: white; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+        .controls button:hover { background: #333; }
+        .controls button.primary { background: #e74c3c; border-color: #e74c3c; }
+        .controls button.success { background: #27ae60; border-color: #27ae60; }
+        .controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+        .tab-bar { display: flex; gap: 0; border-bottom: 1px solid #2a2a2a; background: #1a1a1a; }
+        .tab { padding: 0.4rem 0.8rem; cursor: pointer; font-size: 0.8rem; color: #888; border-bottom: 2px solid transparent; }
+        .tab.active { color: #e74c3c; border-bottom-color: #e74c3c; }
+        .tab .badge { background: #e74c3c; color: white; padding: 0.05rem 0.3rem; border-radius: 8px; font-size: 0.65rem; margin-left: 0.3rem; }
+        .container { padding: 0.5rem; max-width: 1600px; margin: 0 auto; }
+        .face-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 0.4rem; }
+        .face-card { background: #1a1a1a; border-radius: 6px; border: 2px solid transparent; overflow: hidden; cursor: pointer; transition: all 0.2s; position: relative; }
+        .face-card:hover { border-color: #e74c3c; transform: translateY(-1px); }
+        .face-card.selected { border-color: #f39c12; background: #2a2a1a; }
+        .face-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+        .face-card .meta { padding: 0.2rem 0.3rem; font-size: 0.6rem; }
+        .face-card .meta .model { color: #3498db; font-weight: 600; }
+        .face-card .meta .conf { color: #27ae60; }
+        .face-card .meta .conf.low { color: #e74c3c; }
+        .face-card .meta .gender { color: #9b59b6; }
+        .face-card .suggestion { position: absolute; top: 2px; left: 2px; background: rgba(243,156,18,0.9); color: white; padding: 0.05rem 0.25rem; border-radius: 3px; font-size: 0.55rem; font-weight: 600; }
+        .face-card .select-check { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: 2px solid #555; background: rgba(0,0,0,0.5); display: none; }
+        .face-card.selected .select-check { display: block; border-color: #f39c12; background: #f39c12; }
+        .face-card .actions { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.8); display: none; padding: 0.2rem; gap: 0.2rem; justify-content: center; }
+        .face-card:hover .actions { display: flex; }
+        .face-card .actions button { padding: 0.15rem 0.4rem; border: none; border-radius: 3px; font-size: 0.6rem; cursor: pointer; color: white; }
+        .face-card .actions .btn-confirm { background: #27ae60; }
+        .face-card .actions .btn-reject { background: #e74c3c; }
+        .face-card .actions .btn-ignore { background: #7f8c8d; }
+        .face-card .actions .btn-view { background: #3498db; }
+        .bulk-bar { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: #1a1a1a; border-top: 2px solid #f39c12; padding: 0.5rem 1rem; z-index: 100; align-items: center; gap: 0.5rem; }
+        .bulk-bar.active { display: flex; }
+        .bulk-bar .count { color: #f39c12; font-weight: 600; font-size: 0.85rem; }
+        .bulk-bar button { padding: 0.35rem 0.7rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.75rem; color: white; }
+        .pagination { display: flex; justify-content: center; gap: 0.4rem; padding: 0.8rem; }
+        .pagination button { padding: 0.3rem 0.8rem; border: 1px solid #444; background: #222; color: white; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+        .pagination button:disabled { opacity: 0.3; }
+        .pagination span { padding: 0.3rem 0.6rem; color: #888; font-size: 0.8rem; }
+        .loading { text-align: center; padding: 3rem; opacity: 0.5; }
+        .empty { text-align: center; padding: 3rem; opacity: 0.4; }
+        .groups-panel { display: none; padding: 0.5rem; }
+        .groups-panel.active { display: block; }
+        .groups-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.5rem; }
+        .group-card { background: #1a1a1a; border-radius: 8px; border: 1px solid #2a2a2a; overflow: hidden; cursor: pointer; transition: all 0.2s; }
+        .group-card:hover { border-color: #e74c3c; transform: translateY(-1px); }
+        .group-card .g-header { padding: 0.5rem; display: flex; justify-content: space-between; align-items: center; }
+        .group-card .g-name { font-weight: 600; font-size: 0.9rem; color: #e74c3c; }
+        .group-card .g-count { font-size: 0.7rem; color: #888; }
+        .group-card .g-thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 2px; }
+        .group-card .g-thumbs img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 3px; }
+        .group-card .g-meta { padding: 0.3rem 0.5rem; font-size: 0.65rem; color: #888; }
+        .group-detail { display: none; padding: 0.5rem; }
+        .group-detail.active { display: block; }
+        .group-detail .back-btn { color: #e74c3c; cursor: pointer; font-size: 0.85rem; margin-bottom: 0.5rem; display: inline-block; }
+        .group-detail .gd-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+        .group-detail .gd-name { font-size: 1.1rem; font-weight: 700; color: #e74c3c; }
+        .group-detail .gd-actions { display: flex; gap: 0.4rem; }
+        .group-detail .gd-actions button { padding: 0.3rem 0.7rem; border: none; border-radius: 4px; font-size: 0.75rem; cursor: pointer; color: white; }
+        .new-group-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 9999; align-items: center; justify-content: center; }
+        .new-group-modal.active { display: flex; }
+        .new-group-box { background: #1a1a1a; border-radius: 12px; padding: 1.5rem; max-width: 400px; width: 90%; }
+        .new-group-box h3 { color: #e74c3c; margin-bottom: 1rem; }
+        .new-group-box input, .new-group-box select { width: 100%; padding: 0.5rem; border: 1px solid #444; background: #222; color: white; border-radius: 4px; margin-bottom: 0.8rem; font-size: 0.85rem; }
+        .new-group-box .btn-row { display: flex; gap: 0.5rem; justify-content: flex-end; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); z-index: 9999; align-items: center; justify-content: center; }
+        .modal.active { display: flex; }
+        .modal-content { display: flex; gap: 1rem; max-width: 95vw; max-height: 90vh; overflow: hidden; }
+        .modal-image-wrap { flex: 1; min-width: 0; position: relative; display: flex; align-items: center; justify-content: center; }
+        .modal-image-wrap img { max-width: 100%; max-height: 90vh; object-fit: contain; border-radius: 8px; }
+        .modal-info { width: 280px; min-width: 280px; background: #1a1a1a; border-radius: 8px; padding: 1rem; overflow-y: auto; max-height: 90vh; flex-shrink: 0; }
+        .modal-info .row { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; font-size: 0.8rem; }
+        .modal-info .label { color: #888; min-width: 70px; flex-shrink: 0; }
+        .modal-info .value { color: #e0e0e0; word-break: break-all; }
+        .modal-info h3 { color: #e74c3c; font-size: 0.9rem; margin-bottom: 0.8rem; border-bottom: 1px solid #333; padding-bottom: 0.4rem; }
+        .modal-close { position: fixed; top: 1rem; right: 1rem; background: rgba(255,255,255,0.2); border: none; color: white; width: 36px; height: 36px; border-radius: 50%; font-size: 1.2rem; cursor: pointer; z-index: 10000; }
+        .bbox-highlight { position: absolute; border: 3px solid #e74c3c; border-radius: 4px; pointer-events: none; box-shadow: 0 0 12px rgba(231,76,60,0.6); }
+        @media (max-width: 700px) { .modal-content { flex-direction: column; } .modal-info { width: 100%; min-width: 0; max-height: 40vh; } }
+        .toast { position: fixed; bottom: 20px; right: 20px; background: #27ae60; color: white; padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.8rem; z-index: 10000; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+        .toast.show { opacity: 1; }
+        .scan-status { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 1rem; margin-bottom: 0.5rem; }
+        .scan-status h3 { color: #e74c3c; font-size: 0.9rem; margin-bottom: 0.5rem; }
+        .scan-status .bar { height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin: 0.3rem 0; }
+        .scan-status .bar-fill { height: 100%; background: linear-gradient(90deg, #e74c3c, #c0392b); transition: width 0.3s; }
+        .scan-status .detail { font-size: 0.7rem; color: #888; }
+        @media (max-width: 600px) { .face-grid { grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a href="/" class="back">← Back</a>
+        <h1>Faces V2</h1>
+        <span style="font-size:0.7rem;opacity:0.7">antelopev2 + dedup</span>
+    </div>
+
+    <div class="stats-bar" id="statsBar">
+        <div class="stat-card"><div class="stat-number" id="statTotal">-</div><div class="stat-label">Total Faces</div></div>
+        <div class="stat-card"><div class="stat-number" id="statPending">-</div><div class="stat-label">Pending</div></div>
+        <div class="stat-card"><div class="stat-number" id="statConfirmed">-</div><div class="stat-label">Confirmed</div></div>
+        <div class="stat-card"><div class="stat-number" id="statRejected">-</div><div class="stat-label">Rejected</div></div>
+        <div class="stat-card"><div class="stat-number" id="statFiles">-</div><div class="stat-label">Files Scanned</div></div>
+        <div class="stat-card"><div class="stat-number" id="statModels">-</div><div class="stat-label">Models</div></div>
+    </div>
+
+    <div class="controls" id="controlsBar">
+        <select id="statusFilter">
+            <option value="">All Status</option>
+            <option value="pending" selected>Pending</option>
+            <option value="confirmed">Confirmed</option>
+            <option value="rejected">Rejected</option>
+            <option value="ignored">Ignored</option>
+        </select>
+        <select id="sortFilter">
+            <option value="newest">Newest First</option>
+            <option value="oldest">Oldest First</option>
+            <option value="confidence_high">Confidence ↓</option>
+            <option value="confidence_low">Confidence ↑</option>
+            <option value="quality_high">Quality ↓</option>
+            <option value="quality_low">Quality ↑</option>
+            <option value="file_name">File Name</option>
+        </select>
+        <select id="genderFilter">
+            <option value="">All Gender</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+            <option value="unknown">Unknown</option>
+        </select>
+        <select id="groupFilter">
+            <option value="">All Groups</option>
+            <option value="null">Ungrouped</option>
+        </select>
+        <input type="number" id="limitInput" value="100" min="10" max="500" style="width:60px" title="Page size">
+        <button class="primary" onclick="loadFaces()">Search</button>
+        <button onclick="selectAll()">Select All</button>
+        <button onclick="deselectAll()">Deselect</button>
+    </div>
+
+    <div class="tab-bar" id="tabBar">
+        <div class="tab active" data-tab="grid" onclick="switchTab('grid')">Grid</div>
+        <div class="tab" data-tab="groups" onclick="switchTab('groups')">Groups <span class="badge" id="groupCount">0</span></div>
+        <div class="tab" data-tab="suggestions" onclick="switchTab('suggestions')">Suggestions <span class="badge" id="suggestionCount">0</span></div>
+        <div class="tab" data-tab="scan" onclick="switchTab('scan')">Scan Status</div>
+    </div>
+
+    <div class="container" id="mainContainer">
+        <div id="faceGrid" class="face-grid"></div>
+        <div id="loading" class="loading" style="display:none">Loading faces...</div>
+        <div id="empty" class="empty" style="display:none">No faces found</div>
+        <div class="pagination" id="pagination"></div>
+    </div>
+
+    <div class="groups-panel" id="groupsPanel">
+        <div style="margin-bottom:0.5rem;display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:0.85rem;color:#888" id="groupsInfo">Loading...</span>
+            <button class="primary" onclick="showNewGroupModal()" style="padding:0.35rem 0.7rem;border:none;background:#e74c3c;color:white;border-radius:4px;cursor:pointer;font-size:0.75rem">+ New Group</button>
+        </div>
+        <div class="groups-grid" id="groupsGrid"></div>
+    </div>
+
+    <div class="group-detail" id="groupDetail">
+        <div class="back-btn" onclick="showGroupsList()">← Back to Groups</div>
+        <div class="gd-header">
+            <div>
+                <span class="gd-name" id="gdName">-</span>
+                <span style="font-size:0.75rem;color:#888;margin-left:0.5rem" id="gdCount">0 faces</span>
+            </div>
+            <div class="gd-actions">
+                <button style="background:#e67e22" onclick="renameGroup()">Rename</button>
+                <button style="background:#e74c3c" onclick="deleteGroup()">Delete</button>
+            </div>
+        </div>
+        <div class="face-grid" id="gdFaceGrid"></div>
+        <div id="gdLoading" class="loading" style="display:none">Loading faces...</div>
+    </div>
+
+    <div class="new-group-modal" id="newGroupModal">
+        <div class="new-group-box">
+            <h3>Create Named Group</h3>
+            <input type="text" id="newGroupName" placeholder="Group name (e.g. Gavin, Grace)">
+            <select id="newGroupType">
+                <option value="unknown">Unknown</option>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+            </select>
+            <div class="btn-row">
+                <button class="btn-ghost" onclick="closeNewGroupModal()" style="padding:0.35rem 0.7rem;border:1px solid #444;background:transparent;color:#888;border-radius:4px;cursor:pointer;font-size:0.8rem">Cancel</button>
+                <button class="btn-primary" onclick="createGroup()" style="padding:0.35rem 0.7rem;border:none;background:#e74c3c;color:white;border-radius:4px;cursor:pointer;font-size:0.8rem">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="scanPanel" style="display:none;padding:1rem;">
+        <div class="scan-status">
+            <h3>Face Detection Status</h3>
+            <div class="detail">Total in faces_v2: <span id="scanTotal">0</span></div>
+            <div class="detail">Files scanned: <span id="scanFiles">0</span></div>
+            <div class="detail">Pending review: <span id="scanPending">0</span></div>
+            <div class="detail">Models used: <span id="scanModels">-</span></div>
+        </div>
+        <div style="margin-top:1rem">
+            <h3 style="color:#e74c3c;font-size:0.9rem;margin-bottom:0.5rem">Named Groups</h3>
+            <div id="groupList" style="font-size:0.8rem;color:#888"></div>
+        </div>
+    </div>
+
+    <div class="bulk-bar" id="bulkBar">
+        <span class="count"><span id="bulkCount">0</span> selected</span>
+        <select id="bulkGroupSelect" style="padding:0.3rem;border:1px solid #444;background:#222;color:white;border-radius:4px;font-size:0.75rem"></select>
+        <button style="background:#27ae60" onclick="bulkConfirm()">Confirm to Group</button>
+        <button style="background:#e74c3c" onclick="bulkReject()">Reject All</button>
+        <button style="background:#7f8c8d" onclick="bulkIgnore()">Ignore All</button>
+        <button style="background:#8e44ad" onclick="bulkIgnoreByFolder()">Ignore Folder</button>
+        <button style="background:#2980b9" onclick="bulkIgnoreByCamera()">Ignore Camera</button>
+        <button style="background:#555" onclick="deselectAll()">Cancel</button>
+    </div>
+
+    <div class="modal" id="photoModal">
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+        <div class="modal-content">
+            <div class="modal-image-wrap" id="modalImageWrap">
+                <img id="modalImage" src="">
+            </div>
+            <div class="modal-info" id="modalInfo"></div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const API = '';
+        let currentPage = 0;
+        let pageSize = 100;
+        let totalFaces = 0;
+        let selectedIds = new Set();
+        let allFaces = [];
+        let namedGroups = [];
+
+        function getCookie(n) { const m = document.cookie.match('(^|;)\\s*' + n + '\\s*=\\s*([^;]+)'); return m ? m.pop() : null; }
+        function getToken() { return localStorage.getItem('silverfs_token') || getCookie('silverfs_token'); }
+        function authHeaders() { return { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/json' }; }
+
+        async function apiFetch(url, opts = {}) {
+            const res = await fetch(API + url, { ...opts, headers: { ...authHeaders(), ...opts.headers } });
+            if (!res.ok) throw new Error(`API ${res.status}`);
+            return res.json();
+        }
+
+        async function loadStats() {
+            try {
+                const stats = await apiFetch('/api/faces-v2/stats');
+                document.getElementById('statTotal').textContent = stats.total || 0;
+                document.getElementById('statPending').textContent = stats.byStatus?.pending || 0;
+                document.getElementById('statConfirmed').textContent = stats.byStatus?.confirmed || 0;
+                document.getElementById('statRejected').textContent = stats.byStatus?.rejected || 0;
+                document.getElementById('statFiles').textContent = stats.filesScanned || 0;
+                document.getElementById('statModels').textContent = Object.keys(stats.byModel || {}).join(', ') || '-';
+
+                document.getElementById('scanTotal').textContent = stats.total || 0;
+                document.getElementById('scanFiles').textContent = stats.filesScanned || 0;
+                document.getElementById('scanPending').textContent = stats.byStatus?.pending || 0;
+                document.getElementById('scanModels').textContent = Object.keys(stats.byModel || {}).join(', ') || '-';
+
+                document.getElementById('suggestionCount').textContent = stats.byStatus?.pending || 0;
+
+                const groupList = document.getElementById('groupList');
+                groupList.innerHTML = (stats.byGroup || []).map(g =>
+                    `<div style="padding:0.2rem 0">${g.label}: <strong>${g.count}</strong> faces</div>`
+                ).join('') || '<div style="opacity:0.5">No named groups</div>';
+
+                // Populate group filter
+                const groupFilter = document.getElementById('groupFilter');
+                const existingOpts = groupFilter.options.length;
+                for (let i = existingOpts - 1; i > 1; i--) groupFilter.remove(i);
+                (stats.byGroup || []).forEach(g => {
+                    const opt = document.createElement('option');
+                    opt.value = g.id;
+                    opt.textContent = g.label + ' (' + g.count + ')';
+                    groupFilter.appendChild(opt);
+                });
+
+                // Load named groups for bulk assign
+                try {
+                    const groups = await apiFetch('/api/faces/groups');
+                    namedGroups = groups.groups || groups || [];
+                    const bulkSelect = document.getElementById('bulkGroupSelect');
+                    bulkSelect.innerHTML = '<option value="">Select Group...</option>' +
+                        namedGroups.map(g => `<option value="${g.id}">${g.label}</option>`).join('');
+                } catch {}
+            } catch (e) {
+                console.error('Stats error:', e);
+            }
+        }
+
+        async function loadFaces() {
+            const grid = document.getElementById('faceGrid');
+            const loading = document.getElementById('loading');
+            const empty = document.getElementById('empty');
+
+            grid.innerHTML = '';
+            loading.style.display = 'block';
+            empty.style.display = 'none';
+
+            const status = document.getElementById('statusFilter').value;
+            const sort = document.getElementById('sortFilter').value;
+            const gender = document.getElementById('genderFilter').value;
+            const groupFilter = document.getElementById('groupFilter').value;
+            const limit = document.getElementById('limitInput').value || 100;
+            pageSize = parseInt(limit);
+
+            let url = `/api/faces-v2?sort=${sort}&limit=${limit}&offset=${currentPage * limit}`;
+            if (status) url += `&status=${status}`;
+            if (gender) url += `&gender=${gender}`;
+            if (groupFilter === 'null') url += `&groupId=null`;
+            else if (groupFilter) url += `&groupId=${groupFilter}`;
+
+            try {
+                const data = await apiFetch(url);
+                allFaces = data.faces || [];
+                totalFaces = data.total || 0;
+
+                loading.style.display = 'none';
+
+                if (allFaces.length === 0) {
+                    empty.style.display = 'block';
+                    return;
+                }
+
+                for (const face of allFaces) {
+                    const card = document.createElement('div');
+                    card.className = 'face-card' + (selectedIds.has(face.id) ? ' selected' : '');
+                    card.dataset.id = face.id;
+
+                    const thumbSrc = face.thumbnail ? `data:image/jpeg;base64,${face.thumbnail}` : '';
+                    const confClass = face.confidence >= 0.7 ? 'conf' : 'conf low';
+                    const suggestion = face.suggested_group_label && !face.match_reviewed ?
+                        `<div class="suggestion">→ ${face.suggested_group_label}</div>` : '';
+                    const groupBadge = face.group_label ? `<span style="color:#27ae60;font-weight:600">${face.group_label}</span> ` : '';
+
+                    card.innerHTML = `
+                        <div class="select-check">✓</div>
+                        ${suggestion}
+                        <img src="${thumbSrc}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'100\\' height=\\'100\\'><rect fill=\\'%23333\\' width=\\'100\\' height=\\'100\\'/><text x=\\'50\\' y=\\'55\\' text-anchor=\\'middle\\' fill=\\'%23666\\' font-size=\\'12\\'>No Thumb</text></svg>'">
+                        <div class="meta">
+                            ${groupBadge}
+                            <span class="model">${face.model || '?'}</span>
+                            <span class="${confClass}">${(face.confidence * 100).toFixed(0)}%</span>
+                            <span class="gender">${face.gender || '?'}</span>
+                        </div>
+                        <div class="actions">
+                            <button class="btn-view" onclick="event.stopPropagation();viewPhoto(${face.file_id}, ${face.bbox_x || 0}, ${face.bbox_y || 0}, ${face.bbox_width || 0}, ${face.bbox_height || 0})">View</button>
+                            ${face.suggested_group_id && !face.match_reviewed ?
+                                `<button class="btn-confirm" onclick="event.stopPropagation();confirmFace(${face.id},${face.suggested_group_id})">✓</button>
+                                 <button class="btn-reject" onclick="event.stopPropagation();rejectFace(${face.id})">✕</button>` : ''}
+                            <button class="btn-ignore" onclick="event.stopPropagation();ignoreFace(${face.id})">Ignore</button>
+                        </div>
+                    `;
+
+                    card.addEventListener('click', (e) => {
+                        if (e.target.closest('.actions') || e.target.closest('.select-check')) return;
+                        toggleSelect(face.id, card);
+                    });
+
+                    grid.appendChild(card);
+                }
+
+                renderPagination();
+            } catch (e) {
+                loading.style.display = 'none';
+                empty.style.display = 'block';
+                empty.textContent = 'Error: ' + e.message;
+            }
+        }
+
+        function renderPagination() {
+            const pag = document.getElementById('pagination');
+            const totalPages = Math.ceil(totalFaces / pageSize);
+            if (totalPages <= 1) { pag.innerHTML = ''; return; }
+
+            let html = '';
+            html += `<button ${currentPage === 0 ? 'disabled' : ''} onclick="goPage(0)">«</button>`;
+            html += `<button ${currentPage === 0 ? 'disabled' : ''} onclick="goPage(${currentPage - 1})">‹</button>`;
+            html += `<span>${currentPage + 1} / ${totalPages} (${totalFaces} total)</span>`;
+            html += `<button ${currentPage >= totalPages - 1 ? 'disabled' : ''} onclick="goPage(${currentPage + 1})">›</button>`;
+            html += `<button ${currentPage >= totalPages - 1 ? 'disabled' : ''} onclick="goPage(${totalPages - 1})">»</button>`;
+            pag.innerHTML = html;
+        }
+
+        function goPage(p) {
+            currentPage = p;
+            loadFaces();
+            window.scrollTo(0, 0);
+        }
+
+        function toggleSelect(id, card) {
+            if (selectedIds.has(id)) {
+                selectedIds.delete(id);
+                card.classList.remove('selected');
+            } else {
+                selectedIds.add(id);
+                card.classList.add('selected');
+            }
+            updateBulkBar();
+        }
+
+        function selectAll() {
+            allFaces.forEach(f => selectedIds.add(f.id));
+            document.querySelectorAll('.face-card').forEach(c => c.classList.add('selected'));
+            updateBulkBar();
+        }
+
+        function deselectAll() {
+            selectedIds.clear();
+            document.querySelectorAll('.face-card').forEach(c => c.classList.remove('selected'));
+            updateBulkBar();
+        }
+
+        function updateBulkBar() {
+            const bar = document.getElementById('bulkBar');
+            const count = document.getElementById('bulkCount');
+            if (selectedIds.size > 0) {
+                bar.classList.add('active');
+                count.textContent = selectedIds.size;
+            } else {
+                bar.classList.remove('active');
+            }
+        }
+
+        async function confirmFace(faceId, groupId) {
+            try {
+                await apiFetch(`/api/faces-v2/${faceId}/confirm`, {
+                    method: 'POST', body: JSON.stringify({ groupId })
+                });
+                showToast('Face confirmed');
+                loadFaces();
+                loadStats();
+            } catch (e) { showToast('Error: ' + e.message, true); }
+        }
+
+        async function rejectFace(faceId) {
+            try {
+                await apiFetch(`/api/faces-v2/${faceId}/reject`, { method: 'POST' });
+                showToast('Face rejected');
+                loadFaces();
+                loadStats();
+            } catch (e) { showToast('Error: ' + e.message, true); }
+        }
+
+        async function ignoreFace(faceId) {
+            try {
+                await apiFetch(`/api/faces-v2/${faceId}`, {
+                    method: 'PUT', body: JSON.stringify({ status: 'ignored' })
+                });
+                showToast('Face ignored');
+                loadFaces();
+                loadStats();
+            } catch (e) { showToast('Error: ' + e.message, true); }
+        }
+
+        async function bulkConfirm() {
+            const groupId = document.getElementById('bulkGroupSelect').value;
+            if (!groupId) { showToast('Select a group first', true); return; }
+            if (!confirm(`Confirm ${selectedIds.size} faces to this group?`)) return;
+            try {
+                await apiFetch('/api/faces-v2/bulk-confirm', {
+                    method: 'POST', body: JSON.stringify({ faceIds: [...selectedIds], groupId: parseInt(groupId) })
+                });
+                showToast(`${selectedIds.size} faces confirmed`);
+                deselectAll();
+                loadFaces();
+                loadStats();
+            } catch (e) { showToast('Error: ' + e.message, true); }
+        }
+
+        async function bulkReject() {
+            if (!confirm(`Reject ${selectedIds.size} faces?`)) return;
+            try {
+                await apiFetch('/api/faces-v2/bulk-reject', {
+                    method: 'POST', body: JSON.stringify({ faceIds: [...selectedIds] })
+                });
+                showToast(`${selectedIds.size} faces rejected`);
+                deselectAll();
+                loadFaces();
+                loadStats();
+            } catch (e) { showToast('Error: ' + e.message, true); }
+        }
+
+        async function bulkIgnore() {
+            if (!confirm(`Ignore ${selectedIds.size} faces?`)) return;
+            try {
+                await apiFetch('/api/faces-v2/bulk-ignore', {
+                    method: 'POST', body: JSON.stringify({ faceIds: [...selectedIds] })
+                });
+                showToast(`${selectedIds.size} faces ignored`);
+                deselectAll();
+                loadFaces();
+                loadStats();
+            } catch (e) { showToast('Error: ' + e.message, true); }
+        }
+
+        async function bulkIgnoreByFolder() {
+            if (!selectedIds.size) { showToast('Select faces first', true); return; }
+            // Use first selected face's fileId to determine the folder
+            const firstFace = allFaces.find(f => selectedIds.has(f.id));
+            if (!firstFace) return;
+            if (!confirm(`Ignore ALL faces from the same folder as ${selectedIds.size} selected?`)) return;
+            try {
+                const res = await apiFetch('/api/faces-v2/ignore-by-folder', {
+                    method: 'POST', body: JSON.stringify({ fileId: firstFace.file_id })
+                });
+                showToast(`${res.affected || 0} faces ignored from folder`);
+                deselectAll();
+                loadFaces();
+                loadStats();
+            } catch (e) { showToast('Error: ' + e.message, true); }
+        }
+
+        async function bulkIgnoreByCamera() {
+            if (!selectedIds.size) { showToast('Select faces first', true); return; }
+            const firstFace = allFaces.find(f => selectedIds.has(f.id));
+            if (!firstFace) return;
+            if (!confirm(`Ignore ALL faces from the same camera as ${selectedIds.size} selected?`)) return;
+            try {
+                const res = await apiFetch('/api/faces-v2/ignore-by-camera', {
+                    method: 'POST', body: JSON.stringify({ fileId: firstFace.file_id })
+                });
+                showToast(`${res.affected || 0} faces ignored from camera: ${res.camera || '?'}`);
+                deselectAll();
+                loadFaces();
+                loadStats();
+            } catch (e) { showToast('Error: ' + e.message, true); }
+        }
+
+        async function viewPhoto(fileId, bboxX, bboxY, bboxW, bboxH) {
+            const modal = document.getElementById('photoModal');
+            const img = document.getElementById('modalImage');
+            const wrap = document.getElementById('modalImageWrap');
+            const info = document.getElementById('modalInfo');
+
+            // Remove old bbox overlay
+            const old = wrap.querySelector('.bbox-highlight');
+            if (old) old.remove();
+
+            img.onload = function() {
+                if (bboxW > 0 && bboxH > 0 && img.naturalWidth > 0) {
+                    const scaleX = img.clientWidth / img.naturalWidth;
+                    const scaleY = img.clientHeight / img.naturalHeight;
+                    const box = document.createElement('div');
+                    box.className = 'bbox-highlight';
+                    box.style.left = (bboxX * scaleX) + 'px';
+                    box.style.top = (bboxY * scaleY) + 'px';
+                    box.style.width = (bboxW * scaleX) + 'px';
+                    box.style.height = (bboxH * scaleY) + 'px';
+                    wrap.appendChild(box);
+                }
+            };
+            img.src = `/images/${fileId}`;
+
+            info.innerHTML = '<div style="color:#888">Loading...</div>';
+            modal.classList.add('active');
+
+            try {
+                const f = await apiFetch(`/api/faces-v2/file/${fileId}`);
+                const sizeKB = f.size ? (f.size / 1024).toFixed(0) + ' KB' : '?';
+                const sizeMB = f.size ? (f.size / 1048576).toFixed(1) + ' MB' : '?';
+                const date = f.mtime ? new Date(f.mtime).toLocaleString() : '?';
+                info.innerHTML = `
+                    <h3>File Details</h3>
+                    <div class="row"><span class="label">Name:</span><span class="value">${f.name || '?'}</span></div>
+                    <div class="row"><span class="label">Path:</span><span class="value">${f.folder_path || '?'}</span></div>
+                    <div class="row"><span class="label">Size:</span><span class="value">${sizeKB} (${sizeMB})</span></div>
+                    <div class="row"><span class="label">Date:</span><span class="value">${date}</span></div>
+                    <div class="row"><span class="label">Camera:</span><span class="value">${f.camera_make || '?'} ${f.camera_model || ''}</span></div>
+                    <div class="row"><span class="label">Ext:</span><span class="value">${f.extension || '?'}</span></div>
+                    ${bboxW > 0 ? `<div class="row"><span class="label">Face:</span><span class="value">${bboxW}x${bboxH} at (${bboxX},${bboxY})</span></div>` : ''}
+                    <div style="margin-top:1rem"><a href="/images/${fileId}" target="_blank" style="color:#3498db;font-size:0.8rem">Open full photo in new tab</a></div>
+                `;
+            } catch (e) {
+                info.innerHTML = `<h3>File Details</h3><div class="row"><span class="label">ID:</span><span class="value">${fileId}</span></div>
+                    <div style="margin-top:1rem"><a href="/images/${fileId}" target="_blank" style="color:#3498db;font-size:0.8rem">Open full photo</a></div>`;
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('photoModal').classList.remove('active');
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+
+            const showGrid = tab === 'grid' || tab === 'suggestions';
+            document.getElementById('mainContainer').style.display = showGrid ? 'block' : 'none';
+            document.getElementById('groupsPanel').style.display = tab === 'groups' ? 'block' : 'none';
+            document.getElementById('groupDetail').classList.toggle('active', false);
+            document.getElementById('scanPanel').style.display = tab === 'scan' ? 'block' : 'none';
+            document.getElementById('controlsBar').style.display = showGrid ? 'flex' : 'none';
+
+            if (tab === 'suggestions') {
+                document.getElementById('statusFilter').value = 'pending';
+                loadFaces();
+            } else if (tab === 'grid') {
+                document.getElementById('statusFilter').value = '';
+                loadFaces();
+            } else if (tab === 'groups') {
+                loadGroups();
+            }
+        }
+
+        function showToast(msg, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.style.background = isError ? '#e74c3c' : '#27ae60';
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 2000);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeModal();
+        });
+
+        // === GROUPS MANAGEMENT ===
+        let currentGroupId = null;
+
+        async function loadGroups() {
+            const grid = document.getElementById('groupsGrid');
+            const info = document.getElementById('groupsInfo');
+            grid.innerHTML = '<div style="color:#888;grid-column:1/-1">Loading...</div>';
+
+            try {
+                const data = await apiFetch('/api/faces/groups');
+                const groups = data.groups || data || [];
+                document.getElementById('groupCount').textContent = groups.length;
+
+                if (groups.length === 0) {
+                    grid.innerHTML = '<div style="color:#888;grid-column:1/-1;text-align:center;padding:2rem">No named groups yet. Create one to start organizing faces.</div>';
+                    info.textContent = '0 groups';
+                    return;
+                }
+
+                info.textContent = `${groups.length} groups`;
+                grid.innerHTML = '';
+
+                for (const g of groups) {
+                    const card = document.createElement('div');
+                    card.className = 'group-card';
+                    card.onclick = () => openGroup(g.id, g.label);
+
+                    // Build thumbnail grid from faces
+                    const thumbs = [];
+                    if (g.masterThumb) thumbs.push(g.masterThumb);
+                    if (g.faces) {
+                        for (const f of g.faces) {
+                            if (thumbs.length >= 4) break;
+                            if (f.thumb && !thumbs.includes(f.thumb)) thumbs.push(f.thumb);
+                        }
+                    }
+                    const thumbHtml = thumbs.slice(0, 4).map(t =>
+                        `<img src="data:image/jpeg;base64,${t}" loading="lazy">`
+                    ).join('') || '<div style="padding:1rem;text-align:center;color:#555;font-size:0.7rem">No thumbs</div>';
+
+                    const typeTag = g.groupType && g.groupType !== 'unknown' ? `<span style="color:#9b59b6">${g.groupType}</span>` : '';
+                    const relTag = g.relationship ? `<span style="color:#3498db">${g.relationship}</span>` : '';
+
+                    card.innerHTML = `
+                        <div class="g-header">
+                            <span class="g-name">${g.label || 'Unnamed'}</span>
+                            <span class="g-count">${g.faceCount || 0} faces</span>
+                        </div>
+                        <div class="g-thumbs">${thumbHtml}</div>
+                        <div class="g-meta">${typeTag} ${relTag}</div>
+                    `;
+                    grid.appendChild(card);
+                }
+            } catch (e) {
+                grid.innerHTML = `<div style="color:#e74c3c;grid-column:1/-1">Error: ${e.message}</div>`;
+            }
+        }
+
+        async function openGroup(groupId, groupName) {
+            currentGroupId = groupId;
+            document.getElementById('groupsPanel').style.display = 'none';
+            document.getElementById('groupDetail').classList.add('active');
+            document.getElementById('gdName').textContent = groupName;
+            document.getElementById('gdFaceGrid').innerHTML = '';
+            document.getElementById('gdLoading').style.display = 'block';
+
+            try {
+                const data = await apiFetch(`/api/faces/groups/${groupId}`);
+                const grp = data.group || data;
+                const faces = grp.faces || [];
+                document.getElementById('gdCount').textContent = `${faces.length} faces`;
+                document.getElementById('gdLoading').style.display = 'none';
+
+                const grid = document.getElementById('gdFaceGrid');
+                for (const f of faces) {
+                    const card = document.createElement('div');
+                    card.className = 'face-card';
+                    const thumbSrc = f.thumb ? `data:image/jpeg;base64,${f.thumb}` : '';
+                    card.innerHTML = `
+                        <img src="${thumbSrc}" loading="lazy">
+                        <div class="meta">
+                            <span class="conf">${(f.confidence * 100).toFixed(0)}%</span>
+                            <span class="gender">${f.gender || '?'}</span>
+                        </div>
+                        <div class="actions">
+                            <button class="btn-view" onclick="event.stopPropagation();viewPhoto(${f.file_id})">View</button>
+                            <button class="btn-reject" onclick="event.stopPropagation();unassignFace(${f.id})">Remove</button>
+                        </div>
+                    `;
+                    grid.appendChild(card);
+                }
+            } catch (e) {
+                document.getElementById('gdLoading').innerHTML = `<div style="color:#e74c3c">Error: ${e.message}</div>`;
+            }
+        }
+
+        function showGroupsList() {
+            document.getElementById('groupDetail').classList.remove('active');
+            document.getElementById('groupsPanel').style.display = 'block';
+            loadGroups();
+        }
+
+        function showNewGroupModal() {
+            document.getElementById('newGroupModal').classList.add('active');
+            document.getElementById('newGroupName').value = '';
+            document.getElementById('newGroupName').focus();
+        }
+
+        function closeNewGroupModal() {
+            document.getElementById('newGroupModal').classList.remove('active');
+        }
+
+        async function createGroup() {
+            const name = document.getElementById('newGroupName').value.trim();
+            const type = document.getElementById('newGroupType').value;
+            if (!name) { showToast('Enter a group name', true); return; }
+
+            try {
+                await apiFetch('/api/faces/groups', {
+                    method: 'POST',
+                    body: JSON.stringify({ label: name, groupType: type })
+                });
+                showToast(`Group "${name}" created`);
+                closeNewGroupModal();
+                loadGroups();
+                loadStats();
+            } catch (e) { showToast('Error: ' + e.message, true); }
+        }
+
+        async function renameGroup() {
+            if (!currentGroupId) return;
+            const newName = prompt('New group name:');
+            if (!newName) return;
+            try {
+                await apiFetch(`/api/faces/groups/${currentGroupId}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ label: newName })
+                });
+                document.getElementById('gdName').textContent = newName;
+                showToast('Group renamed');
+            } catch (e) { showToast('Error: ' + e.message, true); }
+        }
+
+        async function deleteGroup() {
+            if (!currentGroupId) return;
+            if (!confirm('Delete this group? All faces will be unassigned.')) return;
+            try {
+                await apiFetch(`/api/faces/groups/${currentGroupId}`, { method: 'DELETE' });
+                showToast('Group deleted');
+                showGroupsList();
+                loadStats();
+            } catch (e) { showToast('Error: ' + e.message, true); }
+        }
+
+        async function unassignFace(faceId) {
+            if (!currentGroupId) return;
+            try {
+                await apiFetch(`/api/faces/groups/${currentGroupId}/unassign`, {
+                    method: 'POST',
+                    body: JSON.stringify({ faceIds: [faceId] })
+                });
+                showToast('Face removed from group');
+                openGroup(currentGroupId, document.getElementById('gdName').textContent);
+            } catch (e) { showToast('Error: ' + e.message, true); }
+        }
+
+        // Enter key in new group modal
+        document.getElementById('newGroupName')?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') createGroup();
+        });
+
+        // Init
+        loadStats();
+        loadFaces();
+    </script>
+</body>
+</html>

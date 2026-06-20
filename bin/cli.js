@@ -1872,26 +1872,39 @@ program
           process.exit(1);
         }
 
-        const [rows] = await dbManager.connection.execute(
-          `SELECT sf.id, sf.name, sf.size, sf.extension, ft.folder_id
-           FROM scanned_files sf
-           LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
-           LEFT JOIN photo_metadata pm ON sf.id = pm.file_id
-           LEFT JOIN detected_faces df ON sf.id = df.file_id
-           WHERE sf.extension IN ('jpg','jpeg','heic')
-           AND sf.size > 500000
-           AND df.id IS NULL
-           ORDER BY pm.date_taken DESC
-           LIMIT ${limit}`
+        // Use scan_queue for fast querying
+        const [pending] = await dbManager.connection.execute(
+          `SELECT id, file_id, file_name, folder_path FROM scan_queue WHERE status = 'pending' LIMIT ${limit}`
         );
 
-        for (const row of rows) {
-          const folderPath = row.folder_id || '';
-          const fullPath = folderPath ? folderPath + '\\' + row.name : row.name;
-          toProcess.push({ fileId: row.id, filePath: fullPath, name: row.name, fromDb: true });
+        if (pending.length === 0) {
+          // Populate scan_queue from scanned_files
+          spinner.text = 'Populating scan queue...';
+          await dbManager.connection.execute(`
+            INSERT IGNORE INTO scan_queue (file_id, file_name, folder_path, status)
+            SELECT sf.id, sf.name, ft.folder_id, 'pending'
+            FROM scanned_files sf
+            LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+            LEFT JOIN detected_faces df ON sf.id = df.file_id
+            WHERE sf.extension IN ('jpg','jpeg','heic')
+            AND sf.size > 500000
+            AND df.id IS NULL
+            LIMIT ${limit}
+          `);
+
+          const [newPending] = await dbManager.connection.execute(
+            `SELECT id, file_id, file_name, folder_path FROM scan_queue WHERE status = 'pending' LIMIT ${limit}`
+          );
+          pending.push(...newPending);
         }
 
-        spinner.text = `Loaded ${toProcess.length} photos from database`;
+        for (const row of pending) {
+          const folderPath = (row.folder_path || '').replace(/[\\\/]$/, '');
+          const fullPath = folderPath ? folderPath + '\\' + row.file_name : row.file_name;
+          toProcess.push({ fileId: row.file_id, filePath: fullPath, name: row.file_name, queueId: row.id, fromDb: true });
+        }
+
+        spinner.text = `Loaded ${toProcess.length} photos from scan queue`;
       } else {
         if (!directory) {
           spinner.fail('Directory argument required in filesystem mode.');
@@ -1966,8 +1979,11 @@ program
             if (msg.type === 'progress') {
               spinner.text = `[${scanned + msg.current}/${toProcess.length}] Processing with ${numThreads} threads...`;
             }
+            if (msg.type === 'result') {
+              chunkResults.push(msg.result);
+            }
             if (msg.type === 'done') {
-              resolve(msg.results);
+              resolve(chunkResults);
             }
           });
           worker.on('error', reject);
@@ -1983,6 +1999,26 @@ program
           totalFaces += result.faces?.length || 0;
           allResults.push(result);
 
+          // Log each photo
+          const faceCount = result.faces?.length || 0;
+          const logEntry = {
+            timestamp: new Date().toISOString(),
+            file: result.name || path.basename(result.filePath),
+            faces: faceCount,
+            success: result.success,
+            elapsed: result.elapsed || 0
+          };
+
+          if (faceCount > 0) {
+            logEntry.faceDetails = result.faces.map(f => ({
+              confidence: f.confidence,
+              gender: f.gender,
+              age: f.age_approx
+            }));
+          }
+
+          console.log(chalk.gray(`  [${scanned}] ${logEntry.file}: ${faceCount} faces (${logEntry.elapsed}ms)`));
+
           if (dbManager && result.success) {
             try {
               const fileId = result.fileId || null;
@@ -1994,6 +2030,14 @@ program
                   [result.name, st.size, pathMod.default.extname(result.filePath).slice(1)]
                 );
                 dbFileId = ins.insertId;
+              }
+
+              // Mark scan_queue entry as scanned
+              if (result.queueId) {
+                await dbManager.connection.execute(
+                  'UPDATE scan_queue SET status = ?, scanned_at = NOW() WHERE id = ?',
+                  ['scanned', result.queueId]
+                );
               }
 
               // Always insert a record (even if 0 faces) so file won't be scanned again
@@ -2022,6 +2066,8 @@ program
                           'UPDATE detected_faces SET suggested_group_id = ?, match_source = ?, match_confidence = ?, match_reviewed = 0 WHERE file_id = ? AND face_index = ?',
                           [matchGroupId, 'auto', matchScore, dbFileId, face.index]
                         );
+                        const [grp] = await dbManager.connection.execute('SELECT label FROM face_groups WHERE id = ?', [matchGroupId]);
+                        console.log(chalk.green(`    → Matched to ${grp[0]?.label || 'group #' + matchGroupId} (score: ${matchScore.toFixed(3)})`));
                       }
                     }
                   }
@@ -2047,6 +2093,31 @@ program
         console.log(chalk.gray(`  📋 Named groups: ${namedGroups.length}`));
       }
 
+      // Log match summary
+      const matchSummary = {};
+      for (const result of allResults) {
+        if (result.faces?.length > 0) {
+          for (const face of result.faces) {
+            const facePhash = face.perceptual_hash || face.face_descriptor?.phash;
+            if (facePhash) {
+              const { groupId, score } = detector.findMatchingGroup(face, namedGroups);
+              if (groupId) {
+                const [grp] = await dbManager.connection.execute('SELECT label FROM face_groups WHERE id = ?', [groupId]);
+                const label = grp[0]?.label || `group_${groupId}`;
+                matchSummary[label] = (matchSummary[label] || 0) + 1;
+              }
+            }
+          }
+        }
+      }
+
+      if (Object.keys(matchSummary).length > 0) {
+        console.log(chalk.cyan('\n  🎯 Match Summary:'));
+        for (const [label, count] of Object.entries(matchSummary)) {
+          console.log(chalk.gray(`    ${label}: ${count} faces matched`));
+        }
+      }
+
       if (options.group && allResults.length > 0) {
         console.log(chalk.cyan('\n  Face Groups:'));
         const groups = detector.groupFaces(allResults);
@@ -2061,10 +2132,322 @@ program
       }
 
       await closeDatabase();
+      process.exit(0);
     } catch (err) {
       spinner.fail('Scan failed');
       console.error(chalk.red(`Error: ${err.message}`));
       await closeDatabase();
+      process.exit(1);
+    }
+  });
+
+program
+  .command('face-scan-v2')
+  .description('New face scan with dedup (size+md5) into faces_v2 table, uses antelopev2')
+  .option('-l, --limit <n>', 'Max images to process', '100')
+  .option('-c, --min-confidence <n>', 'Min face confidence (0-1)', '0.5')
+  .option('-t, --threads <n>', 'Worker threads', String(Math.min(4, (await import('os')).cpus().length)))
+  .option('--match', 'Auto-match to named groups after scan')
+  .option('--sort <field>', 'Sort pending images by', 'newest')
+  .option('--phone-only', 'Only scan phone photos (Xiaomi, HTC, Apple, Samsung)')
+  .option('--since <date>', 'Only scan photos after this date (YYYY-MM-DD)', '')
+  .option('--ignore-cameras <cameras>', 'Comma-separated camera makes to skip (e.g. "Apple,HTC")', '')
+  .action(async (options) => {
+    if (!options.dbHost) options.db = true;
+    await initDatabase(options);
+
+    const { FaceDetector } = await import('../lib/face-detector.js');
+    const crypto = await import('crypto');
+    const fsAsync = await import('fs/promises');
+    const pathMod = await import('path');
+
+    const detector = new FaceDetector({ model: 'antelopev2' });
+    const limit = parseInt(options.limit) || 100;
+    const minConf = parseFloat(options.minConfidence) || 0.5;
+    const numThreads = parseInt(options.threads) || 4;
+    const phoneOnly = options.phoneOnly || false;
+    const since = options.since || '';
+    const ignoreCameras = options.ignoreCameras ? options.ignoreCameras.split(',').map(c => c.trim()).filter(Boolean) : [];
+
+    // Load ignored cameras from DB
+    if (dbManager) {
+      try {
+        const [dbIgnored] = await dbManager.connection.execute('SELECT camera_make FROM ignored_cameras');
+        for (const row of dbIgnored) {
+          if (row.camera_make && !ignoreCameras.includes(row.camera_make)) {
+            ignoreCameras.push(row.camera_make);
+          }
+        }
+      } catch {}
+    }
+
+    // Build camera filter
+    let cameraFilter = phoneOnly
+      ? `AND (pm.camera_make LIKE '%Xiaomi%' OR pm.camera_make LIKE '%HTC%' OR pm.camera_make LIKE '%Apple%' OR pm.camera_make LIKE '%samsung%')`
+      : '';
+    if (ignoreCameras.length > 0) {
+      const ignoreConditions = ignoreCameras.map(c => `pm.camera_make NOT LIKE '%${c}%'`).join(' AND ');
+      cameraFilter += ` AND (${ignoreConditions})`;
+    }
+    const dateFilter = since ? `AND sf.mtime >= '${since}'` : '';
+
+    console.log(chalk.cyan('\nSilverFileSystem Face Detection V2'));
+    console.log(chalk.gray(`  Model:  antelopev2 (primary)`));
+    console.log(chalk.gray(`  Limit:  ${limit} images`));
+    console.log(chalk.gray(`  Dedup:  size + md5`));
+    if (phoneOnly) console.log(chalk.gray(`  Filter: phone-only (Xiaomi/HTC/Apple/Samsung)`));
+    if (since) console.log(chalk.gray(`  Since:  ${since}`));
+    if (ignoreCameras.length > 0) console.log(chalk.gray(`  Ignore: ${ignoreCameras.join(', ')}`));
+    console.log('');
+
+    const spinner = ora('Loading pending images...').start();
+
+    try {
+      // Compute md5 for files that don't have it yet
+      spinner.text = 'Computing md5 for unprocessed files...';
+      const [noMd5] = await dbManager.connection.execute(
+        `SELECT sf.id, sf.name, COALESCE(sq.folder_path, ft.folder_id) as folder_path, sf.size
+         FROM scanned_files sf
+         LEFT JOIN scan_queue sq ON sf.id = sq.file_id
+         LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+         LEFT JOIN photo_metadata pm ON sf.id = pm.file_id
+         LEFT JOIN faces_v2 fv ON sf.id = fv.file_id
+         WHERE sf.md5 IS NULL
+         AND sf.extension IN ('jpg','jpeg','heic')
+         AND sf.size > 500000
+         AND fv.id IS NULL
+         AND COALESCE(sq.folder_path, ft.folder_id) IS NOT NULL
+         ${cameraFilter}
+         ${dateFilter}
+         LIMIT ${Math.min(limit * 2, 500)}`
+      );
+
+      let md5Computed = 0;
+      let md5Errors = 0;
+      for (const row of noMd5) {
+        const folderPath = (row.folder_path || '').replace(/[\\\/]$/, '');
+        const fullPath = folderPath ? folderPath + '\\' + row.name : row.name;
+        try {
+          const buf = await fsAsync.readFile(fullPath);
+          const md5 = crypto.createHash('md5').update(buf).digest('hex');
+          await dbManager.connection.execute('UPDATE scanned_files SET md5 = ? WHERE id = ?', [md5, row.id]);
+          md5Computed++;
+        } catch (e) {
+          md5Errors++;
+          if (md5Errors <= 5) console.log(chalk.red(`  ⚠️  MD5 read failed: ${row.name} — ${e.message}`));
+        }
+      }
+      console.log(chalk.gray(`  Computed md5 for ${md5Computed} files${md5Errors > 0 ? ` (${md5Errors} errors)` : ''}`));
+
+      // Get pending images (not yet in faces_v2) — use scan_queue for full paths
+      const sortMap = {
+        'newest': 'sf.id DESC',
+        'oldest': 'sf.id ASC',
+        'largest': 'sf.size DESC',
+        'smallest': 'sf.size ASC'
+      };
+      const orderBy = sortMap[options.sort] || 'sf.id DESC';
+
+      const [pending] = await dbManager.connection.execute(
+        `SELECT sf.id as file_id, sf.name as file_name, sf.size, sf.md5,
+                COALESCE(sq.folder_path, ft.folder_id) as folder_path
+         FROM scanned_files sf
+         LEFT JOIN scan_queue sq ON sf.id = sq.file_id
+         LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+         LEFT JOIN photo_metadata pm ON sf.id = pm.file_id
+         LEFT JOIN faces_v2 fv ON sf.id = fv.file_id
+         WHERE sf.extension IN ('jpg','jpeg','heic')
+         AND sf.size > 500000
+         AND fv.id IS NULL
+         AND COALESCE(sq.folder_path, ft.folder_id) IS NOT NULL
+         ${cameraFilter}
+         ${dateFilter}
+         ORDER BY ${orderBy}
+         LIMIT ${limit}`
+      );
+
+      // Dedup by md5: skip files whose md5 already has faces
+      const md5Seen = new Set();
+      const toProcess = [];
+      let dedupSkipped = 0;
+
+      for (const row of pending) {
+        if (row.md5 && md5Seen.has(row.md5)) {
+          dedupSkipped++;
+          continue;
+        }
+        if (row.md5) md5Seen.add(row.md5);
+
+        const folderPath = (row.folder_path || '').replace(/[\\\/]$/, '');
+        const fullPath = folderPath ? folderPath + '\\' + row.file_name : row.file_name;
+        toProcess.push({
+          fileId: row.file_id,
+          filePath: fullPath,
+          name: row.file_name,
+          md5: row.md5
+        });
+      }
+
+      console.log(chalk.gray(`  📋 Pending query returned ${pending.length} rows`));
+      console.log(chalk.gray(`  📋 After dedup: ${toProcess.length} to process, ${dedupSkipped} skipped`));
+      if (toProcess.length > 0) {
+        console.log(chalk.gray(`  📂 Sample paths:`));
+        toProcess.slice(0, 3).forEach(p => console.log(chalk.gray(`    ${p.fileId}: ${p.filePath}`)));
+      }
+
+      spinner.text = `Loaded ${toProcess.length} images (${dedupSkipped} dedup-skipped)`;
+
+      if (toProcess.length === 0) {
+        spinner.warn('No new images to scan');
+        await closeDatabase();
+        return;
+      }
+
+      // Load named groups for auto-matching
+      let namedGroups = [];
+      if (options.match) {
+        namedGroups = await detector.loadNamedGroups(dbManager);
+        if (namedGroups.length > 0) {
+          console.log(chalk.gray(`  📋 ${namedGroups.length} named groups loaded`));
+        }
+      }
+
+      // Split into chunks for parallel workers
+      const chunkSize = Math.ceil(toProcess.length / numThreads);
+      const chunks = [];
+      for (let i = 0; i < toProcess.length; i += chunkSize) {
+        chunks.push(toProcess.slice(i, i + chunkSize));
+      }
+
+      const WORKER_SCRIPT = pathMod.default.join(__dirname, '..', 'scripts', 'face-worker.js');
+      const { Worker } = await import('worker_threads');
+
+      spinner.text = `Scanning ${toProcess.length} images with ${numThreads} threads...`;
+      console.log(chalk.gray(`\n  📂 First file: ${toProcess[0]?.filePath || 'N/A'}`));
+      if (toProcess[0]) {
+        try {
+          const st = await fsAsync.stat(toProcess[0].filePath);
+          console.log(chalk.gray(`  📏 First file size: ${(st.size / 1024).toFixed(0)}KB`));
+        } catch (e) {
+          console.log(chalk.red(`  ⚠️  First file NOT FOUND: ${toProcess[0].filePath}`));
+        }
+      }
+
+      // Track stats across all workers
+      let totalFaces = 0;
+      let filesWithFaces = 0;
+      let scanned = 0;
+      let savedCount = 0;
+      let matchCount = 0;
+      let workersDone = 0;
+
+      const workers = chunks.map((chunk, idx) => {
+        return new Promise((resolve, reject) => {
+          const worker = new Worker(WORKER_SCRIPT, {
+            workerData: { items: chunk, minConfidence: minConf, model: 'antelopev2' }
+          });
+          let workerFaces = 0;
+          let workerErrors = 0;
+          let workerFiles = 0;
+          let workerSkipped = 0;
+          worker.on('message', async (msg) => {
+            if (msg.type === 'progress') {
+              workerFiles = msg.current;
+              if (msg.error) {
+                workerErrors++;
+                console.log(chalk.red(`    [W${idx}] ✗ ${msg.name}: ${msg.error} (${msg.elapsed}ms)`));
+              } else {
+                workerFaces += msg.faces;
+                workerSkipped += (msg.lowConf || 0);
+                const faceInfo = msg.faces > 0 ? chalk.green(` → ${msg.faces} face(s)`) : chalk.gray(' → 0 faces');
+                const lowConfInfo = msg.lowConf > 0 ? chalk.yellow(` (${msg.lowConf} skipped <${minConf})`) : '';
+                console.log(chalk.gray(`    [W${idx}] [${msg.current}/${msg.total}] ${msg.name}${faceInfo}${lowConfInfo} (${msg.elapsed}ms, ${msg.model || '?'})`));
+                if (msg.faceDetails?.length > 0) {
+                  msg.faceDetails.forEach((f, fi) => {
+                    const qTag = f.quality ? `q=${f.quality.toFixed(2)}` : 'q=?';
+                    console.log(chalk.gray(`           face[${fi}]: conf=${(f.conf * 100).toFixed(0)}% gender=${f.gender} age=${f.age} ${qTag}`));
+                  });
+                }
+              }
+            }
+            if (msg.type === 'result') {
+              // Save to DB immediately when result arrives
+              const result = msg.result;
+              scanned++;
+              const faceCount = result.faces?.length || 0;
+              totalFaces += faceCount;
+              if (faceCount > 0) filesWithFaces++;
+
+              if (result.success && faceCount > 0) {
+                try {
+                  await dbManager.storeFacesV2(result.fileId, { ...result, model: 'antelopev2' });
+                  savedCount++;
+                } catch (e) {
+                  console.log(chalk.red(`    💾 Save FAILED: ${e.message}`));
+                }
+
+                // Auto-match if enabled
+                if (options.match && namedGroups.length > 0) {
+                  for (let fi = 0; fi < result.faces.length; fi++) {
+                    const face = result.faces[fi];
+                    if (face.confidence < minConf) continue;
+                    const { groupId, score } = detector.findMatchingGroup(face, namedGroups);
+                    if (groupId) {
+                      const faceIdx = face.index ?? fi;
+                      try {
+                        await dbManager.connection.execute(
+                          'UPDATE faces_v2 SET suggested_group_id = ?, match_source = ?, match_confidence = ?, match_reviewed = 0 WHERE file_id = ? AND face_index = ?',
+                          [groupId, 'auto', score, result.fileId, faceIdx]
+                        );
+                        matchCount++;
+                      } catch {}
+                    }
+                  }
+                }
+              }
+            }
+            if (msg.type === 'done') {
+              workersDone++;
+              console.log(chalk.gray(`    [W${idx}] Done: ${workerFiles} files, ${workerFaces} faces, ${workerErrors} errors, ${workerSkipped} low-conf skipped (${msg.totalElapsed || 0}ms)`));
+              if (workersDone === chunks.length) resolve();
+            }
+          });
+          worker.on('error', (err) => {
+            console.error(chalk.red(`    [W${idx}] Worker error: ${err.message}`));
+            reject(err);
+          });
+        });
+      });
+
+      await Promise.all(workers);
+
+      spinner.succeed('Scan complete!');
+      console.log(chalk.cyan(`\n  ═══ SCAN SUMMARY ═══`));
+      console.log(chalk.green(`  ✅ Faces detected:  ${totalFaces}`));
+      console.log(chalk.gray(`  📸 Files scanned:   ${scanned}`));
+      console.log(chalk.gray(`  🖼️  Files w/ faces:  ${filesWithFaces}`));
+      console.log(chalk.gray(`  🚫 Files w/o faces: ${scanned - filesWithFaces}`));
+      if (dedupSkipped > 0) {
+        console.log(chalk.gray(`  ⏭️  Dedup skipped:   ${dedupSkipped}`));
+      }
+
+      const [fc] = await dbManager.connection.execute('SELECT COUNT(*) as c FROM faces_v2');
+      const [fByModel] = await dbManager.connection.execute('SELECT model, COUNT(*) as c FROM faces_v2 GROUP BY model');
+      const [fByStatus] = await dbManager.connection.execute('SELECT status, COUNT(*) as c FROM faces_v2 GROUP BY status');
+      const [fMatched] = await dbManager.connection.execute('SELECT COUNT(*) as c FROM faces_v2 WHERE suggested_group_id IS NOT NULL');
+      console.log(chalk.gray(`  💾 faces_v2 total:  ${fc[0].c} rows`));
+      console.log(chalk.gray(`  🤖 By model: ${fByModel.map(r => `${r.model || '?'}=${r.c}`).join(', ') || 'none'}`));
+      console.log(chalk.gray(`  📊 By status: ${fByStatus.map(r => `${r.status}=${r.c}`).join(', ') || 'none'}`));
+      console.log(chalk.gray(`  🎯 Auto-matched:    ${fMatched[0].c}`));
+      console.log(chalk.cyan(`  ══════════════════════\n`));
+
+      await closeDatabase();
+      process.exit(0);
+    } catch (err) {
+      spinner.fail('Scan failed');
+      console.error(chalk.red(`Error: ${err.message}`));
+      await closeDatabase();
+      process.exit(1);
     }
   });
 

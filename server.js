@@ -4244,6 +4244,7 @@ app.get('/api/faces/review', requireAuthWrapper, requirePhotoPermission, async (
         groupId: f.suggested_group_id,
         groupLabel: f.group_label,
         matchConfidence: f.match_confidence,
+        model: desc?.model || null,
         fileName: f.file_name
       };
     });
@@ -4395,6 +4396,272 @@ app.get('/api/faces/stats', requireAuthWrapper, async (req, res) => {
       totalGroups: groups[0].c,
       namedGroups: named[0].c
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== FACES V2 API ====================
+
+// Serve faces v2 review page
+app.get('/faces-v2', (req, res) => {
+  const html = fs.readFileSync(join(__dirname, 'public', 'faces-v2.html'), 'utf8');
+  res.send(html);
+});
+
+// Get faces v2 list with filters
+app.get('/api/faces-v2', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { status, model, gender, groupId, hasSuggestion, sort, limit, offset } = req.query;
+    const result = await db.getFacesV2({ status, model, gender, groupId, hasSuggestion, sort, limit, offset });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get faces v2 stats
+app.get('/api/faces-v2/stats', requireAuthWrapper, async (req, res) => {
+  try {
+    const stats = await db.getFacesV2Stats();
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get file details for view modal
+app.get('/api/faces-v2/file/:fileId', requireAuthWrapper, async (req, res) => {
+  try {
+    const fileId = parseInt(req.params.fileId);
+    const [rows] = await db.connection.execute(`
+      SELECT sf.id, sf.name, sf.size, sf.extension, sf.mtime,
+             ft.folder_id as folder_path,
+             pm.camera_make, pm.camera_model
+      FROM scanned_files sf
+      LEFT JOIN folder_tree ft ON sf.folder_id_int = ft.id
+      LEFT JOIN photo_metadata pm ON sf.id = pm.file_id
+      WHERE sf.id = ?
+    `, [fileId]);
+    if (!rows.length) return res.status(404).json({ error: 'File not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== IGNORED CAMERAS API ====================
+
+// List ignored cameras
+app.get('/api/ignored-cameras', requireAuthWrapper, async (req, res) => {
+  try {
+    const [rows] = await db.connection.execute('SELECT * FROM ignored_cameras ORDER BY created_at DESC');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add ignored camera
+app.post('/api/ignored-cameras', requireAuthWrapper, async (req, res) => {
+  try {
+    const { camera_make, camera_model, reason } = req.body;
+    if (!camera_make) return res.status(400).json({ error: 'camera_make required' });
+    await db.connection.execute(
+      'INSERT IGNORE INTO ignored_cameras (camera_make, camera_model, reason) VALUES (?, ?, ?)',
+      [camera_make, camera_model || null, reason || null]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remove ignored camera
+app.delete('/api/ignored-cameras/:id', requireAuthWrapper, async (req, res) => {
+  try {
+    await db.connection.execute('DELETE FROM ignored_cameras WHERE id = ?', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Ignore all faces from the same folder as a given file
+app.post('/api/faces-v2/ignore-by-folder', requireAuthWrapper, async (req, res) => {
+  try {
+    const { fileId } = req.body;
+    const [file] = await db.connection.execute(
+      'SELECT sf.folder_id_int FROM scanned_files sf WHERE sf.id = ?', [fileId]
+    );
+    if (!file.length || !file[0].folder_id_int) return res.json({ affected: 0 });
+
+    const folderId = file[0].folder_id_int;
+    const [result] = await db.connection.execute(
+      `UPDATE faces_v2 fv
+       JOIN scanned_files sf ON fv.file_id = sf.id
+       SET fv.status = 'ignored', fv.reviewed_at = NOW()
+       WHERE sf.folder_id_int = ? AND fv.status != 'ignored'`,
+      [folderId]
+    );
+    res.json({ success: true, affected: result.affectedRows, folderId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Ignore all faces from the same camera as a given file
+app.post('/api/faces-v2/ignore-by-camera', requireAuthWrapper, async (req, res) => {
+  try {
+    const { fileId } = req.body;
+    const [file] = await db.connection.execute(
+      `SELECT pm.camera_make FROM photo_metadata pm WHERE pm.file_id = ?`, [fileId]
+    );
+    if (!file.length || !file[0].camera_make) return res.json({ affected: 0, camera: null });
+
+    const cameraMake = file[0].camera_make;
+
+    // Also add to ignored_cameras table for future scans
+    await db.connection.execute(
+      'INSERT IGNORE INTO ignored_cameras (camera_make, reason) VALUES (?, ?)',
+      [cameraMake, 'Ignored via faces-v2 UI']
+    );
+
+    const [result] = await db.connection.execute(
+      `UPDATE faces_v2 fv
+       JOIN scanned_files sf ON fv.file_id = sf.id
+       JOIN photo_metadata pm ON sf.id = pm.file_id
+       SET fv.status = 'ignored', fv.reviewed_at = NOW()
+       WHERE pm.camera_make = ? AND fv.status != 'ignored'`,
+      [cameraMake]
+    );
+    res.json({ success: true, affected: result.affectedRows, camera: cameraMake });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update single face v2 status
+app.put('/api/faces-v2/:faceId', requireAuthWrapper, async (req, res) => {
+  try {
+    const { faceId } = req.params;
+    const updates = req.body;
+    updates.reviewedAt = true;
+    await db.updateFaceV2Status(faceId, updates);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Confirm face v2 to group
+app.post('/api/faces-v2/:faceId/confirm', requireAuthWrapper, async (req, res) => {
+  try {
+    const { faceId } = req.params;
+    const { groupId } = req.body;
+    await db.updateFaceV2Status(faceId, {
+      faceGroupId: groupId,
+      status: 'confirmed',
+      matchReviewed: true,
+      reviewedAt: true
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reject face v2 suggestion
+app.post('/api/faces-v2/:faceId/reject', requireAuthWrapper, async (req, res) => {
+  try {
+    const { faceId } = req.params;
+    await db.updateFaceV2Status(faceId, {
+      suggestedGroupId: null,
+      status: 'rejected',
+      matchReviewed: true,
+      reviewedAt: true
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reassign face v2 to different group
+app.post('/api/faces-v2/:faceId/reassign', requireAuthWrapper, async (req, res) => {
+  try {
+    const { faceId } = req.params;
+    const { groupId } = req.body;
+    await db.updateFaceV2Status(faceId, {
+      faceGroupId: groupId,
+      suggestedGroupId: null,
+      status: 'confirmed',
+      matchReviewed: true,
+      reviewedAt: true
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk confirm faces v2
+app.post('/api/faces-v2/bulk-confirm', requireAuthWrapper, async (req, res) => {
+  try {
+    const { faceIds, groupId } = req.body;
+    if (!faceIds?.length) return res.status(400).json({ error: 'faceIds required' });
+    await db.bulkUpdateFacesV2(faceIds, {
+      faceGroupId: groupId,
+      status: 'confirmed',
+      matchReviewed: true,
+      reviewedAt: true
+    });
+    res.json({ success: true, updated: faceIds.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk reject faces v2
+app.post('/api/faces-v2/bulk-reject', requireAuthWrapper, async (req, res) => {
+  try {
+    const { faceIds } = req.body;
+    if (!faceIds?.length) return res.status(400).json({ error: 'faceIds required' });
+    await db.bulkUpdateFacesV2(faceIds, {
+      suggestedGroupId: null,
+      status: 'rejected',
+      matchReviewed: true,
+      reviewedAt: true
+    });
+    res.json({ success: true, updated: faceIds.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk ignore faces v2
+app.post('/api/faces-v2/bulk-ignore', requireAuthWrapper, async (req, res) => {
+  try {
+    const { faceIds, ignoreType } = req.body;
+    if (!faceIds?.length) return res.status(400).json({ error: 'faceIds required' });
+    await db.bulkUpdateFacesV2(faceIds, {
+      status: 'ignored',
+      reviewedAt: true
+    });
+    res.json({ success: true, updated: faceIds.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Auto-match faces v2 to named groups
+app.post('/api/faces-v2/auto-match', requireAuthWrapper, async (req, res) => {
+  try {
+    const { limit } = req.body;
+    const { FaceDetector } = await import('./lib/face-detector.js');
+    const detector = new FaceDetector({ model: 'antelopev2' });
+    const result = await db.autoMatchFacesV2(detector, limit || 500);
+    res.json({ success: true, ...result });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

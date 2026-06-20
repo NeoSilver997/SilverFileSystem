@@ -598,17 +598,25 @@
 
         async function removeFromGroup(faceId) {
             if (!selectedGroupId) return;
+            const el = document.querySelector(`.face-item[data-id="${faceId}"]`);
+            if (el) {
+                el.style.transition = 'opacity 0.3s, transform 0.3s';
+                el.style.opacity = '0';
+                el.style.transform = 'scale(0.8)';
+            }
             try {
                 await api(`/api/faces/groups/${selectedGroupId}/unassign`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ faceIds: [faceId] })
                 });
-                // Remove from grid
-                document.querySelector(`.face-item[data-id="${faceId}"]`)?.remove();
+                setTimeout(() => el?.remove(), 300);
                 toast('Face removed from group');
                 loadStats();
-            } catch (e) { toast('Error: ' + e.message); }
+            } catch (e) { 
+                if (el) { el.style.opacity = '1'; el.style.transform = 'scale(1)'; }
+                toast('Error: ' + e.message); 
+            }
         }
 
         async function saveGroup() {
@@ -1027,6 +1035,7 @@
         function renderReviewFaceCard(f) {
             const conf = f.matchConfidence ? (f.matchConfidence * 100).toFixed(0) : '?';
             const confColor = f.matchConfidence >= 0.85 ? '#27ae60' : f.matchConfidence >= 0.7 ? '#f39c12' : '#e74c3c';
+            const modelTag = f.model ? `<span style="font-size:0.55rem;color:#3498db;background:rgba(52,152,219,0.15);padding:0.1rem 0.2rem;border-radius:2px;">${f.model}</span>` : '';
             return `
                 <div class="review-face-item" data-id="${f.id}">
                     <div class="review-face-img">
@@ -1036,6 +1045,7 @@
                     <div class="review-face-info">
                         <div style="font-size:0.7rem;color:#888;">${f.fileName ? f.fileName.split(/[/\\\\]/).pop().substring(0, 20) : ''}</div>
                         <div style="font-size:0.65rem;color:#666;">${f.gender || '?'} · ${f.age || '?'}</div>
+                        ${modelTag}
                     </div>
                     <div class="review-face-actions">
                         <button class="btn btn-primary" onclick="confirmReview(${f.id})" style="font-size:0.65rem;padding:0.15rem 0.4rem;">✓</button>

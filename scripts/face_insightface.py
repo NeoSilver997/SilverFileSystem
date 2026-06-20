@@ -43,7 +43,11 @@ def analyze_face(image_path):
             import pillow_heif
             pillow_heif.register_heif_opener()
             pil_img = Image.open(image_path)
-            pil_img = pil_img.convert('RGB')
+            # Convert to RGB preserving quality
+            if pil_img.mode in ('RGBA', 'LA', 'PA'):
+                pil_img = pil_img.convert('RGB')
+            elif pil_img.mode != 'RGB':
+                pil_img = pil_img.convert('RGB')
             import numpy as np
             img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         except Exception:
