@@ -290,8 +290,27 @@
             }
         }
 
-        function refreshCurrent() {
-            loadTree(currentPath || '');
+        async function refreshCurrent() {
+            if (!currentId) {
+                loadTree(currentPath || '');
+                return;
+            }
+            showLoading();
+            try {
+                const res = await authFetch('/api/folder-tree/rescan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folderId: currentId })
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+            } catch (err) {
+                hideLoading();
+                alert('Refresh failed: ' + err.message);
+                return;
+            }
+            hideLoading();
+            loadTree(currentPath || currentId);
         }
 
         function toggleHidden() {
