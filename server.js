@@ -1334,144 +1334,201 @@ app.post('/api/folder-tree/check-deleted', requireAuthWrapper, async (req, res) 
   }
 });
 
-// Rescan current folder files from disk into scanned_files (non-recursive)
+// Rescan current folder files from disk into scanned_files.
+// Body: { folderId, recursive?: boolean } — recursive=true walks the subtree (Reload).
+// Default / Refresh one level = non-recursive (files + discover immediate child dirs).
+async function rescanFolderOneLevel(folderId) {
+  const fid = parseInt(folderId, 10);
+  const [folderRow] = await db.connection.query(
+    'SELECT id, folder_id, depth FROM folder_tree WHERE id = ?',
+    [fid]
+  );
+  if (folderRow.length === 0) return { error: 'Folder not found', status: 404 };
+
+  const folderPath = folderRow[0].folder_id;
+  const folderDepth = parseInt(folderRow[0].depth, 10) || folderPath.split('\\').filter(Boolean).length;
+
+  let entries;
+  try {
+    entries = await fs.promises.readdir(folderPath, { withFileTypes: true });
+  } catch (err) {
+    return { error: `Cannot read folder: ${err.message}`, status: 400, path: folderPath };
+  }
+
+  const diskFiles = new Map();
+  const diskDirs = [];
+  const toSql = (d) => {
+    if (!d) return null;
+    const dt = d instanceof Date ? d : new Date(d);
+    if (isNaN(dt.getTime())) return null;
+    return dt.toISOString().slice(0, 19).replace('T', ' ');
+  };
+  for (const entry of entries) {
+    try {
+      if (entry.isDirectory()) {
+        diskDirs.push(entry.name);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const fullPath = path.join(folderPath, entry.name);
+      const st = await fs.promises.stat(fullPath);
+      const extMatch = entry.name.match(/\.([^.]+)$/);
+      let extension = extMatch ? extMatch[1] : '';
+      if (extension.length > 255) extension = extension.substring(0, 255);
+      diskFiles.set(entry.name, {
+        size: st.size,
+        mtime: toSql(st.mtime),
+        atime: toSql(st.atime),
+        ctime: toSql(st.ctime),
+        extension
+      });
+    } catch (_) {}
+  }
+
+  const [dbFiles] = await db.connection.query(
+    'SELECT id, name, size, mtime FROM scanned_files WHERE folder_id_int = ?',
+    [fid]
+  );
+  const dbByName = new Map(dbFiles.map(f => [f.name, f]));
+
+  let added = 0, updated = 0, removed = 0, foldersAdded = 0;
+  const missing = [];
+  for (const row of dbFiles) {
+    if (!diskFiles.has(row.name)) missing.push(row);
+  }
+
+  if (missing.length > 0) {
+    try {
+      await db.archiveDeletedFiles(missing.map(f => ({
+        id: f.id, name: f.name, path: folderPath + '\\' + f.name, size: f.size, hash: null, extension: null
+      })), 'tree-rescan');
+    } catch (_) {}
+    const DEL_BATCH = 500;
+    for (let i = 0; i < missing.length; i += DEL_BATCH) {
+      const batch = missing.slice(i, i + DEL_BATCH);
+      const ids = batch.map(f => f.id);
+      const ph = ids.map(() => '?').join(',');
+      await db.connection.query(`DELETE FROM scanned_files WHERE id IN (${ph})`, ids);
+      removed += batch.length;
+    }
+  }
+
+  for (const [name, meta] of diskFiles) {
+    const existing = dbByName.get(name);
+    if (!existing) {
+      await db.connection.execute(
+        `INSERT INTO scanned_files
+         (name, size, hash, quick_hash, extension, mtime, atime, ctime, scan_id, folder_id_int)
+         VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, NULL, ?)`,
+        [name, meta.size, meta.extension, meta.mtime, meta.atime, meta.ctime, fid]
+      );
+      added++;
+    } else {
+      const oldMtime = existing.mtime ? new Date(existing.mtime).getTime() : null;
+      const newMtime = meta.mtime ? new Date(meta.mtime + 'Z').getTime() : null;
+      const sizeChanged = Number(existing.size) !== Number(meta.size);
+      const mtimeChanged = oldMtime !== newMtime;
+      if (sizeChanged || mtimeChanged) {
+        await db.connection.execute(
+          `UPDATE scanned_files SET size = ?, extension = ?, mtime = ?, atime = ?, ctime = ?
+           WHERE id = ?`,
+          [meta.size, meta.extension, meta.mtime, meta.atime, meta.ctime, existing.id]
+        );
+        updated++;
+      }
+    }
+  }
+
+  const [childFolders] = await db.connection.query(
+    'SELECT folder_name FROM folder_tree WHERE parent_id = ?',
+    [fid]
+  );
+  const existingChildNames = new Set(childFolders.map(c => c.folder_name));
+  for (const dirName of diskDirs) {
+    if (existingChildNames.has(dirName)) continue;
+    const childPath = folderPath + '\\' + dirName;
+    const childDepth = folderDepth + 1;
+    try {
+      const [ins] = await db.connection.execute(
+        `INSERT IGNORE INTO folder_tree (folder_id, folder_name, file_count, total_size, recursive_count, recursive_size, depth, parent_id)
+         VALUES (?, ?, 0, 0, 0, 0, ?, ?)`,
+        [childPath, dirName, childDepth, fid]
+      );
+      if (ins.affectedRows > 0) foldersAdded++;
+    } catch (_) {}
+  }
+
+  return {
+    success: true,
+    path: folderPath,
+    folderId: fid,
+    added,
+    updated,
+    removed,
+    foldersAdded,
+    diskFiles: diskFiles.size,
+    diskDirs: diskDirs.length
+  };
+}
+
 app.post('/api/folder-tree/rescan', requireAuthWrapper, async (req, res) => {
   try {
-    const { folderId } = req.body || {};
+    const body = req.body || {};
+    const { folderId } = body;
     if (!folderId) return res.status(400).json({ error: 'folderId required' });
     const fid = parseInt(folderId, 10);
     if (!Number.isFinite(fid) || fid <= 0) return res.status(400).json({ error: 'Invalid folderId' });
 
-    const [folderRow] = await db.connection.query(
-      'SELECT id, folder_id, depth FROM folder_tree WHERE id = ?',
-      [fid]
-    );
-    if (folderRow.length === 0) return res.status(404).json({ error: 'Folder not found' });
+    const recursiveFlag = body.recursive === true || body.recursive === 1 || body.recursive === '1' || body.recursive === 'true'
+      || req.query.recursive === '1' || req.query.recursive === 'true';
 
-    const folderPath = folderRow[0].folder_id;
-    const folderDepth = parseInt(folderRow[0].depth, 10) || folderPath.split('\\').filter(Boolean).length;
-
-    let entries;
-    try {
-      entries = await fs.promises.readdir(folderPath, { withFileTypes: true });
-    } catch (err) {
-      return res.status(400).json({ error: `Cannot read folder: ${err.message}` });
+    if (!recursiveFlag) {
+      const result = await rescanFolderOneLevel(fid);
+      if (result.error) return res.status(result.status || 500).json({ error: result.error });
+      await db.refreshFolderStats(fid);
+      return res.json({ ...result, recursive: false, foldersScanned: 1 });
     }
 
-    const diskFiles = new Map();
-    const diskDirs = [];
-    const toSql = (d) => {
-      if (!d) return null;
-      const dt = d instanceof Date ? d : new Date(d);
-      if (isNaN(dt.getTime())) return null;
-      return dt.toISOString().slice(0, 19).replace('T', ' ');
-    };
-    for (const entry of entries) {
-      try {
-        if (entry.isDirectory()) {
-          diskDirs.push(entry.name);
-          continue;
-        }
-        if (!entry.isFile()) continue;
-        const fullPath = path.join(folderPath, entry.name);
-        const st = await fs.promises.stat(fullPath);
-        const extMatch = entry.name.match(/\.([^.]+)$/);
-        let extension = extMatch ? extMatch[1] : '';
-        if (extension.length > 255) extension = extension.substring(0, 255);
-        diskFiles.set(entry.name, {
-          size: st.size,
-          mtime: toSql(st.mtime),
-          atime: toSql(st.atime),
-          ctime: toSql(st.ctime),
-          extension
-        });
-      } catch (_) {}
-    }
+    const totals = { added: 0, updated: 0, removed: 0, foldersAdded: 0, foldersScanned: 0, foldersSkipped: 0 };
+    const queue = [fid];
+    const seen = new Set();
+    const MAX_FOLDERS = 10000;
+    let rootPath = null;
 
-    const [dbFiles] = await db.connection.query(
-      'SELECT id, name, size, mtime FROM scanned_files WHERE folder_id_int = ?',
-      [fid]
-    );
-    const dbByName = new Map(dbFiles.map(f => [f.name, f]));
+    while (queue.length > 0 && totals.foldersScanned < MAX_FOLDERS) {
+      const current = queue.shift();
+      if (seen.has(current)) continue;
+      seen.add(current);
 
-    let added = 0, updated = 0, removed = 0, foldersAdded = 0;
-    const missing = [];
-    for (const row of dbFiles) {
-      if (!diskFiles.has(row.name)) missing.push(row);
-    }
-
-    if (missing.length > 0) {
-      try {
-        await db.archiveDeletedFiles(missing.map(f => ({
-          id: f.id, name: f.name, path: folderPath + '\\' + f.name, size: f.size, hash: null, extension: null
-        })), 'tree-rescan');
-      } catch (_) {}
-      const DEL_BATCH = 500;
-      for (let i = 0; i < missing.length; i += DEL_BATCH) {
-        const batch = missing.slice(i, i + DEL_BATCH);
-        const ids = batch.map(f => f.id);
-        const ph = ids.map(() => '?').join(',');
-        await db.connection.query(`DELETE FROM scanned_files WHERE id IN (${ph})`, ids);
-        removed += batch.length;
+      const result = await rescanFolderOneLevel(current);
+      if (result.error) {
+        if (current === fid) return res.status(result.status || 500).json({ error: result.error });
+        totals.foldersSkipped++;
+        continue;
       }
-    }
+      if (!rootPath) rootPath = result.path;
+      totals.added += result.added;
+      totals.updated += result.updated;
+      totals.removed += result.removed;
+      totals.foldersAdded += result.foldersAdded;
+      totals.foldersScanned++;
 
-    for (const [name, meta] of diskFiles) {
-      const existing = dbByName.get(name);
-      if (!existing) {
-        await db.connection.execute(
-          `INSERT INTO scanned_files
-           (name, size, hash, quick_hash, extension, mtime, atime, ctime, scan_id, folder_id_int)
-           VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, NULL, ?)`,
-          [name, meta.size, meta.extension, meta.mtime, meta.atime, meta.ctime, fid]
-        );
-        added++;
-      } else {
-        const oldMtime = existing.mtime ? new Date(existing.mtime).getTime() : null;
-        const newMtime = meta.mtime ? new Date(meta.mtime + 'Z').getTime() : null;
-        const sizeChanged = Number(existing.size) !== Number(meta.size);
-        const mtimeChanged = oldMtime !== newMtime;
-        if (sizeChanged || mtimeChanged) {
-          await db.connection.execute(
-            `UPDATE scanned_files SET size = ?, extension = ?, mtime = ?, atime = ?, ctime = ?
-             WHERE id = ?`,
-            [meta.size, meta.extension, meta.mtime, meta.atime, meta.ctime, existing.id]
-          );
-          updated++;
-        }
+      const [children] = await db.connection.query(
+        'SELECT id FROM folder_tree WHERE parent_id = ?',
+        [current]
+      );
+      for (const c of children) {
+        if (!seen.has(c.id)) queue.push(c.id);
       }
-    }
-
-    const [childFolders] = await db.connection.query(
-      'SELECT folder_name FROM folder_tree WHERE parent_id = ?',
-      [fid]
-    );
-    const existingChildNames = new Set(childFolders.map(c => c.folder_name));
-    for (const dirName of diskDirs) {
-      if (existingChildNames.has(dirName)) continue;
-      const childPath = folderPath + '\\' + dirName;
-      const childDepth = folderDepth + 1;
-      try {
-        const [ins] = await db.connection.execute(
-          `INSERT IGNORE INTO folder_tree (folder_id, folder_name, file_count, total_size, recursive_count, recursive_size, depth, parent_id)
-           VALUES (?, ?, 0, 0, 0, 0, ?, ?)`,
-          [childPath, dirName, childDepth, fid]
-        );
-        if (ins.affectedRows > 0) foldersAdded++;
-      } catch (_) {}
     }
 
     await db.refreshFolderStats(fid);
-
     res.json({
       success: true,
-      path: folderPath,
-      added,
-      updated,
-      removed,
-      foldersAdded,
-      diskFiles: diskFiles.size,
-      diskDirs: diskDirs.length
+      path: rootPath,
+      recursive: true,
+      ...totals,
+      truncated: queue.length > 0
     });
   } catch (err) {
     console.error('Folder rescan error:', err.message);
@@ -1479,7 +1536,6 @@ app.post('/api/folder-tree/rescan', requireAuthWrapper, async (req, res) => {
   }
 });
 
-// Delete file record from database by path
 app.post('/api/tree/delete-file', requireAuthWrapper, async (req, res) => {
   try {
     const { path } = req.body;

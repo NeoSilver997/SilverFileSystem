@@ -125,7 +125,8 @@
                 <input type="checkbox" id="showHiddenCb" onchange="toggleHidden()" style="cursor:pointer;"> Show Hidden
             </label>
             <button onclick="goUp()" id="backBtn" style="display:none; padding:0.4rem 0.8rem; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">⬅ Back</button>
-            <button onclick="refreshCurrent()" id="refreshBtn" style="display:none; padding:0.4rem 0.8rem; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">🔄 Refresh</button>
+            <button onclick="refreshCurrent()" id="refreshBtn" title="Scan this folder level only (files + immediate child folders)" style="display:none; padding:0.4rem 0.8rem; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">🔄 Refresh one level</button>
+            <button onclick="reloadCurrent()" id="reloadBtn" title="Recursively scan this folder and all nested subfolders/files" style="display:none; padding:0.4rem 0.8rem; background:rgba(46,204,113,0.25); border:1px solid rgba(46,204,113,0.5); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">♻️ Reload</button>
             <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.8rem; cursor:pointer; color:rgba(255,255,255,0.7); display:none;" id="recursiveLabel">
                 <input type="checkbox" id="recursiveCb" style="cursor:pointer;"> Sub
             </label>
@@ -191,16 +192,19 @@
         function updateButtons() {
             const backBtn = document.getElementById('backBtn');
             const refreshBtn = document.getElementById('refreshBtn');
+            const reloadBtn = document.getElementById('reloadBtn');
             const checkDelBtn = document.getElementById('checkDelBtn');
             const recursiveLabel = document.getElementById('recursiveLabel');
             if (currentPath) {
                 backBtn.style.display = '';
                 refreshBtn.style.display = '';
+                if (reloadBtn) reloadBtn.style.display = '';
                 checkDelBtn.style.display = '';
                 recursiveLabel.style.display = '';
             } else {
                 backBtn.style.display = 'none';
                 refreshBtn.style.display = 'none';
+                if (reloadBtn) reloadBtn.style.display = 'none';
                 checkDelBtn.style.display = 'none';
                 recursiveLabel.style.display = 'none';
             }
@@ -307,6 +311,31 @@
             } catch (err) {
                 hideLoading();
                 alert('Refresh failed: ' + err.message);
+                return;
+            }
+            hideLoading();
+            loadTree(currentPath || currentId);
+        }
+
+        async function reloadCurrent() {
+            if (!currentId) {
+                alert('Navigate to a folder first.');
+                return;
+            }
+            if (!confirm('Reload will recursively scan this folder and all nested subfolders. Continue?')) return;
+            showLoading();
+            try {
+                const res = await authFetch('/api/folder-tree/rescan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folderId: currentId, recursive: true })
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                console.log('Reload result', data);
+            } catch (err) {
+                hideLoading();
+                alert('Reload failed: ' + err.message);
                 return;
             }
             hideLoading();
