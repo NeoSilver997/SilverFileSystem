@@ -118,6 +118,7 @@
     <div class="loading-bar" id="loadingBar"></div>
     <div class="header">
         <a href="/" class="back">Dashboard</a>
+        <a href="/usage-chart" class="back" id="usageChartLink" title="Open usage treemap">Usage Chart</a>
         <h1>📁 Folder Tree</h1>
         <div style="margin-left:auto; display:flex; gap:0.5rem; align-items:center;">
             <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.85rem; cursor:pointer; color:rgba(255,255,255,0.8);">
@@ -179,6 +180,14 @@
             setTimeout(() => { document.getElementById('loadingBar').style.display = 'none'; }, 300);
         }
 
+        function updateUsageChartLink() {
+            const a = document.getElementById('usageChartLink');
+            if (!a) return;
+            a.href = currentPath
+                ? '/usage-chart?path=' + encodeURIComponent(currentPath)
+                : '/usage-chart';
+        }
+
         function updateButtons() {
             const backBtn = document.getElementById('backBtn');
             const refreshBtn = document.getElementById('refreshBtn');
@@ -238,6 +247,7 @@
                 currentData = data;
                 updateBreadcrumb();
                 updateButtons();
+                updateUsageChartLink();
                 renderTree();
             } catch (err) {
                 document.getElementById('treeContent').innerHTML = `<div class="empty">Error: ${err.message}</div>`;

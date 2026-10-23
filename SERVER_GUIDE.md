@@ -1,5 +1,8 @@
 # SilverFileSystem Media Server Guide
 
+> **Port note (2026):** Examples below still say `localhost:3000`. Live deploy uses `.env` `PORT` (often **4001**); code fallback is **14316**. Public site: Cloudflare -> `https://medialib2.tcghk.trade`.
+
+
 A complete web server for browsing and searching your photo, music, and movie libraries with real-time search and filtering.
 
 ## Overview

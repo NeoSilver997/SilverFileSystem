@@ -47,7 +47,9 @@ node bin/cli.js scan /path/to/movies --db --extract-media
 # 2. Start the web server
 npm run server
 
-# 3. Open your browser to http://localhost:3000
+# 3. Open browser to http://localhost:<PORT>
+#    PORT comes from .env (this deploy often 4001).
+#    If PORT is unset, server.js defaults to 14316 - not 3000.
 ```
 
 **Features:**
@@ -58,6 +60,47 @@ npm run server
 - 🔌 **REST API** - Access your media programmatically
 
 See [SERVER_GUIDE.md](SERVER_GUIDE.md) for full documentation.
+
+## Deployment / Cloudflare (for agents)
+
+This machine runs the Express server locally (`start-server.bat` / `node server.js`). Public access is **not** a separate Strapi app: Cloudflare forwards the public host to this Node process.
+
+| Item | Fact |
+|------|------|
+| Public URL | `https://medialib2.tcghk.trade` |
+| Local listen | `PORT` from `.env` (often `4001`). If unset, `server.js` uses `process.env.PORT || 14316`. Do not assume 3000 or 4000. |
+| Login page | Local: `http://localhost:<PORT>/login.html` | Public: `https://medialib2.tcghk.trade/login.html` |
+| Google Sign-in | `public/login.html` uses relative `/api/auth/google`. Passport callback is `GOOGLE_CALLBACK_URL` |
+| Why Google leaves localhost | With Cloudflare in front, `.env` intentionally sets `GOOGLE_CALLBACK_URL` and usually `FRONTEND_URL` to `https://medialib2.tcghk.trade/...`, so OAuth returns on the public host, not `localhost` |
+
+**Agent rules**
+
+1. Do **not** treat `GOOGLE_CALLBACK_URL` / `FRONTEND_URL` pointing at `medialib2.tcghk.trade` as a misconfiguration. Do **not** change them to `localhost` unless the user explicitly wants offline-only Google OAuth.
+2. Never read or paste `.env`, `config.json` passwords, JWT secrets, or Google client secrets.
+3. Scan / hash / face tools are CLI (`node bin/cli.js ...`), not HTTP. Branch context may be `feature/face-detection`.
+4. This repo is Express 5 + MySQL, not the GitHub Strapi rewrite of silver-media-library.
+5. Always use `loadConfig()` / `.env` for DB (`DB_HOST`/`DB_PORT`/`DB_NAME`). Raw `config.json` may point at a stale different database.
+
+## Agent notes: DB, `/tree`, CLI surface
+
+### Prefer `loadConfig` / `.env`
+Server and CLI use `loadConfig()` ([lib/utils.js](lib/utils.js)): **`.env` overrides `config.json`**.
+`config.json` alone can target a different MySQL (different port/name) with little or no web data. Agents must not query raw `localhost:3306` / `silverfilesystem` unless `loadConfig()` says so.
+
+### Refresh folder sizes for `/tree`
+```bash
+node bin/cli.js scan "<absolute-path>" --db
+# or
+node bin/cli.js rebuild-folder-tree --db
+```
+Then open `/tree`, `/usage-chart`, or `/api/folder-tree`. Related UI: `/drive-usage` (volume free/used history), `/usage-chart` (treemap from `folder_tree.recursive_size`; read-only).
+
+### CLI commands not fully listed above
+Also: `rebuild-folder-tree`, `face-scan`, `face-scan-v2`, `classify`, `watch`, `report-by-size`, `report-by-folder`, `report-by-name-size`, `find-duplicate-folders`, `extract-media-from-db`.
+
+### Web pages (auth may be required)
+`/`, `/login.html`, `/photos`, `/music`, `/movies`, `/faces`, `/faces-v2`, `/tree`, `/usage-chart`, `/drive-usage`, `/backup`, `/deleted-archive`, `/duplicates`, `/cli-tools`.
+
 
 ## Usage
 

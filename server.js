@@ -200,6 +200,17 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(cookieParser());
+
+// Disable caching for HTML files to ensure latest version is always served
+app.use((req, res, next) => {
+    if (req.url.endsWith('.html') || req.url === '/' || !req.url.includes('.')) {
+        res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
+    }
+    next();
+});
+
 app.use(express.static('public'));
 app.use('/api/', apiLimiter);
 
@@ -271,7 +282,7 @@ async function initDatabase(dbConfig = {}) {
   // Configure Google OAuth Strategy
   const googleClientId = process.env.GOOGLE_CLIENT_ID;
   const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const callbackURL = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:4000/api/auth/google/callback';
+  const callbackURL = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:4001/api/auth/google/callback';
 
   if (googleClientId && googleClientSecret) {
     passport.use(new GoogleStrategy({
@@ -1063,29 +1074,35 @@ app.get('/api/folder-tree', requireAuthWrapper, async (req, res) => {
     }
 
     const [currentInfo] = await db.connection.query(
-      'SELECT file_count, total_size, recursive_count, recursive_size FROM folder_tree WHERE id = ?',
+      'SELECT file_count, total_size, recursive_count, recursive_size, remark, hidden FROM folder_tree WHERE id = ?',
       [folderId]
     );
 
     const showHidden = req.query.showHidden === '1';
     const hiddenClause = showHidden ? '' : 'AND hidden = 0';
+    const foldersOnly = req.query.foldersOnly === '1';
+    const sortKey = (req.query.sort === 'recursive_size') ? 'recursive_size' : 'total_size';
 
     const [children] = await db.connection.query(`
-      SELECT id, folder_id, folder_name, file_count, total_size, recursive_count, recursive_size, hidden, remark, related_folder_id
+      SELECT id, folder_id, folder_name, file_count, total_size, recursive_count, recursive_size, hidden, remark, related_folder_id, created_at
       FROM folder_tree
       WHERE parent_id = ? ${hiddenClause}
-      ORDER BY total_size DESC
+      ORDER BY ${sortKey} DESC
       LIMIT 200
     `, [folderId]);
 
     // Get direct files (files in this exact folder from scanned_files)
-    const [files] = await db.connection.query(`
-      SELECT name, size, extension, mtime, ctime
-      FROM scanned_files
-      WHERE folder_id_int = ?
-      ORDER BY size DESC
-      LIMIT 50
-    `, [folderId]);
+    let files = [];
+    if (!foldersOnly) {
+      const [fileRows] = await db.connection.query(`
+        SELECT name, size, extension, mtime, ctime
+        FROM scanned_files
+        WHERE folder_id_int = ?
+        ORDER BY size DESC
+        LIMIT 50
+      `, [folderId]);
+      files = fileRows;
+    }
 
     res.json({
       id: folderId,
@@ -1096,7 +1113,9 @@ app.get('/api/folder-tree', requireAuthWrapper, async (req, res) => {
         totalSizeFormatted: formatBytes(parseInt(currentInfo[0].total_size)),
         recursiveCount: parseInt(currentInfo[0].recursive_count),
         recursiveSize: parseInt(currentInfo[0].recursive_size),
-        recursiveSizeFormatted: formatBytes(parseInt(currentInfo[0].recursive_size))
+        recursiveSizeFormatted: formatBytes(parseInt(currentInfo[0].recursive_size)),
+        remark: currentInfo[0].remark || null,
+        hidden: currentInfo[0].hidden === 1
       } : null,
       children: [
         ...children.map(r => ({
@@ -1112,7 +1131,9 @@ app.get('/api/folder-tree', requireAuthWrapper, async (req, res) => {
           recursiveSizeFormatted: formatBytes(parseInt(r.recursive_size)),
           hidden: r.hidden === 1,
           remark: r.remark || null,
-          relatedFolderId: r.related_folder_id || null
+          relatedFolderId: r.related_folder_id || null,
+          createdAt: r.created_at || null,
+          lastModified: null
         })),
         ...files.map(r => ({
           name: r.name,
@@ -1122,12 +1143,65 @@ app.get('/api/folder-tree', requireAuthWrapper, async (req, res) => {
           sizeFormatted: formatBytes(parseInt(r.size)),
           extension: r.extension,
           mtime: r.mtime,
-          ctime: r.ctime
+          ctime: r.ctime,
+          lastModified: r.mtime || null,
+          createdAt: r.ctime || null
         }))
       ]
     });
   } catch (err) {
     console.error('Folder tree error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// Top files by size for a folder (usage-chart leaf view)
+app.get('/api/folder-tree/:id/top-files', requireAuthWrapper, async (req, res) => {
+  try {
+    const folderId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(folderId) || folderId <= 0) {
+      return res.status(400).json({ error: 'Invalid folder id' });
+    }
+    let limit = parseInt(req.query.limit, 10);
+    if (!Number.isFinite(limit) || limit <= 0) limit = 30;
+    if (limit > 100) limit = 100;
+
+    const [folderRows] = await db.connection.query(
+      'SELECT id, folder_id FROM folder_tree WHERE id = ?',
+      [folderId]
+    );
+    if (!folderRows.length) {
+      return res.status(404).json({ error: 'Folder not found' });
+    }
+    const folderPath = folderRows[0].folder_id;
+
+    const [fileRows] = await db.connection.query(
+      `SELECT id, name, size, extension, mtime, ctime
+       FROM scanned_files
+       WHERE folder_id_int = ?
+       ORDER BY size DESC
+       LIMIT ?`,
+      [folderId, limit]
+    );
+
+    res.json({
+      folderId,
+      path: folderPath,
+      limit,
+      files: fileRows.map(r => ({
+        id: r.id,
+        name: r.name,
+        size: parseInt(r.size, 10) || 0,
+        sizeFormatted: formatBytes(parseInt(r.size, 10) || 0),
+        extension: r.extension || null,
+        path: folderPath + '\\' + r.name,
+        lastModified: r.mtime || null,
+        createdAt: r.ctime || null
+      }))
+    });
+  } catch (err) {
+    console.error('Top files error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1304,6 +1378,11 @@ app.post('/api/tree/delete-file', requireAuthWrapper, async (req, res) => {
 // Serve tree view page
 app.get('/tree', (req, res) => {
   const html = fs.readFileSync(join(__dirname, 'public', 'tree.html'), 'utf8');
+  res.send(html);
+});
+
+app.get('/usage-chart', (req, res) => {
+  const html = fs.readFileSync(join(__dirname, 'public', 'usage-chart.html'), 'utf8');
   res.send(html);
 });
 
