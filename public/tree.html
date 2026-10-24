@@ -119,7 +119,8 @@
     <div class="header">
         <a href="/" class="back">Dashboard</a>
         <a href="/usage-chart" class="back" id="usageChartLink" title="Open usage treemap">Usage Chart</a>
-        <a href="/embeddings" class="back" id="embeddingsLink" title="Review folder embeddings">Embeddings</a>
+        <a href="/jobs" class="back" title="Job queue / result review">Jobs</a>
+            <a href="/embeddings" class="back" id="embeddingsLink" title="Review folder embeddings">Embeddings</a>
         <h1>📁 Folder Tree</h1>
         <div style="margin-left:auto; display:flex; gap:0.5rem; align-items:center;">
             <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.85rem; cursor:pointer; color:rgba(255,255,255,0.8);">
@@ -221,6 +222,7 @@
     </div>
 
 <script src="/auth.js"></script>
+    <script src="/job-progress.js"></script>
     <script>
         let currentPath = '';
         let currentId = null;
@@ -768,7 +770,6 @@
 
         async function embedFolder(folderPath, folderId) {
             if (!folderPath && !folderId) return;
-            if (!confirm('Index images in this folder with EmbeddingGemma?\n(Non-recursive; already-indexed files are skipped)\n\n' + (folderPath || ('id=' + folderId)))) return;
             showLoading();
             try {
                 const res = await authFetch('/api/embed/folder', {
@@ -778,7 +779,27 @@
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || data.detail || ('HTTP ' + res.status));
-                showToast(`Embed: ${data.indexed} new, ${data.skipped} skipped, ${data.failed} failed (of ${data.total})`);
+                if (!data.jobId) throw new Error('No jobId returned');
+                hideLoading();
+                showToast('Embed job #' + data.jobId.slice(0, 8) + ' queued…');
+                const host = document.getElementById('jobProgressHost') || (function() {
+                    const d = document.createElement('div');
+                    d.id = 'jobProgressHost';
+                    d.style.cssText = 'position:fixed;bottom:60px;left:50%;transform:translateX(-50%);width:min(520px,90vw);background:#1a1f2b;padding:0.75rem 1rem;border-radius:10px;border:1px solid #3a4358;z-index:9998;';
+                    document.body.appendChild(d);
+                    return d;
+                })();
+                const finalJob = await JobProgress.poll(data.jobId, {
+                    host,
+                    intervalMs: 500,
+                    fetchFn: async (url) => authFetch(url)
+                });
+                const r = finalJob.result || {};
+                showToast('Embed: ' + (r.indexed || 0) + ' new, ' + (r.skipped || 0) + ' skipped, ' + (r.failed || 0) + ' failed — review /jobs?id=' + data.jobId);
+                const link = document.createElement('div');
+                link.style.cssText = 'text-align:center;margin-top:0.35rem;font-size:0.8rem;';
+                link.innerHTML = '<a href="/jobs?id=' + data.jobId + '" style="color:#8ab4f8">Review job result</a>';
+                host.appendChild(link);
             } catch (err) {
                 alert('Embed failed: ' + err.message);
             } finally {

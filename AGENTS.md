@@ -69,3 +69,9 @@
 - **Embedding taxonomy (coarse):** `POST /api/embed/classify-folder` cosine-matches each `file_embeddings` vector to text prototypes in `embedding_category_prototypes` (labels align with VLM: 人物單人/人物合照/風景/動物/食物/收據餐牌資料/螢幕截圖; low score → 其他). Persists to `file_embedding_categories` (does **not** overwrite `photo_classifications`). Review/filter: `/embeddings?folderId=` · `GET /api/embed/categories`. Optional `EMBED_CLASSIFY_MIN_SCORE` (default 0.25).
 - **DB thumbnails for VLM:** `thumbnail_cache` (file_hash+file_size+media_type). Describe/Ask default `useThumbnail: true` loads cache JPEG (or generates+caches via same 400px pipeline as `/images/:id/thumb`) then optionally downscales further by size preset. Warm a folder: `POST /api/thumbs/folder`. Review embeddings: `/embeddings?folderId=` or `?path=` (also linked from `/tree`). List API: `GET /api/embed/folder?folderId=`.
 
+
+## Job queue + progress + result review
+- Folder-scale jobs (**embed** / **classify** / **thumbs**) enqueue via `createJob` and auto-run FIFO (one at a time). No approval gate.
+- `POST /api/embed/folder`, `POST /api/embed/classify-folder`, `POST /api/thumbs/folder` return **202** `{ jobId, status, reviewUrl }`.
+- Progress: `GET /api/jobs/:jobId` (percent, message, done/total). List: `GET /api/jobs`. Cancel: `POST /api/jobs/:id/cancel`.
+- UI: progress bar on `/embeddings` and `/tree` Embed; **result review** at `/jobs?id=` (counts, errors, per-file summary). Store: `data/job-queue.json`.

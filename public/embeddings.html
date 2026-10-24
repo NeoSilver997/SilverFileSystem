@@ -38,6 +38,7 @@
   <header>
     <a href="/tree">← Tree</a>
     <a href="/dashboard.html">Dashboard</a>
+    <a href="/jobs">Jobs</a>
     <h1>🧬 Embedding 檢視 / Embedding Review</h1>
     <input id="folderPath" style="min-width:320px; flex:1;" placeholder="Folder path e.g. D:\Phone\16G\DCIM\103OLYMP" />
     <input id="folderId" style="width:110px;" placeholder="folderId" />
@@ -54,6 +55,7 @@
     <button class="secondary" onclick="classifyFolder(true)" title="Reclassify all">Force reclassify</button>
   </header>
   <main>
+    <div id="jobProgressHost"></div>
     <div id="status" class="meta">Open from /tree with ?path= or ?folderId=, or paste a path and Load.</div>
     <div class="path" id="folderLabel"></div>
     <div id="counts"></div>
@@ -75,6 +77,7 @@
     </table>
   </main>
   <script src="/auth.js"></script>
+  <script src="/job-progress.js"></script>
   <script>
     let lastRows = [];
     const KNOWN_CATS = ['人物單人','人物合照','風景','動物','食物','收據餐牌資料','螢幕截圖','其他'];
@@ -198,18 +201,38 @@
         status.textContent = 'Error: ' + err.message;
       }
     }
+    async function runFolderJob(url, body, label) {
+      const status = document.getElementById('status');
+      const host = document.getElementById('jobProgressHost');
+      status.textContent = label + ' — enqueue…';
+      const data = await api(url, { method: 'POST', body: JSON.stringify(body) });
+      if (!data.jobId) throw new Error('No jobId returned');
+      status.textContent = label + ' job #' + data.jobId.slice(0, 8) + ' — running…';
+      const finalJob = await JobProgress.poll(data.jobId, { host, intervalMs: 500 });
+      const r = finalJob.result || {};
+      const parts = [];
+      if (r.indexed != null) parts.push('indexed=' + r.indexed);
+      if (r.classified != null) parts.push('classified=' + r.classified);
+      if (r.generated != null) parts.push('generated=' + r.generated);
+      if (r.skipped != null) parts.push('skipped=' + r.skipped);
+      if (r.failed != null) parts.push('failed=' + r.failed);
+      if (r.missingEmbed != null) parts.push('missingEmbed=' + r.missingEmbed);
+      if (r.categoryCounts) parts.push(Object.entries(r.categoryCounts).map(([k,v]) => k + '=' + v).join(', '));
+      const review = ' · <a href="' + JobProgress.resultUrl(data.jobId) + '">Review result</a>';
+      if (finalJob.status === 'error' || finalJob.status === 'cancelled') {
+        status.innerHTML = label + ' ' + finalJob.status + ': ' + (finalJob.error || finalJob.message || '') + review;
+      } else {
+        status.innerHTML = label + ' done: ' + (parts.join(' ') || finalJob.message || 'ok') + review;
+      }
+      return finalJob;
+    }
     async function warmThumbs() {
       const status = document.getElementById('status');
       const folderId = document.getElementById('folderId').value.trim() || qs('folderId');
       const folderPath = document.getElementById('folderPath').value.trim() || qs('path');
       if (!folderId && !folderPath) { status.textContent = 'Need folder first'; return; }
-      status.textContent = 'Warming thumbnail_cache...';
       try {
-        const data = await api('/api/thumbs/folder', {
-          method: 'POST',
-          body: JSON.stringify({ folderId: folderId || undefined, folderPath: folderPath || undefined, force: false })
-        });
-        status.textContent = 'Thumbs: generated=' + data.generated + ' skipped=' + data.skipped + ' failed=' + data.failed;
+        await runFolderJob('/api/thumbs/folder', { folderId: folderId || undefined, folderPath: folderPath || undefined, force: false }, 'Thumbs');
         await loadEmbeddings();
       } catch (err) {
         status.textContent = 'Warm failed: ' + err.message;
@@ -220,20 +243,12 @@
       const folderId = document.getElementById('folderId').value.trim() || qs('folderId');
       const folderPath = document.getElementById('folderPath').value.trim() || qs('path');
       if (!folderId && !folderPath) { status.textContent = 'Need folder first'; return; }
-      status.textContent = force ? 'Force classifying by embedding...' : 'Classifying by embedding...';
       try {
-        const data = await api('/api/embed/classify-folder', {
-          method: 'POST',
-          body: JSON.stringify({
-            folderId: folderId || undefined,
-            folderPath: folderPath || undefined,
-            force: !!force
-          })
-        });
-        const parts = Object.entries(data.categoryCounts || {}).map(([k,v]) => k + '=' + v).join(', ');
-        status.textContent = 'Classify: done=' + data.classified + ' skipped=' + data.skipped +
-          ' failed=' + data.failed + ' missingEmbed=' + data.missingEmbed +
-          (parts ? ' · ' + parts : '');
+        await runFolderJob('/api/embed/classify-folder', {
+          folderId: folderId || undefined,
+          folderPath: folderPath || undefined,
+          force: !!force
+        }, force ? 'Force classify' : 'Classify');
         await loadEmbeddings();
       } catch (err) {
         status.textContent = 'Classify failed: ' + err.message;

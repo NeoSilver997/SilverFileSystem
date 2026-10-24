@@ -1579,6 +1579,35 @@ app.post('/api/tree/delete-file', requireAuthWrapper, async (req, res) => {
 });
 
 // Serve tree view page
+app.get('/jobs', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'jobs.html'));
+});
+
+app.get('/api/jobs', requireAuthWrapper, requirePhotoPermission, (req, res) => {
+  try {
+    const { status, type, limit } = req.query || {};
+    res.json({ jobs: listJobs({ status, type, limit: parseInt(limit, 10) || 100 }) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/jobs/:jobId', requireAuthWrapper, (req, res) => {
+  const job = getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found or expired' });
+  res.json(job);
+});
+
+app.post('/api/jobs/:jobId/cancel', requireAuthWrapper, requirePhotoPermission, (req, res) => {
+  try {
+    const job = cancelJob(req.params.jobId, { reason: (req.body && req.body.reason) || 'Cancelled' });
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    res.json(job);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 app.get('/embeddings', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'embeddings.html'));
 });
@@ -2921,6 +2950,7 @@ import { PhotoClassifier } from './lib/photo-classifier.js';
 import { FileWatcher } from './lib/file-watcher.js';
 import { EmbeddingClient } from './lib/embedding-client.js';
 import { EmbedClassifier, EMBED_CATEGORY_PROTOTYPES, EMBED_CATEGORY_OTHER } from './lib/embed-classifier.js';
+import { createJob, update as updateJob, get as getJob, getRaw as getJobRaw, list as listJobs, fail as failJob, complete as completeJob, cancel as cancelJob, isCancelled as isJobCancelled, setRunner as setJobRunner } from './lib/job-progress.js';
 
 const vlmConfig = {
   lmstudioUrl: process.env.LMSTUDIO_URL || process.env.VLM_URL || 'http://127.0.0.1:8080',
@@ -3157,6 +3187,188 @@ app.get('/api/embed/status', requireAuthWrapper, async (req, res) => {
   }
 });
 
+// ---- Background job runner (embed / classify / thumbs) ----
+setJobRunner(async (job) => {
+  const params = job.params || {};
+  const type = job.type;
+  const jobId = job.id;
+
+  if (type === 'embed-folder') {
+    const client = new EmbeddingClient(embedConfig);
+    const conn = await client.checkConnection();
+    if (!conn.ok) throw new Error(conn.error || 'Embedding server unavailable');
+    const listed = await db.listImagesInFolder({
+      folderId: params.folderId,
+      folderPath: params.folderPath,
+      limit: Math.min(parseInt(params.limit, 10) || 200, 500)
+    });
+    if (!listed.folderId) throw new Error('Folder not found in folder_tree. Refresh/scan first.');
+    updateJob(jobId, { total: listed.files.length, message: 'Embedding images…', meta: { folderId: listed.folderId, path: listed.path } });
+    const force = !!params.force;
+    const results = [];
+    let indexed = 0, skipped = 0, failed = 0;
+    let i = 0;
+    for (const file of listed.files) {
+      if (isJobCancelled(jobId)) throw new Error('Cancelled');
+      i++;
+      const filePath = file.path;
+      try {
+        if (!force) {
+          const existing = await db.getFileEmbedding(file.id, embedConfig.model);
+          if (existing) {
+            skipped++;
+            results.push({ id: file.id, name: file.name, status: 'skipped' });
+            updateJob(jobId, { done: i, currentItem: file.name, message: `Skip ${i}/${listed.files.length}: ${file.name}` });
+            continue;
+          }
+        }
+        const exists = await fs.promises.access(filePath).then(() => true).catch(() => false);
+        if (!exists) {
+          failed++;
+          results.push({ id: file.id, name: file.name, status: 'missing' });
+          updateJob(jobId, { done: i, currentItem: file.name, message: `Missing ${i}/${listed.files.length}` });
+          continue;
+        }
+        const emb = await client.embedImage(filePath);
+        await db.upsertFileEmbedding(file.id, {
+          embedding: emb.embedding,
+          model: emb.model,
+          dims: emb.dims,
+          sourceMtime: file.mtime || null
+        });
+        indexed++;
+        results.push({ id: file.id, name: file.name, status: 'indexed', dims: emb.dims });
+        updateJob(jobId, { done: i, currentItem: file.name, message: `Indexed ${i}/${listed.files.length}: ${file.name}` });
+      } catch (err) {
+        failed++;
+        results.push({ id: file.id, name: file.name, status: 'error', error: err.message });
+        updateJob(jobId, { done: i, currentItem: file.name, message: `Error ${i}/${listed.files.length}: ${err.message}` });
+        if (err.statusCode === 503) throw err;
+      }
+    }
+    const payload = { folderId: listed.folderId, path: listed.path, total: listed.files.length, indexed, skipped, failed, model: embedConfig.model, results };
+    completeJob(jobId, payload, `Done: indexed=${indexed} skipped=${skipped} failed=${failed}`);
+    return payload;
+  }
+
+  if (type === 'embed-classify-folder') {
+    const threshold = Number.isFinite(Number(params.minScore)) ? Number(params.minScore) : embedClassifyMinScore;
+    const classifier = new EmbedClassifier({ embedConfig, minScore: threshold });
+    const conn = await classifier.client.checkConnection();
+    if (!conn.ok) throw new Error(conn.error || 'Embedding server unavailable');
+    const prototypes = await classifier.ensurePrototypes(db, { forceRefresh: !!params.refreshPrototypes });
+    const listed = await db.listImagesInFolder({
+      folderId: params.folderId,
+      folderPath: params.folderPath,
+      limit: Math.min(parseInt(params.limit, 10) || 500, 2000)
+    });
+    if (!listed.folderId) throw new Error('Folder not found in folder_tree. Refresh/scan first.');
+    updateJob(jobId, { total: listed.files.length, message: 'Classifying…', meta: { folderId: listed.folderId, path: listed.path } });
+    const force = !!params.force;
+    const results = [];
+    let classified = 0, skipped = 0, failed = 0, missingEmbed = 0;
+    const categoryCounts = {};
+    let i = 0;
+    for (const file of listed.files) {
+      if (isJobCancelled(jobId)) throw new Error('Cancelled');
+      i++;
+      try {
+        if (!force) {
+          const existing = await db.getFileEmbeddingCategory(file.id, embedConfig.model);
+          if (existing) {
+            skipped++;
+            categoryCounts[existing.category] = (categoryCounts[existing.category] || 0) + 1;
+            results.push({ id: file.id, name: file.name, status: 'skipped', category: existing.category, score: Number(existing.score) });
+            updateJob(jobId, { done: i, currentItem: file.name, message: `Skip ${i}/${listed.files.length}: ${file.name}` });
+            continue;
+          }
+        }
+        const embRow = await db.getFileEmbedding(file.id, embedConfig.model);
+        if (!embRow?.embedding?.length) {
+          missingEmbed++; failed++;
+          results.push({ id: file.id, name: file.name, status: 'missing-embedding' });
+          updateJob(jobId, { done: i, currentItem: file.name, message: `No embed ${i}/${listed.files.length}` });
+          continue;
+        }
+        const verdict = classifier.classify(embRow.embedding, prototypes);
+        await db.upsertFileEmbeddingCategory(file.id, { model: embedConfig.model, category: verdict.category, score: verdict.score });
+        classified++;
+        categoryCounts[verdict.category] = (categoryCounts[verdict.category] || 0) + 1;
+        results.push({ id: file.id, name: file.name, status: 'classified', category: verdict.category, score: Number(verdict.score.toFixed(6)) });
+        updateJob(jobId, { done: i, currentItem: file.name, message: `${verdict.category} ${i}/${listed.files.length}: ${file.name}` });
+      } catch (err) {
+        failed++;
+        results.push({ id: file.id, name: file.name, status: 'error', error: err.message });
+        updateJob(jobId, { done: i, currentItem: file.name, message: `Error ${i}/${listed.files.length}: ${err.message}` });
+        if (err.statusCode === 503) throw err;
+      }
+    }
+    const payload = { folderId: listed.folderId, path: listed.path, total: listed.files.length, classified, skipped, failed, missingEmbed, minScore: threshold, model: embedConfig.model, categoryCounts, results };
+    completeJob(jobId, payload, `Done: classified=${classified} skipped=${skipped} failed=${failed}`);
+    return payload;
+  }
+
+  if (type === 'thumbs-folder') {
+    const listed = await db.listImagesInFolder({
+      folderId: params.folderId,
+      folderPath: params.folderPath,
+      limit: Math.min(parseInt(params.limit, 10) || 200, 500)
+    });
+    if (!listed.folderId) throw new Error('Folder not found in folder_tree');
+    const thumbMax = Math.min(1024, Math.max(64, parseInt(params.maxSize, 10) || 400));
+    updateJob(jobId, { total: listed.files.length, message: 'Warming thumbnails…', meta: { folderId: listed.folderId, path: listed.path, maxSize: thumbMax } });
+    const force = !!params.force;
+    let generated = 0, skipped = 0, failed = 0;
+    const results = [];
+    let i = 0;
+    for (const file of listed.files) {
+      if (isJobCancelled(jobId)) throw new Error('Cancelled');
+      i++;
+      const filePath = file.path;
+      try {
+        const [rows] = await db.connection.execute(
+          'SELECT id, name, size, hash, md5, quick_hash FROM scanned_files WHERE id = ?',
+          [file.id]
+        );
+        let row = rows[0];
+        if (!row) { failed++; results.push({ id: file.id, name: file.name, status: 'missing-db' }); updateJob(jobId, { done: i, currentItem: file.name, message: `Missing DB ${i}/${listed.files.length}` }); continue; }
+        if (!row.hash && !row.md5 && !row.quick_hash) {
+          const computed = computeQuickHash(filePath);
+          if (computed?.hash) {
+            await db.connection.execute('UPDATE scanned_files SET quick_hash = ? WHERE id = ? AND quick_hash IS NULL', [computed.hash, row.id]);
+            row = { ...row, quick_hash: computed.hash };
+          }
+        }
+        const existing = await db.getThumbnailForScannedFile(row);
+        if (existing && !force) {
+          skipped++;
+          results.push({ id: file.id, name: file.name, status: 'skipped', bytes: existing.thumb_data?.length || 0 });
+          updateJob(jobId, { done: i, currentItem: file.name, message: `Skip ${i}/${listed.files.length}: ${file.name}` });
+          continue;
+        }
+        const exists = await fs.promises.access(filePath).then(() => true).catch(() => false);
+        if (!exists) { failed++; results.push({ id: file.id, name: file.name, status: 'missing' }); updateJob(jobId, { done: i, currentItem: file.name, message: `Missing ${i}/${listed.files.length}` }); continue; }
+        const buf = await sharp(filePath).resize({ width: thumbMax, height: thumbMax, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 75 }).toBuffer();
+        const hashKey = row.hash || row.md5 || row.quick_hash;
+        if (!hashKey) { failed++; results.push({ id: file.id, name: file.name, status: 'no-hash' }); updateJob(jobId, { done: i, currentItem: file.name, message: `No hash ${i}/${listed.files.length}` }); continue; }
+        await db.saveThumbnail(hashKey, row.size, 'image', buf, 'image/jpeg');
+        generated++;
+        results.push({ id: file.id, name: file.name, status: 'generated', bytes: buf.length });
+        updateJob(jobId, { done: i, currentItem: file.name, message: `Thumb ${i}/${listed.files.length}: ${file.name}` });
+      } catch (err) {
+        failed++;
+        results.push({ id: file.id, name: file.name, status: 'error', error: err.message });
+        updateJob(jobId, { done: i, currentItem: file.name, message: `Error ${i}/${listed.files.length}: ${err.message}` });
+      }
+    }
+    const payload = { folderId: listed.folderId, path: listed.path, total: listed.files.length, generated, skipped, failed, maxSize: thumbMax, results };
+    completeJob(jobId, payload, `Done: generated=${generated} skipped=${skipped} failed=${failed}`);
+    return payload;
+  }
+
+  throw new Error('Unknown job type: ' + type);
+});
+
 // Non-recursive: index images in one selected folder into file_embeddings
 app.post('/api/embed/folder', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
@@ -3164,7 +3376,6 @@ app.post('/api/embed/folder', requireAuthWrapper, requirePhotoPermission, async 
     if (!folderPath && !folderId) {
       return res.status(400).json({ error: 'folderPath or folderId is required' });
     }
-
     const client = new EmbeddingClient(embedConfig);
     const conn = await client.checkConnection();
     if (!conn.ok) {
@@ -3175,73 +3386,14 @@ app.post('/api/embed/folder', requireAuthWrapper, requirePhotoPermission, async 
         hint: 'Start llama-server with EmbeddingGemma 2 GGUF + mmproj and --embeddings (see AGENTS.md)'
       });
     }
-
-    const listed = await db.listImagesInFolder({
-      folderId,
-      folderPath,
-      limit: Math.min(parseInt(limit, 10) || 200, 500)
+    const jobId = createJob({
+      type: 'embed-folder',
+      total: 0,
+      meta: { folderId: folderId || null, folderPath: folderPath || null },
+      params: { folderId, folderPath, limit, force: !!force },
+      createdBy: req.user?.username || req.user?.id || null
     });
-
-    if (!listed.folderId) {
-      return res.status(404).json({ error: 'Folder not found in folder_tree. Refresh/scan first.' });
-    }
-
-    const results = [];
-    let indexed = 0;
-    let skipped = 0;
-    let failed = 0;
-
-    for (const file of listed.files) {
-      const filePath = file.path;
-      try {
-        if (!force) {
-          const existing = await db.getFileEmbedding(file.id, embedConfig.model);
-          if (existing) {
-            skipped++;
-            results.push({ id: file.id, name: file.name, status: 'skipped' });
-            continue;
-          }
-        }
-
-        const exists = await fs.promises.access(filePath).then(() => true).catch(() => false);
-        if (!exists) {
-          failed++;
-          results.push({ id: file.id, name: file.name, status: 'missing' });
-          continue;
-        }
-
-        const emb = await client.embedImage(filePath);
-        await db.upsertFileEmbedding(file.id, {
-          embedding: emb.embedding,
-          model: emb.model,
-          dims: emb.dims,
-          sourceMtime: file.mtime || null
-        });
-        indexed++;
-        results.push({ id: file.id, name: file.name, status: 'indexed', dims: emb.dims });
-      } catch (err) {
-        failed++;
-        results.push({ id: file.id, name: file.name, status: 'error', error: err.message });
-        if (err.statusCode === 503) {
-          return res.status(503).json({
-            error: err.message,
-            embeddingUrl: embedConfig.baseUrl,
-            partial: { indexed, skipped, failed, total: listed.files.length, results }
-          });
-        }
-      }
-    }
-
-    res.json({
-      folderId: listed.folderId,
-      path: listed.path,
-      total: listed.files.length,
-      indexed,
-      skipped,
-      failed,
-      model: embedConfig.model,
-      results
-    });
+    res.status(202).json({ jobId, status: 'queued', type: 'embed-folder', reviewUrl: '/jobs?id=' + jobId });
   } catch (err) {
     console.error('embed/folder error:', err.message);
     res.status(err.statusCode || 500).json({ error: err.message });
@@ -3477,13 +3629,11 @@ app.get('/api/embed/categories', requireAuthWrapper, requirePhotoPermission, asy
 // Classify file_embeddings in one folder via text-prototype cosine similarity
 app.post('/api/embed/classify-folder', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
-    const { folderPath, folderId, force = false, refreshPrototypes = false, minScore } = req.body || {};
+    const { folderPath, folderId, force = false, refreshPrototypes = false, minScore, limit } = req.body || {};
     if (!folderPath && !folderId) {
       return res.status(400).json({ error: 'folderPath or folderId is required' });
     }
-
-    const threshold = Number.isFinite(Number(minScore)) ? Number(minScore) : embedClassifyMinScore;
-    const classifier = new EmbedClassifier({ embedConfig, minScore: threshold });
+    const classifier = new EmbedClassifier({ embedConfig, minScore: embedClassifyMinScore });
     const conn = await classifier.client.checkConnection();
     if (!conn.ok) {
       return res.status(503).json({
@@ -3493,91 +3643,14 @@ app.post('/api/embed/classify-folder', requireAuthWrapper, requirePhotoPermissio
         hint: 'Start llama-server EmbeddingGemma with --embeddings (see AGENTS.md)'
       });
     }
-
-    const prototypes = await classifier.ensurePrototypes(db, { forceRefresh: !!refreshPrototypes });
-    const listed = await db.listImagesInFolder({
-      folderId,
-      folderPath,
-      limit: Math.min(parseInt(req.body?.limit, 10) || 500, 2000)
+    const jobId = createJob({
+      type: 'embed-classify-folder',
+      total: 0,
+      meta: { folderId: folderId || null, folderPath: folderPath || null },
+      params: { folderId, folderPath, force: !!force, refreshPrototypes: !!refreshPrototypes, minScore, limit },
+      createdBy: req.user?.username || req.user?.id || null
     });
-    if (!listed.folderId) {
-      return res.status(404).json({ error: 'Folder not found in folder_tree. Refresh/scan first.' });
-    }
-
-    const results = [];
-    let classified = 0;
-    let skipped = 0;
-    let failed = 0;
-    let missingEmbed = 0;
-    const categoryCounts = {};
-
-    for (const file of listed.files) {
-      try {
-        if (!force) {
-          const existing = await db.getFileEmbeddingCategory(file.id, embedConfig.model);
-          if (existing) {
-            skipped++;
-            categoryCounts[existing.category] = (categoryCounts[existing.category] || 0) + 1;
-            results.push({
-              id: file.id,
-              name: file.name,
-              status: 'skipped',
-              category: existing.category,
-              score: Number(existing.score)
-            });
-            continue;
-          }
-        }
-
-        const embRow = await db.getFileEmbedding(file.id, embedConfig.model);
-        if (!embRow?.embedding?.length) {
-          missingEmbed++;
-          failed++;
-          results.push({ id: file.id, name: file.name, status: 'missing-embedding' });
-          continue;
-        }
-
-        const verdict = classifier.classify(embRow.embedding, prototypes);
-        await db.upsertFileEmbeddingCategory(file.id, {
-          model: embedConfig.model,
-          category: verdict.category,
-          score: verdict.score
-        });
-        classified++;
-        categoryCounts[verdict.category] = (categoryCounts[verdict.category] || 0) + 1;
-        results.push({
-          id: file.id,
-          name: file.name,
-          status: 'classified',
-          category: verdict.category,
-          score: Number(verdict.score.toFixed(6))
-        });
-      } catch (err) {
-        failed++;
-        results.push({ id: file.id, name: file.name, status: 'error', error: err.message });
-        if (err.statusCode === 503) {
-          return res.status(503).json({
-            error: err.message,
-            embeddingUrl: embedConfig.baseUrl,
-            partial: { classified, skipped, failed, missingEmbed, total: listed.files.length, categoryCounts, results }
-          });
-        }
-      }
-    }
-
-    res.json({
-      folderId: listed.folderId,
-      path: listed.path,
-      total: listed.files.length,
-      classified,
-      skipped,
-      failed,
-      missingEmbed,
-      minScore: threshold,
-      model: embedConfig.model,
-      categoryCounts,
-      results
-    });
+    res.status(202).json({ jobId, status: 'queued', type: 'embed-classify-folder', reviewUrl: '/jobs?id=' + jobId });
   } catch (err) {
     console.error('embed/classify-folder error:', err.message);
     res.status(err.statusCode || 500).json({ error: err.message });
@@ -3592,83 +3665,14 @@ app.post('/api/thumbs/folder', requireAuthWrapper, requirePhotoPermission, async
     if (!folderPath && !folderId) {
       return res.status(400).json({ error: 'folderPath or folderId is required' });
     }
-    const listed = await db.listImagesInFolder({
-      folderId,
-      folderPath,
-      limit: Math.min(parseInt(limit, 10) || 200, 500)
+    const jobId = createJob({
+      type: 'thumbs-folder',
+      total: 0,
+      meta: { folderId: folderId || null, folderPath: folderPath || null },
+      params: { folderId, folderPath, limit, force: !!force, maxSize },
+      createdBy: req.user?.username || req.user?.id || null
     });
-    if (!listed.folderId) {
-      return res.status(404).json({ error: 'Folder not found in folder_tree' });
-    }
-
-    const thumbMax = Math.min(1024, Math.max(64, parseInt(maxSize, 10) || 400));
-    let generated = 0, skipped = 0, failed = 0;
-    const results = [];
-
-    for (const file of listed.files) {
-      const filePath = file.path;
-      try {
-        const [rows] = await db.connection.execute(
-          'SELECT id, name, size, hash, md5, quick_hash FROM scanned_files WHERE id = ?',
-          [file.id]
-        );
-        let row = rows[0];
-        if (!row) { failed++; results.push({ id: file.id, name: file.name, status: 'missing-db' }); continue; }
-
-        if (!row.hash && !row.md5 && !row.quick_hash) {
-          const computed = computeQuickHash(filePath);
-          if (computed?.hash) {
-            await db.connection.execute(
-              'UPDATE scanned_files SET quick_hash = ? WHERE id = ? AND quick_hash IS NULL',
-              [computed.hash, row.id]
-            );
-            row = { ...row, quick_hash: computed.hash };
-          }
-        }
-
-        const existing = await db.getThumbnailForScannedFile(row);
-        if (existing && !force) {
-          skipped++;
-          results.push({ id: file.id, name: file.name, status: 'skipped', bytes: existing.thumb_data?.length || 0 });
-          continue;
-        }
-
-        const exists = await fs.promises.access(filePath).then(() => true).catch(() => false);
-        if (!exists) {
-          failed++;
-          results.push({ id: file.id, name: file.name, status: 'missing' });
-          continue;
-        }
-
-        const buf = await sharp(filePath)
-          .resize({ width: thumbMax, height: thumbMax, fit: 'inside', withoutEnlargement: true })
-          .jpeg({ quality: 75 })
-          .toBuffer();
-        const hashKey = row.hash || row.md5 || row.quick_hash;
-        if (!hashKey) {
-          failed++;
-          results.push({ id: file.id, name: file.name, status: 'no-hash' });
-          continue;
-        }
-        await db.saveThumbnail(hashKey, row.size, 'image', buf, 'image/jpeg');
-        generated++;
-        results.push({ id: file.id, name: file.name, status: 'generated', bytes: buf.length });
-      } catch (err) {
-        failed++;
-        results.push({ id: file.id, name: file.name, status: 'error', error: err.message });
-      }
-    }
-
-    res.json({
-      folderId: listed.folderId,
-      path: listed.path,
-      total: listed.files.length,
-      generated,
-      skipped,
-      failed,
-      maxSize: thumbMax,
-      results
-    });
+    res.status(202).json({ jobId, status: 'queued', type: 'thumbs-folder', reviewUrl: '/jobs?id=' + jobId });
   } catch (err) {
     console.error('thumbs/folder error:', err.message);
     res.status(500).json({ error: err.message });
