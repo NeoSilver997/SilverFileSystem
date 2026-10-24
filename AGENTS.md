@@ -58,7 +58,8 @@
 - **Semantic image index:** `POST /api/embed/folder` indexes images in one folder (non-recursive) into `file_embeddings` (db_version 20+). UI: `/tree` → **Embed folder** or folder context menu **Embed Index**.
 - **Describe:** `POST /api/vlm/describe` runs local VLM and writes `photo_classifications`. UI: image context menu **Describe → DB**.
 - **Ask:** `POST /api/vlm/ask` free-form chat about one image (not auto-saved). UI: image context menu **Ask VLM**.
-- Env: `EMBEDDING_URL` (default `http://127.0.0.1:12333`), `EMBEDDING_MODEL`, `LMSTUDIO_URL` (default `http://localhost:12355`), `VLM_MODEL`.
+- Env: `EMBEDDING_URL` (default `http://127.0.0.1:12333`), `EMBEDDING_MODEL`; VLM via Strata OpenAI API: `LMSTUDIO_URL` / `VLM_URL` (default `http://127.0.0.1:8080`), `VLM_MODEL` (loaded Strata vision id), `VLM_API_KEY_FILE` (e.g. `C:\AI_Server\Coding\Strata\cloudflare\strata-api-key.txt`) or `VLM_API_KEY`, `VLM_IMAGE_MODE=openai` (Strata) or `lmstudio` (legacy).
+- Do not commit API keys. Prefer `VLM_API_KEY_FILE` pointing at Strata's key file.
 - Run EmbeddingGemma server (DigUp-style, llama.cpp):
   ```bash
   llama-server -m embeddinggemma-2-Q8_0.gguf --mmproj mmproj-embeddinggemma-2-Q8_0.gguf --embeddings --port 12333
