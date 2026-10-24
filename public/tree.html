@@ -131,6 +131,7 @@
                 <input type="checkbox" id="recursiveCb" style="cursor:pointer;"> Sub
             </label>
             <button onclick="checkDeleted()" id="checkDelBtn" style="display:none; padding:0.4rem 0.8rem; background:rgba(231,76,60,0.3); border:1px solid rgba(231,76,60,0.5); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">🗑️ Check Deleted</button>
+            <button onclick="embedCurrentFolder()" id="embedFolderBtn" title="Index images in this folder with EmbeddingGemma (non-recursive)" style="display:none; padding:0.4rem 0.8rem; background:rgba(155,89,182,0.35); border:1px solid rgba(155,89,182,0.6); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">🧬 Embed folder</button>
             <button onclick="rebuildTree()" id="rebuildBtn" style="padding:0.4rem 0.8rem; background:rgba(102,126,234,0.3); border:1px solid rgba(102,126,234,0.5); color:white; border-radius:6px; cursor:pointer; font-size:0.85rem;">🔧 Rebuild</button>
         </div>
     </div>
@@ -143,9 +144,12 @@
     <div id="contextMenu" class="context-menu">
         <div class="context-menu-item" onclick="contextToggleHidden()">👁️ Toggle Hidden</div>
         <div class="context-menu-item" onclick="contextEditRemark()">✏️ Edit Remark</div>
+        <div class="context-menu-item" onclick="contextEmbedFolder()">🧬 Embed Index (EmbeddingGemma)</div>
         <div class="context-menu-item" onclick="contextSetRelated()">🔗 Set Related Folder</div>
     </div>
     <div id="fileContextMenu" class="context-menu">
+        <div class="context-menu-item" id="ctxDescribeBtn" onclick="contextDescribeImage()" style="display:none;">📝 Describe → DB</div>
+        <div class="context-menu-item" id="ctxAskBtn" onclick="contextAskImage()" style="display:none;">💬 Ask VLM</div>
         <div class="context-menu-item" onclick="contextCopyPath()">📋 Copy Path</div>
         <div class="context-menu-item" onclick="contextOpenFile()">📂 Open File</div>
         <div class="context-menu-item" style="color:#e74c3c;" onclick="contextDeleteFile()">🗑️ Delete File</div>
@@ -162,7 +166,30 @@
         </div>
     </div>
 
-    <script src="/auth.js"></script>
+    
+    <div id="describeModal" class="modal-overlay" onclick="if(event.target===this)closeDescribeModal()">
+        <div class="modal-box" style="width:560px; max-height:80vh; overflow:auto;">
+            <h3 id="describeTitle">Describe</h3>
+            <pre id="describeBody" style="white-space:pre-wrap; background:#111; padding:0.75rem; border-radius:8px; font-size:0.85rem; max-height:50vh; overflow:auto;"></pre>
+            <div class="btn-row">
+                <button onclick="closeDescribeModal()">Close</button>
+            </div>
+        </div>
+    </div>
+    <div id="askModal" class="modal-overlay" onclick="if(event.target===this)closeAskModal()">
+        <div class="modal-box" style="width:560px; max-height:85vh; display:flex; flex-direction:column;">
+            <h3 id="askTitle">Ask about image</h3>
+            <div id="askChat" style="flex:1; min-height:180px; max-height:45vh; overflow:auto; background:#111; padding:0.75rem; border-radius:8px; font-size:0.85rem; margin-bottom:0.75rem;"></div>
+            <label>Question</label>
+            <textarea id="askQuestion" placeholder="What is in this image?"></textarea>
+            <div class="btn-row">
+                <button onclick="closeAskModal()">Close</button>
+                <button class="primary" onclick="sendAskQuestion()">Ask</button>
+            </div>
+        </div>
+    </div>
+
+<script src="/auth.js"></script>
     <script>
         let currentPath = '';
         let currentId = null;
@@ -198,12 +225,16 @@
             if (currentPath) {
                 backBtn.style.display = '';
                 refreshBtn.style.display = '';
+            const embedBtn = document.getElementById('embedFolderBtn');
+            if (embedBtn) embedBtn.style.display = '';
                 if (reloadBtn) reloadBtn.style.display = '';
                 checkDelBtn.style.display = '';
                 recursiveLabel.style.display = '';
             } else {
                 backBtn.style.display = 'none';
                 refreshBtn.style.display = 'none';
+            const embedBtn = document.getElementById('embedFolderBtn');
+            if (embedBtn) embedBtn.style.display = 'none';
                 if (reloadBtn) reloadBtn.style.display = 'none';
                 checkDelBtn.style.display = 'none';
                 recursiveLabel.style.display = 'none';
@@ -577,6 +608,11 @@
                     const menu = document.getElementById('fileContextMenu');
                     menu.style.left = e.pageX + 'px';
                     menu.style.top = e.pageY + 'px';
+                    const showImg = isImageItem(fileItem);
+                    const dBtn = document.getElementById('ctxDescribeBtn');
+                    const aBtn = document.getElementById('ctxAskBtn');
+                    if (dBtn) dBtn.style.display = showImg ? '' : 'none';
+                    if (aBtn) aBtn.style.display = showImg ? '' : 'none';
                     menu.classList.add('show');
                 }
             }
@@ -673,6 +709,141 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ related_folder_id: parseInt(targetId) || null })
                 }).then(() => loadTree(currentPath));
+            }
+        }
+
+
+        const IMAGE_EXTS = ['jpg','jpeg','png','gif','bmp','webp','heic','avif','tif','tiff'];
+        let askTargetPath = null;
+        let askHistory = [];
+
+        function isImageItem(item) {
+            if (!item || item.isFolder) return false;
+            const ext = (item.extension || (item.name || '').split('.').pop() || '').toLowerCase().replace(/^\./,'');
+            return IMAGE_EXTS.includes(ext);
+        }
+
+        function filePathOf(item) {
+            if (!item) return null;
+            return item.path || (currentPath ? (currentPath + '\\' + item.name) : item.name);
+        }
+
+        async function embedFolder(folderPath, folderId) {
+            if (!folderPath && !folderId) return;
+            if (!confirm('Index images in this folder with EmbeddingGemma?\n(Non-recursive; already-indexed files are skipped)\n\n' + (folderPath || ('id=' + folderId)))) return;
+            showLoading();
+            try {
+                const res = await authFetch('/api/embed/folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folderPath, folderId, limit: 200 })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || data.detail || ('HTTP ' + res.status));
+                showToast(`Embed: ${data.indexed} new, ${data.skipped} skipped, ${data.failed} failed (of ${data.total})`);
+            } catch (err) {
+                alert('Embed failed: ' + err.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function embedCurrentFolder() {
+            if (!currentPath && !currentId) {
+                alert('Open a folder first');
+                return;
+            }
+            embedFolder(currentPath || null, currentId || null);
+        }
+
+        function contextEmbedFolder() {
+            if (!contextItem || !contextItem.isFolder) return;
+            embedFolder(contextItem.path, contextItem.id);
+        }
+
+        async function contextDescribeImage() {
+            if (!contextItem || contextItem.isFolder) return;
+            if (!isImageItem(contextItem)) {
+                alert('Select an image file');
+                return;
+            }
+            const filePath = filePathOf(contextItem);
+            showLoading();
+            try {
+                const res = await authFetch('/api/vlm/describe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filePath, mode: 'fast' })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+                document.getElementById('describeTitle').textContent = 'Describe: ' + (contextItem.name || '');
+                document.getElementById('describeBody').textContent = JSON.stringify(data.classification, null, 2);
+                document.getElementById('describeModal').classList.add('show');
+                showToast('Saved to photo_classifications');
+            } catch (err) {
+                alert('Describe failed: ' + err.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function closeDescribeModal() {
+            document.getElementById('describeModal').classList.remove('show');
+        }
+
+        function contextAskImage() {
+            if (!contextItem || contextItem.isFolder) return;
+            if (!isImageItem(contextItem)) {
+                alert('Select an image file');
+                return;
+            }
+            askTargetPath = filePathOf(contextItem);
+            askHistory = [];
+            document.getElementById('askTitle').textContent = 'Ask: ' + (contextItem.name || '');
+            document.getElementById('askChat').innerHTML = '<div style="opacity:0.5;">Ask anything about this image.</div>';
+            document.getElementById('askQuestion').value = '';
+            document.getElementById('askModal').classList.add('show');
+        }
+
+        function closeAskModal() {
+            document.getElementById('askModal').classList.remove('show');
+            askTargetPath = null;
+            askHistory = [];
+        }
+
+        function appendAskChat(role, text) {
+            const box = document.getElementById('askChat');
+            const div = document.createElement('div');
+            div.style.cssText = 'margin-bottom:0.6rem; padding:0.4rem 0.5rem; border-radius:6px; background:' + (role === 'user' ? '#1e2a44' : '#1a2e1a');
+            div.innerHTML = '<strong style="opacity:0.7;">' + (role === 'user' ? 'You' : 'VLM') + ':</strong> ' +
+                String(text).replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        async function sendAskQuestion() {
+            if (!askTargetPath) return;
+            const q = document.getElementById('askQuestion').value.trim();
+            if (!q) return;
+            document.getElementById('askQuestion').value = '';
+            appendAskChat('user', q);
+            showLoading();
+            try {
+                const res = await authFetch('/api/vlm/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filePath: askTargetPath, question: q, history: askHistory })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+                appendAskChat('assistant', data.answer || '');
+                askHistory.push({ role: 'user', content: q });
+                askHistory.push({ role: 'assistant', content: data.answer || '' });
+            } catch (err) {
+                appendAskChat('assistant', 'Error: ' + err.message);
+            } finally {
+                hideLoading();
             }
         }
 

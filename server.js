@@ -2913,12 +2913,20 @@ app.delete('/api/photos/:id', requireAuthWrapper, requirePhotoPermission, async 
 import { VLMClient } from './lib/vlm-client.js';
 import { PhotoClassifier } from './lib/photo-classifier.js';
 import { FileWatcher } from './lib/file-watcher.js';
+import { EmbeddingClient } from './lib/embedding-client.js';
 
 const vlmConfig = {
   lmstudioUrl: process.env.LMSTUDIO_URL || 'http://localhost:12355',
   model: process.env.VLM_MODEL || 'google/gemma-4-12b-qat',
   timeout: parseInt(process.env.VLM_TIMEOUT) || 180000
 };
+const embedConfig = {
+  baseUrl: process.env.EMBEDDING_URL || 'http://127.0.0.1:8080',
+  model: process.env.EMBEDDING_MODEL || 'embeddinggemma-2',
+  timeout: parseInt(process.env.EMBEDDING_TIMEOUT) || 120000,
+  dims: parseInt(process.env.EMBEDDING_DIMS) || 768
+};
+
 
 let fileWatcher = null;
 
@@ -3113,6 +3121,209 @@ app.post('/api/vlm/cleanup', requireAuthWrapper, async (req, res) => {
     const result = await classifier.cleanupExpiredData(expiryDays || 90);
     res.json({ status: 'completed', ...result });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// === EmbeddingGemma semantic index + VLM Describe/Ask ===
+
+app.get('/api/embed/status', requireAuthWrapper, async (req, res) => {
+  try {
+    const client = new EmbeddingClient(embedConfig);
+    const status = await client.checkConnection();
+    const count = await db.countFileEmbeddings(embedConfig.model).catch(() => 0);
+    res.json({
+      ...status,
+      model: embedConfig.model,
+      embeddingUrl: embedConfig.baseUrl,
+      indexedCount: count
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Non-recursive: index images in one selected folder into file_embeddings
+app.post('/api/embed/folder', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { folderPath, folderId, limit = 200, force = false } = req.body || {};
+    if (!folderPath && !folderId) {
+      return res.status(400).json({ error: 'folderPath or folderId is required' });
+    }
+
+    const client = new EmbeddingClient(embedConfig);
+    const conn = await client.checkConnection();
+    if (!conn.ok) {
+      return res.status(503).json({
+        error: 'Embedding server unavailable',
+        detail: conn.error || 'Cannot reach EMBEDDING_URL',
+        embeddingUrl: embedConfig.baseUrl,
+        hint: 'Start llama-server with EmbeddingGemma 2 GGUF + mmproj and --embeddings (see AGENTS.md)'
+      });
+    }
+
+    const listed = await db.listImagesInFolder({
+      folderId,
+      folderPath,
+      limit: Math.min(parseInt(limit, 10) || 200, 500)
+    });
+
+    if (!listed.folderId) {
+      return res.status(404).json({ error: 'Folder not found in folder_tree. Refresh/scan first.' });
+    }
+
+    const results = [];
+    let indexed = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    for (const file of listed.files) {
+      const filePath = file.path;
+      try {
+        if (!force) {
+          const existing = await db.getFileEmbedding(file.id, embedConfig.model);
+          if (existing) {
+            skipped++;
+            results.push({ id: file.id, name: file.name, status: 'skipped' });
+            continue;
+          }
+        }
+
+        const exists = await fs.promises.access(filePath).then(() => true).catch(() => false);
+        if (!exists) {
+          failed++;
+          results.push({ id: file.id, name: file.name, status: 'missing' });
+          continue;
+        }
+
+        const emb = await client.embedImage(filePath);
+        await db.upsertFileEmbedding(file.id, {
+          embedding: emb.embedding,
+          model: emb.model,
+          dims: emb.dims,
+          sourceMtime: file.mtime || null
+        });
+        indexed++;
+        results.push({ id: file.id, name: file.name, status: 'indexed', dims: emb.dims });
+      } catch (err) {
+        failed++;
+        results.push({ id: file.id, name: file.name, status: 'error', error: err.message });
+        if (err.statusCode === 503) {
+          return res.status(503).json({
+            error: err.message,
+            embeddingUrl: embedConfig.baseUrl,
+            partial: { indexed, skipped, failed, total: listed.files.length, results }
+          });
+        }
+      }
+    }
+
+    res.json({
+      folderId: listed.folderId,
+      path: listed.path,
+      total: listed.files.length,
+      indexed,
+      skipped,
+      failed,
+      model: embedConfig.model,
+      results
+    });
+  } catch (err) {
+    console.error('embed/folder error:', err.message);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+// Describe selected image via VLM and write photo_classifications
+app.post('/api/vlm/describe', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { filePath, mode = 'fast' } = req.body || {};
+    if (!filePath) return res.status(400).json({ error: 'filePath is required' });
+
+    const exists = await fs.promises.access(filePath).then(() => true).catch(() => false);
+    if (!exists) return res.status(404).json({ error: 'File not found on disk' });
+
+    const scanned = await db.getScannedFileByPath(filePath);
+    if (!scanned) {
+      return res.status(404).json({
+        error: 'File not in scanned_files DB. Refresh/scan this folder first.'
+      });
+    }
+
+    const client = new VLMClient(vlmConfig);
+    const connected = await client.checkConnection();
+    if (!connected) {
+      return res.status(503).json({
+        error: 'VLM server unavailable',
+        lmstudioUrl: vlmConfig.lmstudioUrl,
+        model: vlmConfig.model
+      });
+    }
+
+    const vlmResult = await client.classifyImage(filePath, mode === 'detail' ? 'detail' : 'fast');
+    if (!vlmResult.success) {
+      return res.status(502).json({ error: vlmResult.error || 'VLM classify failed' });
+    }
+
+    await db.replacePhotoClassification(scanned.id, vlmResult.classification, {
+      originalPath: filePath,
+      destinationPath: null,
+      compressed: false,
+      originalSize: vlmResult.imageInfo?.originalSize || scanned.size,
+      finalSize: null,
+      model: vlmResult.model,
+      rawResponse: vlmResult.rawResponse
+    });
+
+    res.json({
+      success: true,
+      fileId: scanned.id,
+      path: filePath,
+      classification: vlmResult.classification,
+      model: vlmResult.model,
+      mode: vlmResult.mode,
+      saved: true
+    });
+  } catch (err) {
+    console.error('vlm/describe error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Ask chat about a selected image (optional history); does not auto-save
+app.post('/api/vlm/ask', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { filePath, question, history = [] } = req.body || {};
+    if (!filePath) return res.status(400).json({ error: 'filePath is required' });
+    if (!question) return res.status(400).json({ error: 'question is required' });
+
+    const exists = await fs.promises.access(filePath).then(() => true).catch(() => false);
+    if (!exists) return res.status(404).json({ error: 'File not found on disk' });
+
+    const client = new VLMClient(vlmConfig);
+    const connected = await client.checkConnection();
+    if (!connected) {
+      return res.status(503).json({
+        error: 'VLM server unavailable',
+        lmstudioUrl: vlmConfig.lmstudioUrl,
+        model: vlmConfig.model
+      });
+    }
+
+    const result = await client.askAboutImage(filePath, question, history);
+    if (!result.success) {
+      return res.status(502).json({ error: result.error || 'VLM ask failed' });
+    }
+
+    res.json({
+      success: true,
+      answer: result.answer,
+      model: result.model,
+      path: filePath
+    });
+  } catch (err) {
+    console.error('vlm/ask error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
