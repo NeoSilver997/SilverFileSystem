@@ -10,9 +10,18 @@
         "portrait",
         "one person",
         "alone",
-        "close-up face",
-        "single person photo"
-      ]
+        "close-up human face",
+        "single person photo",
+        "child",
+        "kid",
+        "daughter",
+        "toddler",
+        "young girl",
+        "baby",
+        "human",
+        "people face"
+      ],
+      "prompt": "task: image classification | query: 單人肖像 selfie portrait of one human person child kid daughter toddler young girl baby close-up human face single person photo people not an animal"
     },
     {
       "label": "人物合照",
@@ -24,8 +33,12 @@
         "friends",
         "several people",
         "crowd",
-        "gathering"
-      ]
+        "gathering",
+        "family with children",
+        "parents and kids",
+        "people together"
+      ],
+      "prompt": "task: image classification | query: 多人合照群相 group photo family friends several people together parents and children kids crowd gathering human people not a cat or dog"
     },
     {
       "label": "風景",
@@ -59,26 +72,30 @@
     {
       "label": "貓",
       "keywords": [
-        "貓",
-        "貓咪",
-        "小貓",
-        "cat",
-        "kitten",
-        "feline",
-        "kitty"
-      ]
+        "家貓",
+        "貓科動物",
+        "domestic cat animal",
+        "feline pet with whiskers",
+        "cat paws and pointed ears",
+        "kitten animal",
+        "furry four-legged cat",
+        "real cat not a person"
+      ],
+      "prompt": "task: image classification | query: a real domestic cat animal feline pet with whiskers fur pointed ears and paws four-legged kitten cat photo animal only not a human child or person"
     },
     {
       "label": "狗",
       "keywords": [
-        "狗",
-        "小狗",
-        "犬",
-        "dog",
-        "puppy",
-        "canine",
-        "hound"
-      ]
+        "家犬",
+        "犬科動物",
+        "domestic dog animal",
+        "canine pet",
+        "puppy animal",
+        "dog with snout and paws",
+        "four-legged dog",
+        "real dog not a person"
+      ],
+      "prompt": "task: image classification | query: a real domestic dog animal canine pet puppy with snout fur and paws four-legged dog photo animal only not a human child or person"
     },
     {
       "label": "車",
@@ -219,5 +236,19 @@
     }
   ],
   "dualMinScore": 0.5,
-  "maxTags": 2
+  "maxTags": 2,
+  "conflictRules": [
+    {
+      "preferLabels": [
+        "人物單人",
+        "人物合照"
+      ],
+      "dropLabels": [
+        "貓",
+        "狗"
+      ],
+      "minPreferScore": 0.5,
+      "note": "When person and cat/dog both score high, keep person and drop animal tag (cute-kid false positives)."
+    }
+  ]
 }
