@@ -109,9 +109,12 @@
              extras.map(e => '<span class="badge miss">' + e.label + '</span> <span class="kw">' + ((e.keywords||[]).slice(0,6).join(' · ')) + '</span>').join('<br>') +
              '</div>')
           : '';
+        const dualHint = (data.dualMinScore != null)
+          ? (' Dual tag: if top1 & top2 both ≥ ' + data.dualMinScore + ' (maxTags=' + (data.maxTags ?? 2) + ').')
+          : '';
         const pathHint = data.configPath
-          ? ('Edit keywords in <code>' + data.configPath + '</code> then Force reclassify (or GET ?refresh=1). Env: <code>EMBED_CATEGORIES_PATH</code>')
-          : 'Config: config/embed-categories.json';
+          ? ('Edit keywords in <code>' + data.configPath + '</code> then Force reclassify (or GET ?refresh=1). Env: <code>EMBED_CATEGORIES_PATH</code>.' + dualHint)
+          : ('Config: config/embed-categories.json.' + dualHint);
         box.innerHTML = '<h2>分類類型 / Categories</h2>' + lines.join('') + extraHtml + '<div style="margin-top:0.5rem">' + pathHint + '</div>';
       } catch (err) {
         box.innerHTML = 'Category list unavailable: ' + err.message + ' · Edit <code>config/embed-categories.json</code>';
@@ -180,7 +183,9 @@
       const cat = (document.getElementById('categoryFilter') || {}).value || '';
       document.querySelectorAll('#tbody tr').forEach(tr => {
         const rowCat = tr.getAttribute('data-category') || '';
-        tr.classList.toggle('hidden', !!(cat && rowCat !== cat));
+        const tags = (tr.getAttribute('data-tags') || '').split('|').filter(Boolean);
+        const hit = !cat || rowCat === cat || tags.includes(cat);
+        tr.classList.toggle('hidden', !hit);
       });
     }
     function renderRows(data) {
@@ -192,18 +197,27 @@
       for (const row of lastRows) {
         const emb = row.embedding;
         const tr = document.createElement('tr');
+        const tagsArr = Array.isArray(row.tags) && row.tags.length
+          ? row.tags
+          : (row.category ? [{ label: row.category, score: row.categoryScore }].concat(
+              row.category2 ? [{ label: row.category2, score: row.categoryScore2 }] : []
+            ) : []);
         tr.setAttribute('data-category', row.category || '');
+        tr.setAttribute('data-tags', tagsArr.map(x => x.label).filter(Boolean).join('|'));
         const thumbUrl = '/images/' + row.fileId + '/thumb';
-        const catHtml = row.category
-          ? '<span class="badge cat">' + row.category + '</span>'
+        const catHtml = tagsArr.length
+          ? tagsArr.map(tg => '<span class="badge cat">' + tg.label + '</span>').join(' ')
           : '<span class="badge miss">unclassified</span>';
+        const scoreHtml = tagsArr.length
+          ? tagsArr.map(tg => fmtScore(tg.score)).join(' / ')
+          : fmtScore(row.categoryScore);
         tr.innerHTML =
           '<td><img class="thumb" src="' + thumbUrl + '" alt="" loading="lazy" onerror="this.style.opacity=0.2" /></td>' +
           '<td><div>' + (row.name || '') + '</div><div class="path">id=' + row.fileId + '</div></td>' +
           '<td>' + (emb ? emb.model : '<span class="badge miss">missing</span>') + '</td>' +
           '<td>' + (emb ? emb.dims : '-') + '</td>' +
           '<td>' + catHtml + '</td>' +
-          '<td>' + fmtScore(row.categoryScore) + '</td>' +
+          '<td>' + scoreHtml + '</td>' +
           '<td>' + (emb ? fmtTime(emb.updatedAt) : '-') + '</td>' +
           '<td>' + (row.hasThumbnail ? '<span class="badge ok">yes</span>' : '<span class="badge miss">no</span>') + '</td>' +
           '<td>' + fmtBytes(row.size) + '</td>';

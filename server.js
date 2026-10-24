@@ -3302,8 +3302,20 @@ setJobRunner(async (job) => {
           const existing = await db.getFileEmbeddingCategory(file.id, embedConfig.model);
           if (existing) {
             skipped++;
-            categoryCounts[existing.category] = (categoryCounts[existing.category] || 0) + 1;
-            results.push({ id: file.id, name: file.name, status: 'skipped', category: existing.category, score: Number(existing.score) });
+            const existingTags = db.parseEmbeddingCategoryTags(existing);
+            for (const tg of (existingTags.length ? existingTags : [{ label: existing.category }])) {
+              if (tg.label) categoryCounts[tg.label] = (categoryCounts[tg.label] || 0) + 1;
+            }
+            results.push({
+              id: file.id,
+              name: file.name,
+              status: 'skipped',
+              category: existing.category,
+              score: Number(existing.score),
+              category2: existing.category2 || null,
+              score2: existing.score2 != null ? Number(existing.score2) : null,
+              tags: existingTags
+            });
             updateJob(jobId, { done: i, currentItem: file.name, message: `Skip ${i}/${listed.files.length}: ${file.name}` });
             continue;
           }
@@ -3316,11 +3328,30 @@ setJobRunner(async (job) => {
           continue;
         }
         const verdict = classifier.classify(embRow.embedding, prototypes);
-        await db.upsertFileEmbeddingCategory(file.id, { model: embedConfig.model, category: verdict.category, score: verdict.score });
+        await db.upsertFileEmbeddingCategory(file.id, {
+          model: embedConfig.model,
+          category: verdict.category,
+          score: verdict.score,
+          category2: verdict.category2,
+          score2: verdict.score2,
+          tags: verdict.tags
+        });
         classified++;
-        categoryCounts[verdict.category] = (categoryCounts[verdict.category] || 0) + 1;
-        results.push({ id: file.id, name: file.name, status: 'classified', category: verdict.category, score: Number(verdict.score.toFixed(6)) });
-        updateJob(jobId, { done: i, currentItem: file.name, message: `${verdict.category} ${i}/${listed.files.length}: ${file.name}` });
+        for (const tg of (verdict.tags || [{ label: verdict.category }])) {
+          if (tg.label) categoryCounts[tg.label] = (categoryCounts[tg.label] || 0) + 1;
+        }
+        const tagLabel = (verdict.tags || []).map((x) => x.label).filter(Boolean).join('+') || verdict.category;
+        results.push({
+          id: file.id,
+          name: file.name,
+          status: 'classified',
+          category: verdict.category,
+          score: Number(verdict.score.toFixed(6)),
+          category2: verdict.category2 || null,
+          score2: verdict.score2 != null ? Number(Number(verdict.score2).toFixed(6)) : null,
+          tags: verdict.tags
+        });
+        updateJob(jobId, { done: i, currentItem: file.name, message: `${tagLabel} ${i}/${listed.files.length}: ${file.name}` });
       } catch (err) {
         failed++;
         results.push({ id: file.id, name: file.name, status: 'error', error: err.message });
@@ -3637,6 +3668,8 @@ app.get('/api/embed/categories', requireAuthWrapper, requirePhotoPermission, asy
     res.json({
       model,
       minScore: classifier.minScore,
+      dualMinScore: classifier.dualMinScore,
+      maxTags: classifier.maxTags,
       otherLabel: meta.otherLabel || EMBED_CATEGORY_OTHER,
       configPath: meta.path,
       configExists: meta.exists,

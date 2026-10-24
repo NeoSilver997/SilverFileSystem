@@ -217,5 +217,7 @@
       ],
       "note": "Copy into categories to enable"
     }
-  ]
+  ],
+  "dualMinScore": 0.5,
+  "maxTags": 2
 }
