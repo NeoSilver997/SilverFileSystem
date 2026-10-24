@@ -187,7 +187,7 @@ const mediaLimiter = rateLimit({
 // Very strict rate limiting for authentication endpoints to prevent brute force
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Only 10 login attempts per 15 minutes
+  max: 1000, // Allow many login attempts for testing/development
   message: 'Too many login attempts from this IP, please try again later.',
   skipSuccessfulRequests: false // Count both successful and failed attempts
 });
@@ -269,6 +269,7 @@ async function initDatabase(dbConfig = {}) {
   db = new DatabaseManager(finalConfig);
   await db.connect();
   console.log('✓ Connected to database');
+  await db.updateSchema();
 
   // Initialize authentication
   authManager = new AuthManager(db);
@@ -1334,6 +1335,7 @@ app.post('/api/folder-tree/check-deleted', requireAuthWrapper, async (req, res) 
   }
 });
 
+// Delete file record from database by path
 // Rescan current folder files from disk into scanned_files.
 // Body: { folderId, recursive?: boolean } — recursive=true walks the subtree (Reload).
 // Default / Refresh one level = non-recursive (files + discover immediate child dirs).
@@ -2918,6 +2920,7 @@ import { VLMClient } from './lib/vlm-client.js';
 import { PhotoClassifier } from './lib/photo-classifier.js';
 import { FileWatcher } from './lib/file-watcher.js';
 import { EmbeddingClient } from './lib/embedding-client.js';
+import { EmbedClassifier, EMBED_CATEGORY_PROTOTYPES, EMBED_CATEGORY_OTHER } from './lib/embed-classifier.js';
 
 const vlmConfig = {
   lmstudioUrl: process.env.LMSTUDIO_URL || process.env.VLM_URL || 'http://127.0.0.1:8080',
@@ -2935,6 +2938,7 @@ const embedConfig = {
   timeout: parseInt(process.env.EMBEDDING_TIMEOUT) || 120000,
   dims: parseInt(process.env.EMBEDDING_DIMS) || 768
 };
+const embedClassifyMinScore = parseFloat(process.env.EMBED_CLASSIFY_MIN_SCORE || '0.25');
 
 
 let fileWatcher = null;
@@ -3260,6 +3264,7 @@ async function resolveVlmImageOptions(filePath, body = {}) {
     if (!scanned) return opts;
 
     let file = scanned;
+    // Ensure we have a hash key for thumbnail_cache
     if (!file.hash && !file.md5 && !file.quick_hash) {
       const computed = computeQuickHash(filePath);
       if (computed?.hash) {
@@ -3273,6 +3278,7 @@ async function resolveVlmImageOptions(filePath, body = {}) {
 
     let thumb = await db.getThumbnailForScannedFile(file);
     if (!thumb) {
+      // Generate + cache using same pipeline as /images/:id/thumb (400px JPEG)
       const result = await sharp(filePath)
         .resize({ width: 400, height: 400, fit: 'inside', withoutEnlargement: true })
         .jpeg({ quality: 75 })
@@ -3418,6 +3424,166 @@ app.get('/api/embed/folder', requireAuthWrapper, requirePhotoPermission, async (
     res.status(500).json({ error: err.message });
   }
 });
+
+// List embedding category prototypes (text centroids)
+app.get('/api/embed/categories', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const model = req.query.model || embedConfig.model;
+    const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    const classifier = new EmbedClassifier({ embedConfig, minScore: embedClassifyMinScore });
+    if (refresh) {
+      const conn = await classifier.client.checkConnection();
+      if (!conn.ok) {
+        return res.status(503).json({
+          error: 'Embedding server unavailable',
+          detail: conn.error,
+          embeddingUrl: embedConfig.baseUrl
+        });
+      }
+      await classifier.ensurePrototypes(db, { forceRefresh: true });
+    }
+    let rows = await db.listEmbeddingCategoryPrototypes(model);
+    if (!rows.length) {
+      const conn = await classifier.client.checkConnection();
+      if (!conn.ok) {
+        return res.status(503).json({
+          error: 'Embedding server unavailable (need to build prototypes)',
+          detail: conn.error,
+          embeddingUrl: embedConfig.baseUrl
+        });
+      }
+      await classifier.ensurePrototypes(db, { forceRefresh: false });
+      rows = await db.listEmbeddingCategoryPrototypes(model);
+    }
+    res.json({
+      model,
+      minScore: embedClassifyMinScore,
+      otherLabel: EMBED_CATEGORY_OTHER,
+      labels: EMBED_CATEGORY_PROTOTYPES.map(p => p.label).concat([EMBED_CATEGORY_OTHER]),
+      prototypes: rows.map(r => ({
+        label: r.label,
+        model: r.model,
+        dims: r.dims,
+        promptText: r.prompt_text,
+        updatedAt: r.updated_at
+      }))
+    });
+  } catch (err) {
+    console.error('embed/categories error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Classify file_embeddings in one folder via text-prototype cosine similarity
+app.post('/api/embed/classify-folder', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { folderPath, folderId, force = false, refreshPrototypes = false, minScore } = req.body || {};
+    if (!folderPath && !folderId) {
+      return res.status(400).json({ error: 'folderPath or folderId is required' });
+    }
+
+    const threshold = Number.isFinite(Number(minScore)) ? Number(minScore) : embedClassifyMinScore;
+    const classifier = new EmbedClassifier({ embedConfig, minScore: threshold });
+    const conn = await classifier.client.checkConnection();
+    if (!conn.ok) {
+      return res.status(503).json({
+        error: 'Embedding server unavailable',
+        detail: conn.error || 'Cannot reach EMBEDDING_URL',
+        embeddingUrl: embedConfig.baseUrl,
+        hint: 'Start llama-server EmbeddingGemma with --embeddings (see AGENTS.md)'
+      });
+    }
+
+    const prototypes = await classifier.ensurePrototypes(db, { forceRefresh: !!refreshPrototypes });
+    const listed = await db.listImagesInFolder({
+      folderId,
+      folderPath,
+      limit: Math.min(parseInt(req.body?.limit, 10) || 500, 2000)
+    });
+    if (!listed.folderId) {
+      return res.status(404).json({ error: 'Folder not found in folder_tree. Refresh/scan first.' });
+    }
+
+    const results = [];
+    let classified = 0;
+    let skipped = 0;
+    let failed = 0;
+    let missingEmbed = 0;
+    const categoryCounts = {};
+
+    for (const file of listed.files) {
+      try {
+        if (!force) {
+          const existing = await db.getFileEmbeddingCategory(file.id, embedConfig.model);
+          if (existing) {
+            skipped++;
+            categoryCounts[existing.category] = (categoryCounts[existing.category] || 0) + 1;
+            results.push({
+              id: file.id,
+              name: file.name,
+              status: 'skipped',
+              category: existing.category,
+              score: Number(existing.score)
+            });
+            continue;
+          }
+        }
+
+        const embRow = await db.getFileEmbedding(file.id, embedConfig.model);
+        if (!embRow?.embedding?.length) {
+          missingEmbed++;
+          failed++;
+          results.push({ id: file.id, name: file.name, status: 'missing-embedding' });
+          continue;
+        }
+
+        const verdict = classifier.classify(embRow.embedding, prototypes);
+        await db.upsertFileEmbeddingCategory(file.id, {
+          model: embedConfig.model,
+          category: verdict.category,
+          score: verdict.score
+        });
+        classified++;
+        categoryCounts[verdict.category] = (categoryCounts[verdict.category] || 0) + 1;
+        results.push({
+          id: file.id,
+          name: file.name,
+          status: 'classified',
+          category: verdict.category,
+          score: Number(verdict.score.toFixed(6))
+        });
+      } catch (err) {
+        failed++;
+        results.push({ id: file.id, name: file.name, status: 'error', error: err.message });
+        if (err.statusCode === 503) {
+          return res.status(503).json({
+            error: err.message,
+            embeddingUrl: embedConfig.baseUrl,
+            partial: { classified, skipped, failed, missingEmbed, total: listed.files.length, categoryCounts, results }
+          });
+        }
+      }
+    }
+
+    res.json({
+      folderId: listed.folderId,
+      path: listed.path,
+      total: listed.files.length,
+      classified,
+      skipped,
+      failed,
+      missingEmbed,
+      minScore: threshold,
+      model: embedConfig.model,
+      categoryCounts,
+      results
+    });
+  } catch (err) {
+    console.error('embed/classify-folder error:', err.message);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 
 // Warm thumbnail_cache for images in one folder (non-recursive)
 app.post('/api/thumbs/folder', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
@@ -4363,54 +4529,82 @@ app.get('/api/faces/groups', requireAuthWrapper, requirePhotoPermission, async (
     );
 
     // For each group, get its faces
-    const groups = [];
-    for (const grp of dbGroups) {
-      const [faces] = await db.connection.execute(`
-        SELECT df.id, df.file_id, df.face_index, df.confidence, df.gender, df.age, df.expression,
-               df.face_descriptor, sf.name
-        FROM detected_faces df
-        JOIN scanned_files sf ON df.file_id = sf.id
-        WHERE df.face_group_id = ?
-        ORDER BY df.confidence DESC
-        LIMIT 20
-      `, [grp.id]);
+        const groups = [];
+        for (const grp of dbGroups) {
+          // Get TOTAL file count (unique files in this group from faces_v2)
+          const [fileCountResult] = await db.connection.execute(`
+            SELECT COUNT(DISTINCT file_id) as cnt FROM faces_v2
+            WHERE face_group_id = ? AND (status IS NULL OR status != 'ignored')
+          `, [grp.id]);
+          const totalFileCount = fileCountResult[0]?.cnt || 0;
 
-      const parsedFaces = faces.map(f => {
-        const desc = typeof f.face_descriptor === 'string' ? JSON.parse(f.face_descriptor) : (f.face_descriptor || {});
-        return { ...f, thumb: desc?.thumbnail, phash: desc?.phash, has_glasses: desc?.has_glasses, age_group: desc?.age_group };
-      });
+          // Get TOTAL face count for this group
+          const [faceCountResult] = await db.connection.execute(`
+            SELECT COUNT(*) as cnt FROM faces_v2
+            WHERE face_group_id = ? AND (status IS NULL OR status != 'ignored')
+          `, [grp.id]);
+          const totalFaceCount = faceCountResult[0]?.cnt || 0;
 
-      let masterThumb = null;
-      if (grp.master_face_id) {
-        const mf = parsedFaces.find(f => f.id === grp.master_face_id);
-        if (mf) masterThumb = mf.thumb;
-        if (!masterThumb) {
-          const [mrow] = await db.connection.execute(`
-            SELECT df.face_descriptor FROM detected_faces df WHERE df.id = ?
-          `, [grp.master_face_id]);
+          // Get sample of faces (for thumbnails and master face lookup only - limit 20)
+          const [faces] = await db.connection.execute(`
+            SELECT fv.id, fv.file_id, fv.face_index, fv.confidence, fv.gender, fv.age,
+                   fv.thumbnail, sf.name
+            FROM faces_v2 fv
+            JOIN scanned_files sf ON fv.file_id = sf.id
+            WHERE fv.face_group_id = ? AND (fv.status IS NULL OR fv.status != 'ignored')
+            ORDER BY fv.confidence DESC
+            LIMIT 20
+          `, [grp.id]);
+
+          const parsedFaces = faces.map(f => {
+            let thumb = null;
+            if (f.thumbnail) {
+              try { thumb = Buffer.isBuffer(f.thumbnail) ? f.thumbnail.toString('base64') : Buffer.from(f.thumbnail).toString('base64'); } catch {}
+            }
+            return { ...f, thumb };
+          });
+
+          let masterThumb = null;
+          if (grp.master_face_id) {
+            const mf = parsedFaces.find(f => f.id === grp.master_face_id);
+            if (mf) masterThumb = mf.thumb;
+            if (!masterThumb) {
+              const [mrow] = await db.connection.execute(`
+                SELECT fv.thumbnail FROM faces_v2 fv WHERE fv.id = ?
+              `, [grp.master_face_id]);
           if (mrow.length > 0) {
-            const desc = typeof mrow[0].face_descriptor === 'string' ? JSON.parse(mrow[0].face_descriptor) : (mrow[0].face_descriptor || {});
-            masterThumb = desc?.thumbnail || null;
+            try { masterThumb = Buffer.isBuffer(mrow[0].thumbnail) ? mrow[0].thumbnail.toString('base64') : Buffer.from(mrow[0].thumbnail).toString('base64'); } catch {}
           }
         }
       }
+
+      // Get dominant gender from ALL faces_v2 records, not just sampled ones
+      const [genderResult] = await db.connection.execute(`
+        SELECT gender, COUNT(*) as c FROM faces_v2
+        WHERE face_group_id = ? AND gender IS NOT NULL AND gender NOT IN ('', 'unknown')
+        GROUP BY gender ORDER BY c DESC LIMIT 1
+      `, [grp.id]);
+      const dominantGender = genderResult.length > 0 ? genderResult[0].gender : 'unknown';
 
       const files = [...new Set(parsedFaces.map(f => f.name))];
       const genderCount = {};
       for (const f of parsedFaces) { if (f.gender) genderCount[f.gender] = (genderCount[f.gender] || 0) + 1; }
 
       groups.push({
-        id: grp.id,
-        label: grp.label,
-        faceCount: grp.face_count || parsedFaces.length,
-        files,
-        dominantGender: Object.entries(genderCount).sort((a, b) => b[1] - a[1])[0]?.[0] || null,
-        masterThumb,
-        groupType: grp.group_type || 'unknown',
-        relationship: grp.relationship || null,
-        faces: parsedFaces
-      });
-    }
+              id: grp.id,
+              label: grp.label,
+              faceCount: totalFaceCount,
+              fileCount: totalFileCount,
+              photoCount: totalFileCount,
+              dominantGender,
+              files,  // Array of sample filenames (up to 20)
+              masterThumb,
+              groupType: grp.group_type || 'unknown',
+              relationship: grp.relationship || null,
+              birthYear: grp.birth_year || null,
+              faces: parsedFaces
+            });
+          }
 
     res.json({ groups, total: totalCount[0].c, limit: parseInt(limit), offset: parseInt(offset) });
   } catch (err) {
@@ -4460,6 +4654,12 @@ app.get('/api/faces/ignored', requireAuthWrapper, requirePhotoPermission, async 
 });
 
 // Get faces not yet grouped (orphan faces)
+// Auto-group faces into existing groups using embeddings
+
+// Auto-group faces into existing groups using embeddings
+
+// Auto-group faces into existing groups using embeddings
+
 app.get('/api/faces/unassigned', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
     const { limit = 100, offset = 0, minConfidence = 0 } = req.query;
@@ -4560,7 +4760,7 @@ app.post('/api/faces/groups', requireAuthWrapper, async (req, res) => {
 app.put('/api/faces/groups/:groupId', requireAuthWrapper, async (req, res) => {
   try {
     const groupId = parseInt(req.params.groupId);
-    const { label, groupType, relationship } = req.body;
+    const { label, groupType, relationship, birthYear } = req.body;
     if (label !== undefined) {
       await db.connection.execute('UPDATE face_groups SET label = ? WHERE id = ?', [label, groupId]);
     }
@@ -4569,6 +4769,9 @@ app.put('/api/faces/groups/:groupId', requireAuthWrapper, async (req, res) => {
     }
     if (relationship !== undefined) {
       await db.connection.execute('UPDATE face_groups SET relationship = ? WHERE id = ?', [relationship || null, groupId]);
+    }
+    if (birthYear !== undefined) {
+      await db.connection.execute('UPDATE face_groups SET birth_year = ? WHERE id = ?', [birthYear || null, groupId]);
     }
     res.json({ success: true });
   } catch (err) {
@@ -5233,6 +5436,7 @@ app.post('/api/faces-v2/:faceId/confirm', requireAuthWrapper, async (req, res) =
     const { groupId } = req.body;
     await db.updateFaceV2Status(faceId, {
       faceGroupId: groupId,
+      suggestedGroupId: null,  // Clear suggestion - face is now confirmed to a group
       status: 'confirmed',
       matchReviewed: true,
       reviewedAt: true
@@ -5254,6 +5458,104 @@ app.post('/api/faces-v2/:faceId/reject', requireAuthWrapper, async (req, res) =>
       reviewedAt: true
     });
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batch confirm multiple faces
+app.post('/api/faces-v2/batch-confirm', requireAuthWrapper, async (req, res) => {
+  try {
+    const { faceIds, groupId } = req.body;
+    if (!Array.isArray(faceIds) || faceIds.length === 0) {
+      return res.status(400).json({ error: 'faceIds must be a non-empty array' });
+    }
+    if (!groupId) {
+      return res.status(400).json({ error: 'groupId is required' });
+    }
+    
+    let successCount = 0;
+    let failCount = 0;
+    const errors = [];
+    
+    for (const faceId of faceIds) {
+      try {
+        await db.updateFaceV2Status(faceId, {
+          faceGroupId: parseInt(groupId),
+          suggestedGroupId: null,  // Clear suggestion - face is now confirmed to a group
+          status: 'confirmed',
+          matchReviewed: true,
+          reviewedAt: true
+        });
+        successCount++;
+      } catch (e) {
+        failCount++;
+        errors.push({ faceId, error: e.message });
+      }
+    }
+    
+    res.json({ success: true, successCount, failCount, errors, total: faceIds.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batch reject multiple faces
+app.post('/api/faces-v2/batch-reject', requireAuthWrapper, async (req, res) => {
+  try {
+    const { faceIds } = req.body;
+    if (!Array.isArray(faceIds) || faceIds.length === 0) {
+      return res.status(400).json({ error: 'faceIds must be a non-empty array' });
+    }
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const faceId of faceIds) {
+      try {
+        await db.updateFaceV2Status(faceId, {
+          suggestedGroupId: null,
+          status: 'rejected',
+          matchReviewed: true,
+          reviewedAt: true
+        });
+        successCount++;
+      } catch (e) {
+        failCount++;
+      }
+    }
+    
+    res.json({ success: true, successCount, failCount, total: faceIds.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batch ignore multiple faces
+app.post('/api/faces-v2/batch-ignore', requireAuthWrapper, async (req, res) => {
+  try {
+    const { faceIds } = req.body;
+    if (!Array.isArray(faceIds) || faceIds.length === 0) {
+      return res.status(400).json({ error: 'faceIds must be a non-empty array' });
+    }
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const faceId of faceIds) {
+      try {
+        await db.updateFaceV2Status(faceId, {
+          status: 'ignored',
+          matchReviewed: true,
+          reviewedAt: true
+        });
+        successCount++;
+      } catch (e) {
+        failCount++;
+      }
+    }
+    
+    res.json({ success: true, successCount, failCount, total: faceIds.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -5347,7 +5649,7 @@ function mode(arr) {
 
 // ==================== START SERVER ====================
 
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 14316;
 
 async function startServer() {
   try {

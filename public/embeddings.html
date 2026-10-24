@@ -24,6 +24,12 @@
     .badge { display:inline-block; padding:0.15rem 0.45rem; border-radius:999px; font-size:0.75rem; }
     .badge.ok { background:rgba(46,204,113,0.2); color:var(--ok); }
     .badge.miss { background:rgba(231,76,60,0.2); color:var(--bad); }
+    .badge.cat { background:rgba(155,89,182,0.25); color:#d7b6ef; }
+    button.secondary { background:rgba(138,180,248,0.2); border-color:rgba(138,180,248,0.5); }
+    tr.hidden { display:none; }
+    #counts { margin:0.35rem 0 0.75rem; display:flex; flex-wrap:wrap; gap:0.4rem; }
+    #counts .chip { background:#222938; border:1px solid #3a4358; border-radius:999px; padding:0.2rem 0.55rem; font-size:0.8rem; cursor:pointer; }
+    #counts .chip.active { border-color:var(--accent); color:#d7b6ef; }
     .path { font-family: ui-monospace, Consolas, monospace; font-size:0.8rem; color:var(--muted); word-break:break-all; }
     #status { margin:0.75rem 0; }
   </style>
@@ -39,12 +45,18 @@
       <option value="">All models</option>
       <option value="embeddinggemma-2">embeddinggemma-2</option>
     </select>
+    <select id="categoryFilter" title="Filter by embedding category">
+      <option value="">All categories</option>
+    </select>
     <button onclick="loadEmbeddings()">Load</button>
-    <button onclick="warmThumbs()" title="Generate DB thumbnails for this folder">Warm thumbs</button>
+    <button class="secondary" onclick="warmThumbs()" title="Generate DB thumbnails for this folder">Warm thumbs</button>
+    <button onclick="classifyFolder(false)" title="Cosine vs text prototypes">Classify by embedding</button>
+    <button class="secondary" onclick="classifyFolder(true)" title="Reclassify all">Force reclassify</button>
   </header>
   <main>
     <div id="status" class="meta">Open from /tree with ?path= or ?folderId=, or paste a path and Load.</div>
     <div class="path" id="folderLabel"></div>
+    <div id="counts"></div>
     <table>
       <thead>
         <tr>
@@ -52,6 +64,8 @@
           <th>Filename</th>
           <th>Model</th>
           <th>Dims</th>
+          <th>Category</th>
+          <th>Score</th>
           <th>Updated</th>
           <th>DB Thumb</th>
           <th>Size</th>
@@ -62,18 +76,25 @@
   </main>
   <script src="/auth.js"></script>
   <script>
+    let lastRows = [];
+    const KNOWN_CATS = ['人物單人','人物合照','風景','動物','食物','收據餐牌資料','螢幕截圖','其他'];
+
     function qs(name) {
       return new URLSearchParams(location.search).get(name);
     }
     function fmtBytes(n) {
-      if (n == null) return '—';
+      if (n == null) return '-';
       if (n < 1024) return n + ' B';
       if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
       return (n/1048576).toFixed(2) + ' MB';
     }
     function fmtTime(v) {
-      if (!v) return '—';
+      if (!v) return '-';
       try { return new Date(v).toLocaleString('zh-HK', { hour12: false }); } catch { return String(v); }
+    }
+    function fmtScore(v) {
+      if (v == null || Number.isNaN(Number(v))) return '-';
+      return Number(v).toFixed(3);
     }
     async function api(url, opts) {
       const r = await fetch(url, { credentials: 'include', ...opts, headers: { 'Content-Type': 'application/json', ...(opts && opts.headers || {}) } });
@@ -81,20 +102,88 @@
       if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
       return data;
     }
-    async function loadEmbeddings() {
-      const status = document.getElementById('status');
+    function fillCategoryFilter(counts) {
+      const sel = document.getElementById('categoryFilter');
+      if (!sel) return;
+      const cur = sel.value;
+      const labels = new Set(KNOWN_CATS);
+      Object.keys(counts || {}).forEach(k => labels.add(k));
+      sel.innerHTML = '<option value="">All categories</option>';
+      [...labels].forEach(lab => {
+        const opt = document.createElement('option');
+        opt.value = lab;
+        const n = counts && counts[lab] ? ' (' + counts[lab] + ')' : '';
+        opt.textContent = lab + n;
+        sel.appendChild(opt);
+      });
+      if (cur) sel.value = cur;
+    }
+    function renderCounts(counts) {
+      const el = document.getElementById('counts');
+      if (!el) return;
+      el.innerHTML = '';
+      const entries = Object.entries(counts || {}).sort((a,b) => b[1]-a[1]);
+      if (!entries.length) return;
+      const all = document.createElement('span');
+      all.className = 'chip' + (!(document.getElementById('categoryFilter') || {}).value ? ' active' : '');
+      all.textContent = 'ALL';
+      all.onclick = () => { document.getElementById('categoryFilter').value = ''; applyFilter(); renderCounts(counts); };
+      el.appendChild(all);
+      for (const [k,v] of entries) {
+        const chip = document.createElement('span');
+        chip.className = 'chip' + (document.getElementById('categoryFilter').value === k ? ' active' : '');
+        chip.textContent = k + ' · ' + v;
+        chip.onclick = () => { document.getElementById('categoryFilter').value = k; applyFilter(); renderCounts(counts); };
+        el.appendChild(chip);
+      }
+    }
+    function applyFilter() {
+      const cat = (document.getElementById('categoryFilter') || {}).value || '';
+      document.querySelectorAll('#tbody tr').forEach(tr => {
+        const rowCat = tr.getAttribute('data-category') || '';
+        tr.classList.toggle('hidden', !!(cat && rowCat !== cat));
+      });
+    }
+    function renderRows(data) {
       const tbody = document.getElementById('tbody');
       tbody.innerHTML = '';
+      lastRows = data.embeddings || [];
+      fillCategoryFilter(data.categoryCounts || {});
+      renderCounts(data.categoryCounts || {});
+      for (const row of lastRows) {
+        const emb = row.embedding;
+        const tr = document.createElement('tr');
+        tr.setAttribute('data-category', row.category || '');
+        const thumbUrl = '/images/' + row.fileId + '/thumb';
+        const catHtml = row.category
+          ? '<span class="badge cat">' + row.category + '</span>'
+          : '<span class="badge miss">unclassified</span>';
+        tr.innerHTML =
+          '<td><img class="thumb" src="' + thumbUrl + '" alt="" loading="lazy" onerror="this.style.opacity=0.2" /></td>' +
+          '<td><div>' + (row.name || '') + '</div><div class="path">id=' + row.fileId + '</div></td>' +
+          '<td>' + (emb ? emb.model : '<span class="badge miss">missing</span>') + '</td>' +
+          '<td>' + (emb ? emb.dims : '-') + '</td>' +
+          '<td>' + catHtml + '</td>' +
+          '<td>' + fmtScore(row.categoryScore) + '</td>' +
+          '<td>' + (emb ? fmtTime(emb.updatedAt) : '-') + '</td>' +
+          '<td>' + (row.hasThumbnail ? '<span class="badge ok">yes</span>' : '<span class="badge miss">no</span>') + '</td>' +
+          '<td>' + fmtBytes(row.size) + '</td>';
+        tbody.appendChild(tr);
+      }
+      applyFilter();
+    }
+    async function loadEmbeddings() {
+      const status = document.getElementById('status');
       const folderId = document.getElementById('folderId').value.trim() || qs('folderId') || qs('id');
       const folderPath = document.getElementById('folderPath').value.trim() || qs('path') || qs('folderPath');
       const model = document.getElementById('modelFilter').value;
       if (!folderId && !folderPath) {
-        status.textContent = '請提供 folderId 或 folder path / Provide folderId or path';
+        status.textContent = 'Need folderId or folder path';
         return;
       }
       if (folderPath) document.getElementById('folderPath').value = folderPath;
       if (folderId) document.getElementById('folderId').value = folderId;
-      status.textContent = 'Loading…';
+      status.textContent = 'Loading...';
       try {
         const params = new URLSearchParams();
         if (folderId) params.set('folderId', folderId);
@@ -102,21 +191,9 @@
         if (model) params.set('model', model);
         const data = await api('/api/embed/folder?' + params.toString());
         document.getElementById('folderLabel').textContent = '#' + data.folderId + '  ' + (data.path || '');
-        status.textContent = 'Indexed ' + data.indexed + ' / ' + data.total + ' images';
-        for (const row of data.embeddings || []) {
-          const emb = row.embedding;
-          const tr = document.createElement('tr');
-          const thumbUrl = '/images/' + row.fileId + '/thumb';
-          tr.innerHTML =
-            '<td><img class="thumb" src="' + thumbUrl + '" alt="" loading="lazy" onerror="this.style.opacity=0.2" /></td>' +
-            '<td><div>' + (row.name || '') + '</div><div class="path">id=' + row.fileId + '</div></td>' +
-            '<td>' + (emb ? emb.model : '<span class="badge miss">missing</span>') + '</td>' +
-            '<td>' + (emb ? emb.dims : '—') + '</td>' +
-            '<td>' + (emb ? fmtTime(emb.updatedAt) : '—') + '</td>' +
-            '<td>' + (row.hasThumbnail ? '<span class="badge ok">yes</span>' : '<span class="badge miss">no</span>') + '</td>' +
-            '<td>' + fmtBytes(row.size) + '</td>';
-          tbody.appendChild(tr);
-        }
+        const classified = data.classified != null ? data.classified : (data.embeddings || []).filter(e => e.category).length;
+        status.textContent = 'Indexed ' + data.indexed + ' / ' + data.total + ' · Classified ' + classified;
+        renderRows(data);
       } catch (err) {
         status.textContent = 'Error: ' + err.message;
       }
@@ -126,7 +203,7 @@
       const folderId = document.getElementById('folderId').value.trim() || qs('folderId');
       const folderPath = document.getElementById('folderPath').value.trim() || qs('path');
       if (!folderId && !folderPath) { status.textContent = 'Need folder first'; return; }
-      status.textContent = 'Warming thumbnail_cache…';
+      status.textContent = 'Warming thumbnail_cache...';
       try {
         const data = await api('/api/thumbs/folder', {
           method: 'POST',
@@ -138,6 +215,32 @@
         status.textContent = 'Warm failed: ' + err.message;
       }
     }
+    async function classifyFolder(force) {
+      const status = document.getElementById('status');
+      const folderId = document.getElementById('folderId').value.trim() || qs('folderId');
+      const folderPath = document.getElementById('folderPath').value.trim() || qs('path');
+      if (!folderId && !folderPath) { status.textContent = 'Need folder first'; return; }
+      status.textContent = force ? 'Force classifying by embedding...' : 'Classifying by embedding...';
+      try {
+        const data = await api('/api/embed/classify-folder', {
+          method: 'POST',
+          body: JSON.stringify({
+            folderId: folderId || undefined,
+            folderPath: folderPath || undefined,
+            force: !!force
+          })
+        });
+        const parts = Object.entries(data.categoryCounts || {}).map(([k,v]) => k + '=' + v).join(', ');
+        status.textContent = 'Classify: done=' + data.classified + ' skipped=' + data.skipped +
+          ' failed=' + data.failed + ' missingEmbed=' + data.missingEmbed +
+          (parts ? ' · ' + parts : '');
+        await loadEmbeddings();
+      } catch (err) {
+        status.textContent = 'Classify failed: ' + err.message;
+      }
+    }
+    const catSel = document.getElementById('categoryFilter');
+    if (catSel) catSel.addEventListener('change', applyFilter);
     (function init() {
       const p = qs('path') || qs('folderPath');
       const id = qs('folderId') || qs('id');

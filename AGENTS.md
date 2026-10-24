@@ -66,5 +66,6 @@
   ```
   GGUF: https://huggingface.co/ggml-org/embeddinggemma-2-GGUF — use Vulkan/CUDA as appropriate. If the embed server is down, APIs return **503** with a clear message.
 - Face tables (`faces_v2`, etc.) are separate; EmbeddingGemma does not do face detection.
+- **Embedding taxonomy (coarse):** `POST /api/embed/classify-folder` cosine-matches each `file_embeddings` vector to text prototypes in `embedding_category_prototypes` (labels align with VLM: 人物單人/人物合照/風景/動物/食物/收據餐牌資料/螢幕截圖; low score → 其他). Persists to `file_embedding_categories` (does **not** overwrite `photo_classifications`). Review/filter: `/embeddings?folderId=` · `GET /api/embed/categories`. Optional `EMBED_CLASSIFY_MIN_SCORE` (default 0.25).
 - **DB thumbnails for VLM:** `thumbnail_cache` (file_hash+file_size+media_type). Describe/Ask default `useThumbnail: true` loads cache JPEG (or generates+caches via same 400px pipeline as `/images/:id/thumb`) then optionally downscales further by size preset. Warm a folder: `POST /api/thumbs/folder`. Review embeddings: `/embeddings?folderId=` or `?path=` (also linked from `/tree`). List API: `GET /api/embed/folder?folderId=`.
 
