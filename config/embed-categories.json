@@ -1,0 +1,221 @@
+{
+  "minScore": 0.25,
+  "otherLabel": "其他",
+  "categories": [
+    {
+      "label": "人物單人",
+      "keywords": [
+        "單人肖像",
+        "selfie",
+        "portrait",
+        "one person",
+        "alone",
+        "close-up face",
+        "single person photo"
+      ]
+    },
+    {
+      "label": "人物合照",
+      "keywords": [
+        "多人合照",
+        "群相",
+        "group photo",
+        "family",
+        "friends",
+        "several people",
+        "crowd",
+        "gathering"
+      ]
+    },
+    {
+      "label": "風景",
+      "keywords": [
+        "風景",
+        "山水",
+        "城市",
+        "天空",
+        "landscape",
+        "scenery",
+        "mountains",
+        "beach",
+        "skyline",
+        "outdoor",
+        "nature view"
+      ]
+    },
+    {
+      "label": "動物",
+      "keywords": [
+        "動物",
+        "野生動物",
+        "鳥",
+        "wildlife",
+        "animal",
+        "bird",
+        "fauna",
+        "creature"
+      ]
+    },
+    {
+      "label": "貓",
+      "keywords": [
+        "貓",
+        "貓咪",
+        "小貓",
+        "cat",
+        "kitten",
+        "feline",
+        "kitty"
+      ]
+    },
+    {
+      "label": "狗",
+      "keywords": [
+        "狗",
+        "小狗",
+        "犬",
+        "dog",
+        "puppy",
+        "canine",
+        "hound"
+      ]
+    },
+    {
+      "label": "車",
+      "keywords": [
+        "車",
+        "汽車",
+        "電單車",
+        "巴士",
+        "貨車",
+        "交通工具",
+        "car",
+        "motorcycle",
+        "motorbike",
+        "bus",
+        "truck",
+        "vehicle",
+        "automobile"
+      ]
+    },
+    {
+      "label": "花卉",
+      "keywords": [
+        "花",
+        "花卉",
+        "植物",
+        "盆栽",
+        "園藝",
+        "flower",
+        "flowers",
+        "plant",
+        "plants",
+        "bloom",
+        "garden",
+        "botanical"
+      ]
+    },
+    {
+      "label": "食物",
+      "keywords": [
+        "食物",
+        "食譜",
+        "菜式",
+        "餐點",
+        "甜品",
+        "recipe",
+        "food",
+        "dish",
+        "meal",
+        "cooking",
+        "cuisine",
+        "dessert",
+        "restaurant plate"
+      ]
+    },
+    {
+      "label": "收據餐牌資料",
+      "keywords": [
+        "收據",
+        "發票",
+        "文件",
+        "餐牌",
+        "菜單",
+        "表格",
+        "document",
+        "receipt",
+        "invoice",
+        "menu",
+        "form",
+        "paper",
+        "scan"
+      ]
+    },
+    {
+      "label": "螢幕截圖",
+      "keywords": [
+        "螢幕截圖",
+        "手機畫面",
+        "UI",
+        "介面",
+        "screenshot",
+        "phone screen",
+        "computer screen",
+        "app UI",
+        "interface capture"
+      ]
+    }
+  ],
+  "suggestedExtras": [
+    {
+      "label": "建築室內",
+      "keywords": [
+        "建築",
+        "室內",
+        "房間",
+        "家居",
+        "裝潢",
+        "architecture",
+        "interior",
+        "room",
+        "indoor",
+        "home decor",
+        "building"
+      ],
+      "note": "Copy into categories to enable"
+    },
+    {
+      "label": "活動典禮",
+      "keywords": [
+        "典禮",
+        "婚禮",
+        "活動",
+        "派對",
+        "慶祝",
+        "ceremony",
+        "wedding",
+        "event",
+        "party",
+        "celebration",
+        "festival"
+      ],
+      "note": "Copy into categories to enable"
+    },
+    {
+      "label": "證件證件照",
+      "keywords": [
+        "證件",
+        "證件照",
+        "護照",
+        "身份證",
+        "大頭照",
+        "ID photo",
+        "passport photo",
+        "mugshot",
+        "identity document",
+        "official photo"
+      ],
+      "note": "Copy into categories to enable"
+    }
+  ]
+}

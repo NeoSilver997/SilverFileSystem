@@ -2974,7 +2974,7 @@ import { VLMClient } from './lib/vlm-client.js';
 import { PhotoClassifier } from './lib/photo-classifier.js';
 import { FileWatcher } from './lib/file-watcher.js';
 import { EmbeddingClient } from './lib/embedding-client.js';
-import { EmbedClassifier, EMBED_CATEGORY_PROTOTYPES, EMBED_CATEGORY_OTHER } from './lib/embed-classifier.js';
+import { EmbedClassifier, EMBED_CATEGORY_OTHER } from './lib/embed-classifier.js';
 import { createJob, update as updateJob, get as getJob, getRaw as getJobRaw, list as listJobs, fail as failJob, complete as completeJob, cancel as cancelJob, isCancelled as isJobCancelled, setRunner as setJobRunner } from './lib/job-progress.js';
 
 const vlmConfig = {
@@ -3632,16 +3632,27 @@ app.get('/api/embed/categories', requireAuthWrapper, requirePhotoPermission, asy
       await classifier.ensurePrototypes(db, { forceRefresh: false });
       rows = await db.listEmbeddingCategoryPrototypes(model);
     }
+    const meta = classifier.getConfigMeta();
+    const kwByLabel = new Map(meta.categories.map(c => [c.label, c.keywords || []]));
     res.json({
       model,
-      minScore: embedClassifyMinScore,
-      otherLabel: EMBED_CATEGORY_OTHER,
-      labels: EMBED_CATEGORY_PROTOTYPES.map(p => p.label).concat([EMBED_CATEGORY_OTHER]),
+      minScore: classifier.minScore,
+      otherLabel: meta.otherLabel || EMBED_CATEGORY_OTHER,
+      configPath: meta.path,
+      configExists: meta.exists,
+      labels: meta.categories.map(c => c.label).concat([meta.otherLabel || EMBED_CATEGORY_OTHER]),
+      categories: meta.categories.map(c => ({
+        label: c.label,
+        keywords: c.keywords || [],
+        prompt: c.prompt
+      })),
+      suggestedExtras: meta.suggestedExtras || [],
       prototypes: rows.map(r => ({
         label: r.label,
         model: r.model,
         dims: r.dims,
         promptText: r.prompt_text,
+        keywords: kwByLabel.get(r.label) || [],
         updatedAt: r.updated_at
       }))
     });

@@ -32,6 +32,10 @@
     #counts .chip.active { border-color:var(--accent); color:#d7b6ef; }
     .path { font-family: ui-monospace, Consolas, monospace; font-size:0.8rem; color:var(--muted); word-break:break-all; }
     #status { margin:0.75rem 0; }
+    #taxonomy { margin:0.5rem 0 1rem; padding:0.75rem 1rem; background:var(--card); border-radius:10px; border:1px solid #2a3142; font-size:0.85rem; }
+    #taxonomy h2 { margin:0 0 0.4rem; font-size:0.95rem; font-weight:600; }
+    #taxonomy .kw { color:var(--muted); }
+    #taxonomy code { background:#222938; padding:0.1rem 0.35rem; border-radius:4px; font-size:0.8rem; }
   </style>
 </head>
 <body>
@@ -58,6 +62,7 @@
     <div id="jobProgressHost"></div>
     <div id="status" class="meta">Open from /tree with ?path= or ?folderId=, or paste a path and Load.</div>
     <div class="path" id="folderLabel"></div>
+    <div id="taxonomy" class="meta">Loading category list…</div>
     <div id="counts"></div>
     <table>
       <thead>
@@ -80,7 +85,38 @@
   <script src="/job-progress.js"></script>
   <script>
     let lastRows = [];
-    const KNOWN_CATS = ['人物單人','人物合照','風景','動物','食物','收據餐牌資料','螢幕截圖','其他'];
+    let KNOWN_CATS = ['人物單人','人物合照','風景','動物','食物','收據餐牌資料','螢幕截圖','其他'];
+    let taxonomyMeta = null;
+
+    async function loadTaxonomy() {
+      const box = document.getElementById('taxonomy');
+      if (!box) return;
+      try {
+        const data = await api('/api/embed/categories');
+        taxonomyMeta = data;
+        const cats = data.categories || [];
+        KNOWN_CATS = (data.labels && data.labels.length) ? data.labels : KNOWN_CATS;
+        const lines = cats.map(c => {
+          const kws = (c.keywords || []).slice(0, 8).join(' · ');
+          return '<div><span class="badge cat">' + c.label + '</span> <span class="kw">' + (kws || '(no keywords)') + '</span></div>';
+        });
+        if (data.otherLabel) {
+          lines.push('<div><span class="badge miss">' + data.otherLabel + '</span> <span class="kw">score &lt; minScore (' + (data.minScore ?? '-') + ')</span></div>');
+        }
+        const extras = data.suggestedExtras || [];
+        const extraHtml = extras.length
+          ? ('<div style="margin-top:0.55rem"><strong>建議額外（未啟用）</strong> — copy into <code>categories</code> in JSON to enable<br>' +
+             extras.map(e => '<span class="badge miss">' + e.label + '</span> <span class="kw">' + ((e.keywords||[]).slice(0,6).join(' · ')) + '</span>').join('<br>') +
+             '</div>')
+          : '';
+        const pathHint = data.configPath
+          ? ('Edit keywords in <code>' + data.configPath + '</code> then Force reclassify (or GET ?refresh=1). Env: <code>EMBED_CATEGORIES_PATH</code>')
+          : 'Config: config/embed-categories.json';
+        box.innerHTML = '<h2>分類類型 / Categories</h2>' + lines.join('') + extraHtml + '<div style="margin-top:0.5rem">' + pathHint + '</div>';
+      } catch (err) {
+        box.innerHTML = 'Category list unavailable: ' + err.message + ' · Edit <code>config/embed-categories.json</code>';
+      }
+    }
 
     function qs(name) {
       return new URLSearchParams(location.search).get(name);
@@ -261,6 +297,7 @@
       const id = qs('folderId') || qs('id');
       if (p) document.getElementById('folderPath').value = p;
       if (id) document.getElementById('folderId').value = id;
+      loadTaxonomy();
       if (p || id) loadEmbeddings();
     })();
   </script>
