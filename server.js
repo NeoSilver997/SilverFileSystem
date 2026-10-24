@@ -2475,11 +2475,27 @@ app.get('/api/summary', requireAuthWrapper, async (req, res) => {
     const remainingMinutes = totalMinutes % 60;
     
     // Calculate detailed stats for each media type
+    let embeddedCount = 0;
+    let faceDetectCount = 0;
+    try {
+      embeddedCount = await db.countFileEmbeddings();
+    } catch (e) {
+      console.warn('[api/summary] embed count failed:', e.message);
+    }
+    try {
+      const [faceRows] = await db.connection.execute('SELECT COUNT(*) AS c FROM detected_faces');
+      faceDetectCount = faceRows[0]?.c || 0;
+    } catch (e) {
+      console.warn('[api/summary] face count failed:', e.message);
+    }
+
     const photosStats = {
       totalPhotos: photosData.length,
       totalSize: formatBytes(photosData.reduce((sum, p) => sum + Number(p.size || 0), 0)),
       uniqueCameras: new Set(photosData.map(p => p.camera_make).filter(Boolean)).size,
-      withGPS: photosData.filter(p => p.latitude !== null).length
+      withGPS: photosData.filter(p => p.latitude !== null).length,
+      embeddedCount,
+      faceCount: faceDetectCount
     };
 
     const musicStats = {
@@ -2780,7 +2796,8 @@ app.get('/api/file-type-breakdown', async (req, res) => {
 // Get all photos with optional search and filters
 app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
-    const { search, filter, camera, model, year, month, days, face } = req.query;
+    const { search, filter, camera, model, year, month, days, face, tag, hideOffline } = req.query;
+    const hideOfflineFiles = !(hideOffline === '0' || hideOffline === 'false');
     
     // Use cached data if available
     const now = Date.now();
@@ -2829,7 +2846,7 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
     });
     
     // Default: last 7 days if no other filter specified (including days)
-    const hasAnyFilter = search || filter || camera || model || year || month || face || (days !== undefined && days !== '');
+    const hasAnyFilter = search || filter || camera || model || year || month || face || tag || (days !== undefined && days !== '');
     if (!hasAnyFilter) {
       const sevenDaysAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
       photos = photos.filter(photo => {
@@ -2907,6 +2924,55 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
       });
     }
     
+    // Hide files on offline drive roots (default on). Toggle with hideOffline=0
+    let offlineSkipped = 0;
+    if (hideOfflineFiles) {
+      const parted = await partitionByDriveOnline(photos, { log: () => {} });
+      offlineSkipped = parted.skippedOffline.length;
+      photos = parted.online;
+    }
+
+    // Tag filter: match category OR category2 (dual tags) OR tags_json labels
+    if (tag) {
+      const tagVal = String(tag);
+      const [tagRows] = await db.connection.execute(
+        `SELECT DISTINCT file_id FROM file_embedding_categories
+         WHERE category = ? OR category2 = ?
+            OR JSON_UNQUOTE(JSON_EXTRACT(tags_json, '$[0].label')) = ?
+            OR JSON_UNQUOTE(JSON_EXTRACT(tags_json, '$[1].label')) = ?`,
+        [tagVal, tagVal, tagVal, tagVal]
+      );
+      const tagIds = new Set(tagRows.map(r => r.file_id));
+      photos = photos.filter(p => tagIds.has(p.id));
+    }
+
+    // Attach dual-tag fields for UI badges (chunked)
+    try {
+      const ids = photos.map(p => p.id);
+      const catByFile = new Map();
+      const CHUNK = 800;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const slice = ids.slice(i, i + CHUNK);
+        const rows = await db.listFileEmbeddingCategoriesByFileIds(slice).catch(() => []);
+        for (const r of rows) catByFile.set(r.file_id, r);
+      }
+      photos = photos.map(p => {
+        const cat = catByFile.get(p.id);
+        if (!cat) return { ...p, category: null, category2: null, tags: [] };
+        const tags = db.parseEmbeddingCategoryTags(cat);
+        return {
+          ...p,
+          category: cat.category || null,
+          category2: cat.category2 || (tags[1] ? tags[1].label : null),
+          categoryScore: cat.score != null ? Number(cat.score) : null,
+          categoryScore2: cat.score2 != null ? Number(cat.score2) : null,
+          tags
+        };
+      });
+    } catch (tagAttachErr) {
+      console.warn('[api/photos] tag attach skipped:', tagAttachErr.message);
+    }
+
     // Calculate stats
     const totalSize = photos.reduce((sum, p) => sum + Number(p.size), 0);
     const uniqueCameras = new Set(photos.map(p => p.camera_make).filter(Boolean)).size;
@@ -2936,6 +3002,7 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
         uniqueCameras,
         withGPS
       },
+      offlineSkipped,
       filters: {
         cameras: allCameras,
         models: allModels,
@@ -3225,7 +3292,7 @@ setJobRunner(async (job) => {
     const listed = await db.listImagesInFolder({
       folderId: params.folderId,
       folderPath: params.folderPath,
-      limit: Math.min(parseInt(params.limit, 10) || 200, 500)
+      limit: Math.min(parseInt(params.limit, 10) || 200, 2000)
     });
     if (!listed.folderId) throw new Error('Folder not found in folder_tree. Refresh/scan first.');
     updateJob(jobId, { total: listed.files.length, message: 'Embedding images…', meta: { folderId: listed.folderId, path: listed.path } });
@@ -3368,7 +3435,7 @@ setJobRunner(async (job) => {
     const listed = await db.listImagesInFolder({
       folderId: params.folderId,
       folderPath: params.folderPath,
-      limit: Math.min(parseInt(params.limit, 10) || 200, 500)
+      limit: Math.min(parseInt(params.limit, 10) || 200, 2000)
     });
     if (!listed.folderId) throw new Error('Folder not found in folder_tree');
     const thumbMax = Math.min(1024, Math.max(64, parseInt(params.maxSize, 10) || 400));

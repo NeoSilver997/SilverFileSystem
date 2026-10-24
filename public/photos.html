@@ -124,6 +124,10 @@
         <div class="filter-group">
             <select id="faceFilter" class="filter-btn" onchange="loadPhotos()"><option value="">All Faces</option></select>
         </div>
+        <div class="filter-group">
+            <select id="tagFilter" class="filter-btn" onchange="loadPhotos()"><option value="">All Tags</option></select>
+        </div>
+        <label class="dup-toggle"><input type="checkbox" id="hideOffline" checked onchange="loadPhotos()"> Hide Offline</label>
         <label class="dup-toggle"><input type="checkbox" id="hideDuplicates" checked onchange="loadPhotos()"> Hide Duplicates</label>
         <button onclick="deleteAllDuplicates()" style="padding:0.4rem 0.8rem;background:rgba(231,76,60,0.2);color:#e74c3c;border:1px solid rgba(231,76,60,0.4);border-radius:4px;cursor:pointer;font-size:0.8rem;">🗑 Delete All Duplicates</button>
         <div class="view-toggle">
@@ -195,6 +199,10 @@
                 if (days) params.append('days', days);
                 const face = document.getElementById('faceFilter').value;
                 if (face) params.append('face', face);
+                const tag = document.getElementById('tagFilter').value;
+                if (tag) params.append('tag', tag);
+                const hideOffline = document.getElementById('hideOffline').checked;
+                params.append('hideOffline', hideOffline ? '1' : '0');
 
                 const res = await authFetch('/api/photos?'+params);
                 const data = await res.json();
@@ -227,7 +235,8 @@
                 }
 
                 const hideCount = allPhotosData.length - allPhotos.length;
-                document.getElementById('hiddenCount').textContent = hideCount.toLocaleString();
+                const offlineN = data.offlineSkipped || 0;
+                document.getElementById('hiddenCount').textContent = hideCount.toLocaleString() + (offlineN ? ` (+${offlineN.toLocaleString()} offline)` : '');
 
                 if (currentView === 'map') { renderMapView(); } else { renderGrid(true); }
             } catch (err) {
@@ -255,7 +264,8 @@
                             ${photo.camera_make?`<div>📸 ${photo.camera_make} ${photo.camera_model||''}</div>`:''}
                             ${photo.date_taken?`<div>📅 ${formatDate(photo.date_taken)}</div>`:''}
                             ${photo.latitude?`<span class="photo-badge">📍 GPS</span>`:''}
-                            ${photo.is_duplicate?`<span class="photo-badge" style="background:rgba(231,76,60,0.2);color:#e74c3c;">🔁 Dup</span>`:''}
+                            ${(photo.tags&&photo.tags.length)?photo.tags.map(t=>`<span class="photo-badge" style="background:rgba(102,126,234,0.25);color:#aab6ff;">🏷 ${t.label}</span>`).join(''):(photo.category?`<span class="photo-badge" style="background:rgba(102,126,234,0.25);color:#aab6ff;">🏷 ${photo.category}${photo.category2?' · '+photo.category2:''}</span>`:'')}
+                            ${photo.is_duplicate?`<span class="photo-badge" style="background:rgba(231,76,60,0.2);color:#e74c3c;">⚠ Dup</span>`:''}
                         </div>
                     </div>
                 </div>`;
@@ -494,6 +504,21 @@
             } catch (e) {}
         }
 
+                async function loadTagOptions() {
+            try {
+                const res = await authFetch('/api/embed/categories');
+                const data = await res.json();
+                const sel = document.getElementById('tagFilter');
+                const cur = sel.value;
+                const labels = data.labels || (data.categories || []).map(c => c.label) || [];
+                sel.innerHTML = '<option value="">All Tags</option>' + labels.map(l =>
+                    `<option value="${l}" ${l===cur?'selected':''}>${l}</option>`
+                ).join('');
+            } catch (e) {
+                console.warn('tag options:', e.message);
+            }
+        }
+        loadTagOptions();
         loadPhotos();
         loadFaceFilter();
     </script>

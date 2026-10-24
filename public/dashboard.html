@@ -628,6 +628,14 @@
                             <span class="stat-label">With GPS</span>
                             <span class="stat-value" id="photoGPS">-</span>
                         </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Embedded</span>
+                            <span class="stat-value" id="photoEmbedded">-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Faces Detected</span>
+                            <span class="stat-value" id="photoFaces">-</span>
+                        </div>
                     </div>
                 </div>
 
@@ -774,6 +782,8 @@
                 document.getElementById('photoSize').textContent = summary.breakdown.photos.totalSize;
                 document.getElementById('photoCameras').textContent = summary.breakdown.photos.uniqueCameras;
                 document.getElementById('photoGPS').textContent = summary.breakdown.photos.withGPS;
+                document.getElementById('photoEmbedded').textContent = (summary.breakdown.photos.embeddedCount ?? 0).toLocaleString();
+                document.getElementById('photoFaces').textContent = (summary.breakdown.photos.faceCount ?? 0).toLocaleString();
 
                 // Update music stats from cached summary
                 document.getElementById('musicCount').textContent = summary.breakdown.music.totalTracks;
