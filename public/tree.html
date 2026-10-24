@@ -169,53 +169,88 @@
     </div>
 
     
-    <div id="describeModal" class="modal-overlay" onclick="if(event.target===this)closeDescribeModal()">
-        <div class="modal-box" style="width:560px; max-height:80vh; overflow:auto;">
+        <div id="describeModal" class="modal-overlay" onclick="if(event.target===this)closeDescribeModal()">
+        <div class="modal-box" style="width:min(960px,96vw); max-height:92vh; overflow:auto;">
             <h3 id="describeTitle">Describe</h3>
-            <label style="display:block; margin:0.5rem 0 0.25rem;">VLM image size (smaller = faster)</label>
-            <select id="describeSize" style="width:100%; margin-bottom:0.5rem;">
-                <option value="tiny">Tiny 256px</option>
-                <option value="small" selected>Small 384px (default)</option>
-                <option value="medium">Medium 512px</option>
-                <option value="large">Large 768px</option>
-                <option value="xl">XL 1024px</option>
-            </select>
-            <label style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.75rem; font-size:0.85rem;">
-                <input type="checkbox" id="describeUseThumb" checked />
-                Prefer DB thumbnail (faster) / 優先用資料庫縮圖
-            </label>
-            <label style="display:block; margin:0.25rem 0;">Mode</label>
-            <select id="describeMode" style="width:100%; margin-bottom:0.75rem;">
-                <option value="fast" selected>Fast</option>
-                <option value="detail">Detail</option>
-            </select>
-            <pre id="describeBody" style="white-space:pre-wrap; background:#111; padding:0.75rem; border-radius:8px; font-size:0.85rem; max-height:40vh; overflow:auto;">Pick size then Run.</pre>
+            <div style="display:flex; gap:1rem; flex-wrap:wrap; align-items:flex-start;">
+                <div style="flex:0 0 220px; max-width:100%;">
+                    <img id="describePreview" alt="preview" style="width:100%; max-height:280px; object-fit:contain; background:#0a0a0a; border-radius:8px; border:1px solid #333;" />
+                    <div id="describePreviewMeta" style="font-size:0.75rem; color:#888; margin-top:0.35rem; word-break:break-all;"></div>
+                </div>
+                <div style="flex:1; min-width:260px;">
+                    <label style="display:block; margin:0.25rem 0;">VLM image size (smaller = faster)</label>
+                    <select id="describeSize" style="width:100%; margin-bottom:0.5rem;">
+                        <option value="tiny">Tiny 256px</option>
+                        <option value="small" selected>Small 384px (default)</option>
+                        <option value="medium">Medium 512px</option>
+                        <option value="large">Large 768px</option>
+                        <option value="xl">XL 1024px</option>
+                    </select>
+                    <label style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.5rem; font-size:0.85rem;">
+                        <input type="checkbox" id="describeUseThumb" checked />
+                        Prefer DB thumbnail (faster)
+                    </label>
+                    <label style="display:block; margin:0.25rem 0;">Mode</label>
+                    <select id="describeMode" style="width:100%; margin-bottom:0.5rem;">
+                        <option value="fast" selected>Fast</option>
+                        <option value="detail">Detail</option>
+                    </select>
+                    <details open style="margin-bottom:0.5rem;">
+                        <summary style="cursor:pointer; color:#aab6ff;">Request (full detail)</summary>
+                        <pre id="describeRequest" style="white-space:pre-wrap; background:#111; padding:0.6rem; border-radius:8px; font-size:0.75rem; max-height:22vh; overflow:auto; margin:0.35rem 0 0;">—</pre>
+                    </details>
+                    <details open style="margin-bottom:0.5rem;">
+                        <summary style="cursor:pointer; color:#8fd19e;">Response (full detail)</summary>
+                        <pre id="describeBody" style="white-space:pre-wrap; background:#111; padding:0.6rem; border-radius:8px; font-size:0.75rem; max-height:28vh; overflow:auto; margin:0.35rem 0 0;">Pick size then Run.</pre>
+                    </details>
+                    <div id="describeTagPreview" style="font-size:0.85rem; color:#ccc; margin-bottom:0.5rem; min-height:1.2em;"></div>
+                </div>
+            </div>
             <div class="btn-row">
                 <button onclick="closeDescribeModal()">Close</button>
+                <button onclick="applyDescribeTags()" id="describeApplyTagBtn" disabled>Update tag by VLM</button>
                 <button class="primary" onclick="runDescribeImage()">Run Describe</button>
             </div>
         </div>
     </div>
     <div id="askModal" class="modal-overlay" onclick="if(event.target===this)closeAskModal()">
-        <div class="modal-box" style="width:560px; max-height:85vh; display:flex; flex-direction:column;">
+        <div class="modal-box" style="width:min(960px,96vw); max-height:92vh; display:flex; flex-direction:column; overflow:auto;">
             <h3 id="askTitle">Ask about image</h3>
-            <label style="display:block; margin:0.25rem 0;">VLM image size (smaller = faster)</label>
-            <select id="askSize" style="width:100%; margin-bottom:0.5rem;">
-                <option value="tiny">Tiny 256px</option>
-                <option value="small" selected>Small 384px (default)</option>
-                <option value="medium">Medium 512px</option>
-                <option value="large">Large 768px</option>
-                <option value="xl">XL 1024px</option>
-            </select>
-            <label style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.5rem; font-size:0.85rem;">
-                <input type="checkbox" id="askUseThumb" checked />
-                Prefer DB thumbnail (faster) / 優先用資料庫縮圖
-            </label>
-            <div id="askChat" style="flex:1; min-height:180px; max-height:45vh; overflow:auto; background:#111; padding:0.75rem; border-radius:8px; font-size:0.85rem; margin-bottom:0.75rem;"></div>
-            <label>Question</label>
-            <textarea id="askQuestion" placeholder="What is in this image?"></textarea>
+            <div style="display:flex; gap:1rem; flex-wrap:wrap; align-items:flex-start;">
+                <div style="flex:0 0 220px; max-width:100%;">
+                    <img id="askPreview" alt="preview" style="width:100%; max-height:280px; object-fit:contain; background:#0a0a0a; border-radius:8px; border:1px solid #333;" />
+                    <div id="askPreviewMeta" style="font-size:0.75rem; color:#888; margin-top:0.35rem; word-break:break-all;"></div>
+                </div>
+                <div style="flex:1; min-width:260px; display:flex; flex-direction:column; min-height:0;">
+                    <label style="display:block; margin:0.25rem 0;">VLM image size (smaller = faster)</label>
+                    <select id="askSize" style="width:100%; margin-bottom:0.5rem;">
+                        <option value="tiny">Tiny 256px</option>
+                        <option value="small" selected>Small 384px (default)</option>
+                        <option value="medium">Medium 512px</option>
+                        <option value="large">Large 768px</option>
+                        <option value="xl">XL 1024px</option>
+                    </select>
+                    <label style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.5rem; font-size:0.85rem;">
+                        <input type="checkbox" id="askUseThumb" checked />
+                        Prefer DB thumbnail (faster)
+                    </label>
+                    <div id="askChat" style="flex:1; min-height:120px; max-height:22vh; overflow:auto; background:#111; padding:0.75rem; border-radius:8px; font-size:0.85rem; margin-bottom:0.5rem;"></div>
+                    <details style="margin-bottom:0.5rem;">
+                        <summary style="cursor:pointer; color:#aab6ff;">Last request (full detail)</summary>
+                        <pre id="askRequest" style="white-space:pre-wrap; background:#111; padding:0.6rem; border-radius:8px; font-size:0.75rem; max-height:18vh; overflow:auto; margin:0.35rem 0 0;">—</pre>
+                    </details>
+                    <details style="margin-bottom:0.5rem;">
+                        <summary style="cursor:pointer; color:#8fd19e;">Last response (full detail)</summary>
+                        <pre id="askResponseDetail" style="white-space:pre-wrap; background:#111; padding:0.6rem; border-radius:8px; font-size:0.75rem; max-height:18vh; overflow:auto; margin:0.35rem 0 0;">—</pre>
+                    </details>
+                    <label>Question <span style="opacity:0.6;font-size:0.8rem;">(cached)</span></label>
+                    <textarea id="askQuestion" placeholder="What is in this image?"></textarea>
+                    <div id="askTagPreview" style="font-size:0.85rem; color:#ccc; margin:0.35rem 0; min-height:1.2em;"></div>
+                </div>
+            </div>
             <div class="btn-row">
                 <button onclick="closeAskModal()">Close</button>
+                <button onclick="applyAskTags()" id="askApplyTagBtn" disabled title="Parse last answer as JSON classification then write embed tags">Update tag by VLM</button>
                 <button class="primary" onclick="sendAskQuestion()">Ask</button>
             </div>
         </div>
@@ -754,8 +789,6 @@
 
 
         const IMAGE_EXTS = ['jpg','jpeg','png','gif','bmp','webp','heic','avif','tif','tiff'];
-        let askTargetPath = null;
-        let askHistory = [];
 
         function isImageItem(item) {
             if (!item || item.isFolder) return false;
@@ -821,12 +854,38 @@
         }
 
         let describeTargetPath = null;
+        let describeTargetId = null;
+        let describeLastResult = null;
+        let askTargetPath = null;
+        let askTargetId = null;
+        let askHistory = [];
+        let askLastResult = null;
 
         function getSavedVlmSize() {
             try { return localStorage.getItem('vlmImageSize') || 'small'; } catch { return 'small'; }
         }
         function setSavedVlmSize(v) {
             try { localStorage.setItem('vlmImageSize', v); } catch {}
+        }
+        function getSavedVlmQuestion() {
+            try { return localStorage.getItem('vlmLastQuestion') || ''; } catch { return ''; }
+        }
+        function setSavedVlmQuestion(q) {
+            try { localStorage.setItem('vlmLastQuestion', q || ''); } catch {}
+        }
+        function setVlmPreview(imgEl, metaEl, item, filePath) {
+            const id = item && item.id != null ? item.id : null;
+            if (imgEl) {
+                imgEl.src = id ? ('/images/' + id + '/thumb') : '';
+                imgEl.style.opacity = id ? '1' : '0.35';
+                imgEl.onerror = function() { this.style.opacity = '0.2'; };
+            }
+            if (metaEl) {
+                metaEl.textContent = (id ? ('fileId=' + id + ' · ') : '') + (filePath || '');
+            }
+        }
+        function prettyDebug(obj) {
+            try { return JSON.stringify(obj, null, 2); } catch { return String(obj); }
         }
 
         function contextDescribeImage() {
@@ -836,8 +895,15 @@
                 return;
             }
             describeTargetPath = filePathOf(contextItem);
+            describeTargetId = contextItem.id || null;
+            describeLastResult = null;
             document.getElementById('describeTitle').textContent = 'Describe: ' + (contextItem.name || '');
             document.getElementById('describeBody').textContent = 'Pick size then Run.';
+            document.getElementById('describeRequest').textContent = '—';
+            document.getElementById('describeTagPreview').textContent = '';
+            const applyBtn = document.getElementById('describeApplyTagBtn');
+            if (applyBtn) applyBtn.disabled = true;
+            setVlmPreview(document.getElementById('describePreview'), document.getElementById('describePreviewMeta'), contextItem, describeTargetPath);
             const sz = getSavedVlmSize();
             const sel = document.getElementById('describeSize');
             if (sel) sel.value = sz;
@@ -849,21 +915,81 @@
             const size = document.getElementById('describeSize')?.value || 'small';
             const mode = document.getElementById('describeMode')?.value || 'fast';
             setSavedVlmSize(size);
+            const reqPreview = {
+                endpoint: 'POST /api/vlm/describe',
+                body: {
+                    filePath: describeTargetPath,
+                    fileId: describeTargetId,
+                    mode,
+                    size,
+                    useThumbnail: !!document.getElementById('describeUseThumb')?.checked
+                }
+            };
+            document.getElementById('describeRequest').textContent = prettyDebug(reqPreview);
+            document.getElementById('describeBody').textContent = 'Running…';
             showLoading();
             try {
                 const res = await authFetch('/api/vlm/describe', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filePath: describeTargetPath, mode, size, useThumbnail: !!document.getElementById('describeUseThumb')?.checked })
+                    body: JSON.stringify(reqPreview.body)
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
-                const info = data.imageInfo ? ('\n\n[resized ' + (data.imageInfo.width||'?') + 'x' + (data.imageInfo.height||'?') +
-                    ' max=' + (data.imageInfo.maxWidth||size) + ' bytes=' + (data.imageInfo.processedSize||'?') + ']') : '';
-                document.getElementById('describeBody').textContent = JSON.stringify(data.classification, null, 2) + info;
+                describeLastResult = data;
+                if (data.fileId) describeTargetId = data.fileId;
+                if (data.debug) {
+                    document.getElementById('describeRequest').textContent = prettyDebug({
+                        client: reqPreview,
+                        vlm: data.debug
+                    });
+                }
+                document.getElementById('describeBody').textContent = prettyDebug({
+                    classification: data.classification,
+                    model: data.model,
+                    mode: data.mode,
+                    imageInfo: data.imageInfo,
+                    rawResponse: data.rawResponse,
+                    debugResponse: data.debug?.response || null,
+                    saved: data.saved,
+                    fileId: data.fileId
+                });
+                const cat = data.classification?.category;
+                const tags = data.classification?.tags || [];
+                document.getElementById('describeTagPreview').textContent =
+                    'VLM → tag candidate: ' + (cat || '—') + (tags.length ? (' · tags: ' + tags.join(', ')) : '');
+                const applyBtn = document.getElementById('describeApplyTagBtn');
+                if (applyBtn) applyBtn.disabled = !data.classification;
                 showToast('Saved to photo_classifications');
             } catch (err) {
+                document.getElementById('describeBody').textContent = 'Error: ' + err.message;
                 alert('Describe failed: ' + err.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function applyDescribeTags() {
+            if (!describeLastResult?.classification) return;
+            showLoading();
+            try {
+                const res = await authFetch('/api/vlm/apply-embed-tags', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        filePath: describeTargetPath,
+                        fileId: describeTargetId || describeLastResult.fileId,
+                        classification: describeLastResult.classification
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+                const label = (data.tags || []).map(t => t.label + (t.score != null ? ' ' + Number(t.score).toFixed(2) : '')).join(' · ')
+                    || data.category;
+                document.getElementById('describeTagPreview').textContent = 'Embed tags updated: ' + label;
+                showToast('Embed tags updated: ' + label);
+            } catch (err) {
+                alert('Apply tags failed: ' + err.message);
             } finally {
                 hideLoading();
             }
@@ -880,10 +1006,18 @@
                 return;
             }
             askTargetPath = filePathOf(contextItem);
+            askTargetId = contextItem.id || null;
             askHistory = [];
+            askLastResult = null;
             document.getElementById('askTitle').textContent = 'Ask: ' + (contextItem.name || '');
             document.getElementById('askChat').innerHTML = '<div style="opacity:0.5;">Ask anything about this image.</div>';
-            document.getElementById('askQuestion').value = '';
+            document.getElementById('askQuestion').value = getSavedVlmQuestion();
+            document.getElementById('askRequest').textContent = '—';
+            document.getElementById('askResponseDetail').textContent = '—';
+            document.getElementById('askTagPreview').textContent = '';
+            const applyBtn = document.getElementById('askApplyTagBtn');
+            if (applyBtn) applyBtn.disabled = true;
+            setVlmPreview(document.getElementById('askPreview'), document.getElementById('askPreviewMeta'), contextItem, askTargetPath);
             const askSel = document.getElementById('askSize');
             if (askSel) askSel.value = getSavedVlmSize();
             document.getElementById('askModal').classList.add('show');
@@ -892,7 +1026,9 @@
         function closeAskModal() {
             document.getElementById('askModal').classList.remove('show');
             askTargetPath = null;
+            askTargetId = null;
             askHistory = [];
+            askLastResult = null;
         }
 
         function appendAskChat(role, text) {
@@ -905,34 +1041,102 @@
             box.scrollTop = box.scrollHeight;
         }
 
+        function tryParseVlmJson(text) {
+            if (!text) return null;
+            let cleaned = String(text);
+            const fence = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+            if (fence) cleaned = fence[1].trim();
+            const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+            if (jsonMatch) cleaned = jsonMatch[0];
+            try { return JSON.parse(cleaned); } catch { return null; }
+        }
+
         async function sendAskQuestion() {
             if (!askTargetPath) return;
             const q = document.getElementById('askQuestion').value.trim();
             if (!q) return;
-            document.getElementById('askQuestion').value = '';
+            setSavedVlmQuestion(q);
+            document.getElementById('askQuestion').value = q;
             appendAskChat('user', q);
+            const reqPreview = {
+                endpoint: 'POST /api/vlm/ask',
+                body: {
+                    filePath: askTargetPath,
+                    fileId: askTargetId,
+                    question: q,
+                    history: askHistory,
+                    size: (document.getElementById('askSize')?.value || getSavedVlmSize()),
+                    useThumbnail: !!document.getElementById('askUseThumb')?.checked
+                }
+            };
+            document.getElementById('askRequest').textContent = prettyDebug(reqPreview);
             showLoading();
             try {
                 const res = await authFetch('/api/vlm/ask', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        filePath: askTargetPath,
-                        question: q,
-                        history: askHistory,
-                        size: (document.getElementById('askSize')?.value || getSavedVlmSize()),
-                        useThumbnail: !!document.getElementById('askUseThumb')?.checked
-                    })
+                    body: JSON.stringify(reqPreview.body)
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+                askLastResult = data;
                 setSavedVlmSize(document.getElementById('askSize')?.value || 'small');
+                if (data.debug) {
+                    document.getElementById('askRequest').textContent = prettyDebug({
+                        client: reqPreview,
+                        vlm: data.debug
+                    });
+                }
+                document.getElementById('askResponseDetail').textContent = prettyDebug({
+                    answer: data.answer,
+                    model: data.model,
+                    imageInfo: data.imageInfo,
+                    rawResponse: data.rawResponse,
+                    debugResponse: data.debug?.response || null
+                });
                 const meta = data.imageInfo ? (' [' + (data.imageInfo.width||'?') + 'x' + (data.imageInfo.height||'?') + ']') : '';
                 appendAskChat('assistant', (data.answer || '') + meta);
                 askHistory.push({ role: 'user', content: q });
                 askHistory.push({ role: 'assistant', content: data.answer || '' });
+                const parsed = tryParseVlmJson(data.answer);
+                const applyBtn = document.getElementById('askApplyTagBtn');
+                if (parsed && parsed.category) {
+                    askLastResult.classification = parsed;
+                    document.getElementById('askTagPreview').textContent = 'Parsable category: ' + parsed.category;
+                    if (applyBtn) applyBtn.disabled = false;
+                } else {
+                    document.getElementById('askTagPreview').textContent = 'Answer is not JSON classification — Describe 再用 Update tag，或問 VLM 回傳 category JSON。';
+                    if (applyBtn) applyBtn.disabled = true;
+                }
             } catch (err) {
                 appendAskChat('assistant', 'Error: ' + err.message);
+                document.getElementById('askResponseDetail').textContent = 'Error: ' + err.message;
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function applyAskTags() {
+            const cls = askLastResult?.classification;
+            if (!cls) return;
+            showLoading();
+            try {
+                const res = await authFetch('/api/vlm/apply-embed-tags', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        filePath: askTargetPath,
+                        fileId: askTargetId,
+                        classification: cls
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+                const label = (data.tags || []).map(t => t.label).join(' · ') || data.category;
+                document.getElementById('askTagPreview').textContent = 'Embed tags updated: ' + label;
+                showToast('Embed tags updated: ' + label);
+            } catch (err) {
+                alert('Apply tags failed: ' + err.message);
             } finally {
                 hideLoading();
             }

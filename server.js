@@ -3729,6 +3729,8 @@ app.post('/api/vlm/describe', requireAuthWrapper, requirePhotoPermission, async 
       model: vlmResult.model,
       mode: vlmResult.mode,
       imageInfo: vlmResult.imageInfo || null,
+      rawResponse: vlmResult.rawResponse || null,
+      debug: vlmResult.debug || null,
       saved: true
     });
   } catch (err) {
@@ -3768,7 +3770,9 @@ app.post('/api/vlm/ask', requireAuthWrapper, requirePhotoPermission, async (req,
       answer: result.answer,
       model: result.model,
       path: filePath,
-      imageInfo: result.imageInfo || null
+      imageInfo: result.imageInfo || null,
+      rawResponse: result.rawResponse || null,
+      debug: result.debug || null
     });
   } catch (err) {
     console.error('vlm/ask error:', err.message);
@@ -3776,6 +3780,94 @@ app.post('/api/vlm/ask', requireAuthWrapper, requirePhotoPermission, async (req,
   }
 });
 
+
+// Map VLM classification → file_embedding_categories (manual override from VLM dialog)
+app.post('/api/vlm/apply-embed-tags', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const body = req.body || {};
+    let { filePath, fileId, classification, category, tags, confidence, score, category2, score2 } = body;
+    let scanned = null;
+    if (fileId) {
+      const [rows] = await db.connection.query('SELECT * FROM scanned_files WHERE id = ? LIMIT 1', [fileId]);
+      scanned = rows[0] || null;
+    }
+    if (!scanned && filePath) {
+      scanned = await db.getScannedFileByPath(filePath);
+    }
+    if (!scanned) return res.status(404).json({ error: 'File not in scanned_files DB' });
+
+    const { EMBED_CATEGORY_PROTOTYPES, EMBED_CATEGORY_OTHER } = await import('./lib/embed-classifier.js');
+    const known = new Set(EMBED_CATEGORY_PROTOTYPES.map((p) => p.label));
+    known.add(EMBED_CATEGORY_OTHER);
+
+    const conf = Math.min(1, Math.max(0, Number(confidence ?? score ?? classification?.confidence ?? 0.7) || 0.7));
+    const outTags = [];
+    const pushLabel = (label, sc) => {
+      const lab = String(label || '').trim();
+      if (!lab || !known.has(lab)) return;
+      if (outTags.some((t) => t.label === lab)) return;
+      outTags.push({ label: lab, score: Math.min(1, Math.max(0, Number(sc) || conf)) });
+    };
+
+    const cls = classification && typeof classification === 'object' ? classification : null;
+    if (category) pushLabel(category, conf);
+    if (cls?.category) pushLabel(cls.category, conf);
+    if (category2) pushLabel(category2, score2 ?? Math.max(0.35, conf - 0.05));
+    const freeTags = Array.isArray(tags) ? tags : (Array.isArray(cls?.tags) ? cls.tags : []);
+    const keywordPairs = [
+      ['貓', '貓'], ['cat', '貓'], ['kitten', '貓'],
+      ['狗', '狗'], ['dog', '狗'], ['puppy', '狗'],
+      ['車', '車'], ['car', '車'], ['vehicle', '車'],
+      ['花', '花卉'], ['flower', '花卉'], ['floral', '花卉'],
+      ['食物', '食物'], ['food', '食物'], ['meal', '食物'],
+      ['風景', '風景'], ['landscape', '風景'], ['scenery', '風景'],
+      ['動物', '動物'], ['animal', '動物'],
+      ['截圖', '螢幕截圖'], ['screenshot', '螢幕截圖'],
+      ['收據', '收據餐牌資料'], ['receipt', '收據餐牌資料'], ['menu', '收據餐牌資料'],
+      ['合照', '人物合照'], ['group', '人物合照'],
+      ['單人', '人物單人'], ['selfie', '人物單人'], ['portrait', '人物單人']
+    ];
+    for (const t of freeTags) {
+      const raw = typeof t === 'string' ? t : (t?.label || '');
+      const text = String(raw || '').trim();
+      if (!text) continue;
+      if (known.has(text)) { pushLabel(text, conf); continue; }
+      const lower = text.toLowerCase();
+      for (const [needle, lab] of keywordPairs) {
+        if (lower.includes(String(needle).toLowerCase()) || text.includes(needle)) {
+          pushLabel(lab, Math.max(0.4, conf - 0.05));
+          break;
+        }
+      }
+    }
+    if (!outTags.length) pushLabel(EMBED_CATEGORY_OTHER, Math.min(conf, 0.4));
+
+    const primary = outTags[0];
+    const secondary = outTags[1] || null;
+    await db.upsertFileEmbeddingCategory(scanned.id, {
+      model: embedConfig.model,
+      category: primary.label,
+      score: primary.score,
+      category2: secondary ? secondary.label : null,
+      score2: secondary ? secondary.score : null,
+      tags: outTags.slice(0, 2)
+    });
+
+    res.json({
+      success: true,
+      fileId: scanned.id,
+      model: embedConfig.model,
+      category: primary.label,
+      score: primary.score,
+      category2: secondary ? secondary.label : null,
+      score2: secondary ? secondary.score : null,
+      tags: outTags.slice(0, 2)
+    });
+  } catch (err) {
+    console.error('vlm/apply-embed-tags error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // List embeddings for one folder (review UI)
 app.get('/api/embed/folder', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
