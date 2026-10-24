@@ -2921,7 +2921,7 @@ const vlmConfig = {
   timeout: parseInt(process.env.VLM_TIMEOUT) || 180000
 };
 const embedConfig = {
-  baseUrl: process.env.EMBEDDING_URL || 'http://127.0.0.1:8080',
+  baseUrl: process.env.EMBEDDING_URL || 'http://127.0.0.1:12333',
   model: process.env.EMBEDDING_MODEL || 'embeddinggemma-2',
   timeout: parseInt(process.env.EMBEDDING_TIMEOUT) || 120000,
   dims: parseInt(process.env.EMBEDDING_DIMS) || 768

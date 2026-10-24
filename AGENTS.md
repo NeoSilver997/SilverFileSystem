@@ -58,10 +58,10 @@
 - **Semantic image index:** `POST /api/embed/folder` indexes images in one folder (non-recursive) into `file_embeddings` (db_version 20+). UI: `/tree` → **Embed folder** or folder context menu **Embed Index**.
 - **Describe:** `POST /api/vlm/describe` runs local VLM and writes `photo_classifications`. UI: image context menu **Describe → DB**.
 - **Ask:** `POST /api/vlm/ask` free-form chat about one image (not auto-saved). UI: image context menu **Ask VLM**.
-- Env: `EMBEDDING_URL` (default `http://127.0.0.1:8080`), `EMBEDDING_MODEL`, `LMSTUDIO_URL` (default `http://localhost:12355`), `VLM_MODEL`.
+- Env: `EMBEDDING_URL` (default `http://127.0.0.1:12333`), `EMBEDDING_MODEL`, `LMSTUDIO_URL` (default `http://localhost:12355`), `VLM_MODEL`.
 - Run EmbeddingGemma server (DigUp-style, llama.cpp):
   ```bash
-  llama-server -m embeddinggemma-2-Q8_0.gguf --mmproj mmproj-embeddinggemma-2-Q8_0.gguf --embeddings --port 8080
+  llama-server -m embeddinggemma-2-Q8_0.gguf --mmproj mmproj-embeddinggemma-2-Q8_0.gguf --embeddings --port 12333
   ```
   GGUF: https://huggingface.co/ggml-org/embeddinggemma-2-GGUF — use Vulkan/CUDA as appropriate. If the embed server is down, APIs return **503** with a clear message.
 - Face tables (`faces_v2`, etc.) are separate; EmbeddingGemma does not do face detection.
