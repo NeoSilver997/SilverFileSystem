@@ -2796,8 +2796,9 @@ app.get('/api/file-type-breakdown', async (req, res) => {
 // Get all photos with optional search and filters
 app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
-    const { search, filter, camera, model, year, month, days, face, tag, hideOffline } = req.query;
+    const { search, filter, camera, model, year, month, days, face, tag, hideOffline, hasEmbedding, embedQuery } = req.query;
     const hideOfflineFiles = !(hideOffline === '0' || hideOffline === 'false');
+    let embedSearchMeta = null;
     
     // Use cached data if available
     const now = Date.now();
@@ -2846,7 +2847,7 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
     });
     
     // Default: last 7 days if no other filter specified (including days)
-    const hasAnyFilter = search || filter || camera || model || year || month || face || tag || (days !== undefined && days !== '');
+    const hasAnyFilter = search || filter || camera || model || year || month || face || tag || hasEmbedding || embedQuery || (days !== undefined && days !== '');
     if (!hasAnyFilter) {
       const sevenDaysAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
       photos = photos.filter(photo => {
@@ -2946,6 +2947,41 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
       photos = photos.filter(p => tagIds.has(p.id));
     }
 
+
+    /* __PHOTOS_HAS_EMBED_FILTER__ */
+    if (hasEmbedding === '1' || hasEmbedding === '0' || hasEmbedding === 'true' || hasEmbedding === 'false') {
+      const want = (hasEmbedding === '1' || hasEmbedding === 'true');
+      const ids = photos.map(p => p.id);
+      const withEmb = new Set(await db.listFileIdsWithEmbeddings(ids, embedConfig.model).catch(() => []));
+      photos = photos.filter(p => want ? withEmb.has(p.id) : !withEmb.has(p.id));
+    }
+    if (embedQuery && String(embedQuery).trim()) {
+      const { EmbeddingClient } = await import('./lib/embedding-client.js');
+      const { cosineSimilarity } = await import('./lib/embed-classifier.js');
+      const client = new EmbeddingClient(embedConfig);
+      const conn = await client.checkConnection();
+      if (!conn.ok) return res.status(503).json({ error: 'Embedding server unavailable', detail: conn.error });
+      const q = String(embedQuery).trim();
+      const { embedding: qEmb } = await client.embedText(q);
+      const candidateIds = new Set(photos.map(p => p.id));
+      const scored = [];
+      let scanned = 0;
+      for await (const row of db.iterateFileEmbeddings(embedConfig.model, { chunkSize: 400 })) {
+        scanned++;
+        if (!candidateIds.has(row.file_id)) continue;
+        if (!row.embedding?.length || row.embedding.length !== qEmb.length) continue;
+        const score = cosineSimilarity(qEmb, row.embedding);
+        if (score >= 0.12) scored.push({ id: row.file_id, score });
+      }
+      scored.sort((a, b) => b.score - a.score);
+      const byId = new Map(photos.map(p => [p.id, p]));
+      photos = scored.map(x => {
+        const p = byId.get(x.id);
+        return p ? { ...p, embedScore: x.score, hasEmbedding: true } : null;
+      }).filter(Boolean);
+      embedSearchMeta = { query: q, scanned, matched: photos.length };
+    }
+
     // Attach dual-tag fields for UI badges (chunked)
     try {
       const ids = photos.map(p => p.id);
@@ -3003,6 +3039,7 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
         withGPS
       },
       offlineSkipped,
+      embedSearch: embedSearchMeta || undefined,
       filters: {
         cameras: allCameras,
         models: allModels,
@@ -3431,6 +3468,67 @@ setJobRunner(async (job) => {
     return payload;
   }
 
+
+  if (type === 'embed-reclassify-by-tag') {
+    const tags = Array.isArray(params.tags) ? params.tags.map((t) => String(t).trim()).filter(Boolean) : [];
+    if (!tags.length) throw new Error('tags required');
+    const threshold = Number.isFinite(Number(params.minScore)) ? Number(params.minScore) : embedClassifyMinScore;
+    const classifier = new EmbedClassifier({ embedConfig, minScore: threshold });
+    const conn = await classifier.client.checkConnection();
+    if (!conn.ok) throw new Error(conn.error || 'Embedding server unavailable');
+    const prototypes = await classifier.ensurePrototypes(db, { forceRefresh: params.refreshPrototypes !== false });
+    const fileIds = await db.listFileIdsByEmbeddingTags(tags, embedConfig.model);
+    updateJob(jobId, { total: fileIds.length, message: `Reclassifying ${fileIds.length} files tagged ${tags.join('/')}`, meta: { tags } });
+    let classified = 0, failed = 0, missingEmbed = 0;
+    const categoryCounts = {};
+    const beforeTags = Object.fromEntries(tags.map((t) => [t, 0]));
+    // count before for tags in this set is the file list itself
+    for (let i = 0; i < fileIds.length; i++) {
+      if (isJobCancelled(jobId)) throw new Error('Cancelled');
+      const fileId = fileIds[i];
+      try {
+        const embRow = await db.getFileEmbedding(fileId, embedConfig.model);
+        if (!embRow?.embedding?.length) {
+          missingEmbed++; failed++;
+          updateJob(jobId, { done: i + 1, message: `No embed ${i + 1}/${fileIds.length}` });
+          continue;
+        }
+        const verdict = classifier.classify(embRow.embedding, prototypes);
+        await db.upsertFileEmbeddingCategory(fileId, {
+          model: embedConfig.model,
+          category: verdict.category,
+          score: verdict.score,
+          category2: verdict.category2,
+          score2: verdict.score2,
+          tags: verdict.tags
+        });
+        classified++;
+        for (const tg of (verdict.tags || [{ label: verdict.category }])) {
+          if (tg.label) categoryCounts[tg.label] = (categoryCounts[tg.label] || 0) + 1;
+        }
+        const tagLabel = (verdict.tags || []).map((x) => x.label).filter(Boolean).join('+') || verdict.category;
+        updateJob(jobId, { done: i + 1, currentItem: String(fileId), message: `${tagLabel} ${i + 1}/${fileIds.length}` });
+      } catch (err) {
+        failed++;
+        updateJob(jobId, { done: i + 1, message: `Error ${i + 1}/${fileIds.length}: ${err.message}` });
+        if (err.statusCode === 503) throw err;
+      }
+    }
+    const payload = {
+      tags,
+      total: fileIds.length,
+      classified,
+      failed,
+      missingEmbed,
+      minScore: threshold,
+      model: embedConfig.model,
+      categoryCounts,
+      beforeCount: fileIds.length
+    };
+    completeJob(jobId, payload, `Done: classified=${classified} failed=${failed} missingEmbed=${missingEmbed}`);
+    return payload;
+  }
+
   if (type === 'thumbs-folder') {
     const listed = await db.listImagesInFolder({
       folderId: params.folderId,
@@ -3793,6 +3891,111 @@ app.post('/api/embed/classify-folder', requireAuthWrapper, requirePhotoPermissio
   }
 });
 
+
+
+// Semantic search: embed query text, cosine vs file_embeddings
+app.get('/api/embed/search', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const q = String(req.query.q || req.query.query || '').trim();
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 100));
+    const minScore = Number.isFinite(Number(req.query.minScore)) ? Number(req.query.minScore) : 0.15;
+    if (!q) return res.status(400).json({ error: 'q (query text) is required' });
+    const { EmbeddingClient } = await import('./lib/embedding-client.js');
+    const { cosineSimilarity } = await import('./lib/embed-classifier.js');
+    const client = new EmbeddingClient(embedConfig);
+    const conn = await client.checkConnection();
+    if (!conn.ok) {
+      return res.status(503).json({ error: 'Embedding server unavailable', detail: conn.error });
+    }
+    const { embedding: qEmb, model, dims } = await client.embedText(q);
+    const scored = [];
+    let scanned = 0;
+    for await (const row of db.iterateFileEmbeddings(model || embedConfig.model, { chunkSize: 400 })) {
+      scanned++;
+      if (!row.embedding?.length || row.embedding.length !== qEmb.length) continue;
+      const score = cosineSimilarity(qEmb, row.embedding);
+      if (score < minScore) continue;
+      scored.push({ fileId: row.file_id, score });
+      if (scored.length > limit * 4) {
+        scored.sort((a, b) => b.score - a.score);
+        scored.length = limit * 2;
+      }
+    }
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, limit);
+    const ids = top.map((x) => x.fileId);
+    const scoreById = new Map(top.map((x) => [x.fileId, x.score]));
+    let photos = [];
+    if (ids.length) {
+      const all = photosCache || await db.getPhotosWithMetadata();
+      const byId = new Map(all.map((p) => [p.id, p]));
+      photos = ids.map((id) => {
+        const p = byId.get(id);
+        if (!p) return null;
+        return { ...p, embedScore: scoreById.get(id), hasEmbedding: true };
+      }).filter(Boolean);
+      // attach tags
+      try {
+        const catRows = await db.listFileEmbeddingCategoriesByFileIds(ids);
+        const catByFile = new Map(catRows.map((r) => [r.file_id, r]));
+        photos = photos.map((p) => {
+          const cat = catByFile.get(p.id);
+          if (!cat) return { ...p, category: null, category2: null, tags: [] };
+          const tags = db.parseEmbeddingCategoryTags(cat);
+          return {
+            ...p,
+            category: cat.category || null,
+            category2: cat.category2 || (tags[1] ? tags[1].label : null),
+            categoryScore: cat.score != null ? Number(cat.score) : null,
+            categoryScore2: cat.score2 != null ? Number(cat.score2) : null,
+            tags
+          };
+        });
+      } catch (_) {}
+    }
+    res.json({
+      query: q,
+      model,
+      dims,
+      scanned,
+      minScore,
+      count: photos.length,
+      photos
+    });
+  } catch (err) {
+    console.error('embed/search error:', err.message);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+// Force-reclassify files that currently carry given tags (job queue)
+app.post('/api/embed/reclassify-by-tag', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const tags = Array.isArray(body.tags) ? body.tags : (body.tag ? [body.tag] : []);
+    if (!tags.length) return res.status(400).json({ error: 'tags array required' });
+    const classifier = new EmbedClassifier({ embedConfig, minScore: embedClassifyMinScore });
+    const conn = await classifier.client.checkConnection();
+    if (!conn.ok) {
+      return res.status(503).json({ error: 'Embedding server unavailable', detail: conn.error });
+    }
+    const jobId = createJob({
+      type: 'embed-reclassify-by-tag',
+      total: 0,
+      meta: { tags },
+      params: {
+        tags,
+        refreshPrototypes: body.refreshPrototypes !== false,
+        minScore: body.minScore
+      },
+      createdBy: req.user?.username || req.user?.id || null
+    });
+    res.status(202).json({ jobId, status: 'queued', type: 'embed-reclassify-by-tag', reviewUrl: '/jobs?id=' + jobId });
+  } catch (err) {
+    console.error('embed/reclassify-by-tag error:', err.message);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
 
 // Warm thumbnail_cache for images in one folder (non-recursive)
 app.post('/api/thumbs/folder', requireAuthWrapper, requirePhotoPermission, async (req, res) => {

@@ -94,7 +94,13 @@
     </div>
 
     <div class="controls">
-        <div class="search-box"><input type="text" id="searchInput" placeholder="Search photos by name, camera, location..."></div>
+        <div class="search-box"><input type="text" id="searchInput" placeholder="Search photos by name, camera, or semantic query..."></div>
+        <div class="filter-group">
+            <select id="searchMode" class="filter-btn" onchange="loadPhotos()" title="Search mode">
+                <option value="name">Name search</option>
+                <option value="embed">Embedding search</option>
+            </select>
+        </div>
         <div class="filter-group">
             <select id="cameraFilter" class="filter-btn" onchange="loadPhotos()"><option value="">All Cameras</option></select>
         </div>
@@ -126,6 +132,13 @@
         </div>
         <div class="filter-group">
             <select id="tagFilter" class="filter-btn" onchange="loadPhotos()"><option value="">All Tags</option></select>
+        </div>
+        <div class="filter-group">
+            <select id="embedFilter" class="filter-btn" onchange="loadPhotos()">
+                <option value="">All Embed</option>
+                <option value="1">Has Embedding</option>
+                <option value="0">No Embedding</option>
+            </select>
         </div>
         <label class="dup-toggle"><input type="checkbox" id="hideOffline" checked onchange="loadPhotos()"> Hide Offline</label>
         <label class="dup-toggle"><input type="checkbox" id="hideDuplicates" checked onchange="loadPhotos()"> Hide Duplicates</label>
@@ -186,12 +199,16 @@
             try {
                 const params = new URLSearchParams();
                 const search = document.getElementById('searchInput').value;
+                const searchMode = document.getElementById('searchMode')?.value || 'name';
                 const camera = document.getElementById('cameraFilter').value;
                 const model = document.getElementById('modelFilter').value;
                 const year = document.getElementById('yearFilter').value;
                 const month = document.getElementById('monthFilter').value;
                 const days = document.getElementById('daysFilter').value;
-                if (search) params.append('search', search);
+                if (search) {
+                    if (searchMode === 'embed') params.append('embedQuery', search);
+                    else params.append('search', search);
+                }
                 if (camera) params.append('camera', camera);
                 if (model) params.append('model', model);
                 if (year) params.append('year', year);
@@ -201,6 +218,8 @@
                 if (face) params.append('face', face);
                 const tag = document.getElementById('tagFilter').value;
                 if (tag) params.append('tag', tag);
+                const embedF = document.getElementById('embedFilter')?.value || '';
+                if (embedF !== '') params.append('hasEmbedding', embedF);
                 const hideOffline = document.getElementById('hideOffline').checked;
                 params.append('hideOffline', hideOffline ? '1' : '0');
 
@@ -264,7 +283,8 @@
                             ${photo.camera_make?`<div>📸 ${photo.camera_make} ${photo.camera_model||''}</div>`:''}
                             ${photo.date_taken?`<div>📅 ${formatDate(photo.date_taken)}</div>`:''}
                             ${photo.latitude?`<span class="photo-badge">📍 GPS</span>`:''}
-                            ${(photo.tags&&photo.tags.length)?photo.tags.map(t=>`<span class="photo-badge" style="background:rgba(102,126,234,0.25);color:#aab6ff;">🏷 ${t.label}</span>`).join(''):(photo.category?`<span class="photo-badge" style="background:rgba(102,126,234,0.25);color:#aab6ff;">🏷 ${photo.category}${photo.category2?' · '+photo.category2:''}</span>`:'')}
+                            ${photo.hasEmbedding?`<span class="photo-badge" style="background:rgba(46,204,113,0.2);color:#2ecc71;">Embed${photo.embedScore!=null?' '+Number(photo.embedScore).toFixed(2):''}</span>`:''}
+                            ${(photo.tags&&photo.tags.length)?photo.tags.map(t=>`<span class="photo-badge" style="background:rgba(102,126,234,0.25);color:#aab6ff;">🏷 ${t.label}${t.score!=null?' '+Number(t.score).toFixed(2):''}</span>`).join(''):(photo.category?`<span class="photo-badge" style="background:rgba(102,126,234,0.25);color:#aab6ff;">🏷 ${photo.category}${photo.category2?' · '+photo.category2:''}</span>`:'')}
                             ${photo.is_duplicate?`<span class="photo-badge" style="background:rgba(231,76,60,0.2);color:#e74c3c;">⚠ Dup</span>`:''}
                         </div>
                     </div>
@@ -384,6 +404,8 @@
                 ${photo.copyright?`<div class="modal-meta-row"><span class="label">Copyright</span><span class="value">${photo.copyright}</span></div>`:''}
                 ${photo.hash?`<div class="modal-meta-row"><span class="label">Hash</span><span class="value" style="font-size:0.7rem;">${photo.hash.substring(0,16)}...</span></div>`:''}
                 <div class="modal-meta-row"><span class="label">Path</span><span class="value" style="font-size:0.7rem;">${photo.path||'N/A'}</span></div>
+                <div class="modal-meta-row"><span class="label">Embedding</span><span class="value">${photo.hasEmbedding?(photo.embedScore!=null?'Yes · score '+Number(photo.embedScore).toFixed(4):'Yes'):'No'}</span></div>
+                ${(photo.tags&&photo.tags.length)?`<div class="modal-meta-row"><span class="label">Tags</span><span class="value">${photo.tags.map(t=>t.label+(t.score!=null?' ('+Number(t.score).toFixed(2)+')':'')).join(' · ')}</span></div>`:(photo.category?`<div class="modal-meta-row"><span class="label">Tags</span><span class="value">${photo.category}${photo.category2?' · '+photo.category2:''}</span></div>`:'')}
                 <div id="modalFaces" style="margin-top:0.75rem;"></div>
                 <button class="modal-delete" onclick="deletePhoto(${photo.id}, ${currentModalIndex})">🗑 Delete Photo</button>
             `;
