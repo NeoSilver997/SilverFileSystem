@@ -1577,6 +1577,10 @@ app.post('/api/tree/delete-file', requireAuthWrapper, async (req, res) => {
 });
 
 // Serve tree view page
+app.get('/embeddings', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'embeddings.html'));
+});
+
 app.get('/tree', (req, res) => {
   const html = fs.readFileSync(join(__dirname, 'public', 'tree.html'), 'utf8');
   res.send(html);
@@ -2916,9 +2920,14 @@ import { FileWatcher } from './lib/file-watcher.js';
 import { EmbeddingClient } from './lib/embedding-client.js';
 
 const vlmConfig = {
-  lmstudioUrl: process.env.LMSTUDIO_URL || 'http://localhost:12355',
-  model: process.env.VLM_MODEL || 'google/gemma-4-12b-qat',
-  timeout: parseInt(process.env.VLM_TIMEOUT) || 180000
+  lmstudioUrl: process.env.LMSTUDIO_URL || process.env.VLM_URL || 'http://127.0.0.1:8080',
+  model: process.env.VLM_MODEL || 'qwen3.8-flash-next-iq2_xs-V-vision-128k-kv64k',
+  timeout: parseInt(process.env.VLM_TIMEOUT) || 180000,
+  apiKey: process.env.VLM_API_KEY || '',
+  apiKeyFile: process.env.VLM_API_KEY_FILE || '',
+  imageMode: process.env.VLM_IMAGE_MODE || 'openai',
+  maxImageWidth: process.env.VLM_MAX_WIDTH || 384,
+  jpegQuality: process.env.VLM_JPEG_QUALITY || 55
 };
 const embedConfig = {
   baseUrl: process.env.EMBEDDING_URL || 'http://127.0.0.1:12333',
@@ -3235,10 +3244,66 @@ app.post('/api/embed/folder', requireAuthWrapper, requirePhotoPermission, async 
   }
 });
 
+
+// Resolve optional DB thumbnail for VLM (thumbnail_cache via hash+size). Falls back to disk.
+async function resolveVlmImageOptions(filePath, body = {}) {
+  const useThumbnail = body.useThumbnail !== false && body.useThumbnail !== 0 && body.useThumbnail !== '0' && body.useThumbnail !== 'false';
+  const opts = {
+    maxWidth: body.maxWidth,
+    size: body.size,
+    useThumbnail
+  };
+  if (!useThumbnail) return opts;
+
+  try {
+    const scanned = await db.getScannedFileByPath(filePath);
+    if (!scanned) return opts;
+
+    let file = scanned;
+    if (!file.hash && !file.md5 && !file.quick_hash) {
+      const computed = computeQuickHash(filePath);
+      if (computed?.hash) {
+        await db.connection.execute(
+          'UPDATE scanned_files SET quick_hash = ? WHERE id = ? AND quick_hash IS NULL',
+          [computed.hash, scanned.id]
+        ).catch(() => {});
+        file = { ...file, quick_hash: computed.hash, size: computed.size || file.size };
+      }
+    }
+
+    let thumb = await db.getThumbnailForScannedFile(file);
+    if (!thumb) {
+      const result = await sharp(filePath)
+        .resize({ width: 400, height: 400, fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 75 })
+        .toBuffer({ resolveWithObject: true });
+      const hashKey = file.hash || file.md5 || file.quick_hash;
+      if (hashKey) {
+        await db.saveThumbnail(hashKey, file.size, 'image', result.data, 'image/jpeg');
+        thumb = { thumb_data: result.data, content_type: 'image/jpeg', file_hash: hashKey, file_size: file.size };
+      } else {
+        opts.imageBuffer = result.data;
+        opts.originalSize = file.size;
+        opts.source = 'generated-no-hash';
+        return opts;
+      }
+    }
+
+    if (thumb?.thumb_data) {
+      opts.imageBuffer = Buffer.isBuffer(thumb.thumb_data) ? thumb.thumb_data : Buffer.from(thumb.thumb_data);
+      opts.originalSize = file.size;
+      opts.source = 'thumbnail_cache';
+    }
+  } catch (err) {
+    console.warn('resolveVlmImageOptions thumb fallback:', err.message);
+  }
+  return opts;
+}
+
 // Describe selected image via VLM and write photo_classifications
 app.post('/api/vlm/describe', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
-    const { filePath, mode = 'fast' } = req.body || {};
+    const { filePath, mode = 'fast', maxWidth, size, useThumbnail } = req.body || {};
     if (!filePath) return res.status(400).json({ error: 'filePath is required' });
 
     const exists = await fs.promises.access(filePath).then(() => true).catch(() => false);
@@ -3261,7 +3326,8 @@ app.post('/api/vlm/describe', requireAuthWrapper, requirePhotoPermission, async 
       });
     }
 
-    const vlmResult = await client.classifyImage(filePath, mode === 'detail' ? 'detail' : 'fast');
+    const imgOpts = await resolveVlmImageOptions(filePath, { maxWidth, size, useThumbnail });
+    const vlmResult = await client.classifyImage(filePath, mode === 'detail' ? 'detail' : 'fast', imgOpts);
     if (!vlmResult.success) {
       return res.status(502).json({ error: vlmResult.error || 'VLM classify failed' });
     }
@@ -3283,6 +3349,7 @@ app.post('/api/vlm/describe', requireAuthWrapper, requirePhotoPermission, async 
       classification: vlmResult.classification,
       model: vlmResult.model,
       mode: vlmResult.mode,
+      imageInfo: vlmResult.imageInfo || null,
       saved: true
     });
   } catch (err) {
@@ -3294,7 +3361,7 @@ app.post('/api/vlm/describe', requireAuthWrapper, requirePhotoPermission, async 
 // Ask chat about a selected image (optional history); does not auto-save
 app.post('/api/vlm/ask', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
-    const { filePath, question, history = [] } = req.body || {};
+    const { filePath, question, history = [], maxWidth, size, useThumbnail } = req.body || {};
     if (!filePath) return res.status(400).json({ error: 'filePath is required' });
     if (!question) return res.status(400).json({ error: 'question is required' });
 
@@ -3311,7 +3378,8 @@ app.post('/api/vlm/ask', requireAuthWrapper, requirePhotoPermission, async (req,
       });
     }
 
-    const result = await client.askAboutImage(filePath, question, history);
+    const imgOpts = await resolveVlmImageOptions(filePath, { maxWidth, size, useThumbnail });
+    const result = await client.askAboutImage(filePath, question, history, imgOpts);
     if (!result.success) {
       return res.status(502).json({ error: result.error || 'VLM ask failed' });
     }
@@ -3320,10 +3388,123 @@ app.post('/api/vlm/ask', requireAuthWrapper, requirePhotoPermission, async (req,
       success: true,
       answer: result.answer,
       model: result.model,
-      path: filePath
+      path: filePath,
+      imageInfo: result.imageInfo || null
     });
   } catch (err) {
     console.error('vlm/ask error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// List embeddings for one folder (review UI)
+app.get('/api/embed/folder', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const folderId = req.query.folderId || req.query.id || null;
+    const folderPath = req.query.folderPath || req.query.path || null;
+    const model = req.query.model || null;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 500, 2000);
+    if (!folderId && !folderPath) {
+      return res.status(400).json({ error: 'folderId or folderPath is required' });
+    }
+    const result = await db.listFileEmbeddingsInFolder({ folderId, folderPath, model, limit });
+    if (!result.folderId) {
+      return res.status(404).json({ error: 'Folder not found in folder_tree' });
+    }
+    res.json(result);
+  } catch (err) {
+    console.error('embed/folder GET error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Warm thumbnail_cache for images in one folder (non-recursive)
+app.post('/api/thumbs/folder', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const { folderPath, folderId, limit = 200, force = false, maxSize = 400 } = req.body || {};
+    if (!folderPath && !folderId) {
+      return res.status(400).json({ error: 'folderPath or folderId is required' });
+    }
+    const listed = await db.listImagesInFolder({
+      folderId,
+      folderPath,
+      limit: Math.min(parseInt(limit, 10) || 200, 500)
+    });
+    if (!listed.folderId) {
+      return res.status(404).json({ error: 'Folder not found in folder_tree' });
+    }
+
+    const thumbMax = Math.min(1024, Math.max(64, parseInt(maxSize, 10) || 400));
+    let generated = 0, skipped = 0, failed = 0;
+    const results = [];
+
+    for (const file of listed.files) {
+      const filePath = file.path;
+      try {
+        const [rows] = await db.connection.execute(
+          'SELECT id, name, size, hash, md5, quick_hash FROM scanned_files WHERE id = ?',
+          [file.id]
+        );
+        let row = rows[0];
+        if (!row) { failed++; results.push({ id: file.id, name: file.name, status: 'missing-db' }); continue; }
+
+        if (!row.hash && !row.md5 && !row.quick_hash) {
+          const computed = computeQuickHash(filePath);
+          if (computed?.hash) {
+            await db.connection.execute(
+              'UPDATE scanned_files SET quick_hash = ? WHERE id = ? AND quick_hash IS NULL',
+              [computed.hash, row.id]
+            );
+            row = { ...row, quick_hash: computed.hash };
+          }
+        }
+
+        const existing = await db.getThumbnailForScannedFile(row);
+        if (existing && !force) {
+          skipped++;
+          results.push({ id: file.id, name: file.name, status: 'skipped', bytes: existing.thumb_data?.length || 0 });
+          continue;
+        }
+
+        const exists = await fs.promises.access(filePath).then(() => true).catch(() => false);
+        if (!exists) {
+          failed++;
+          results.push({ id: file.id, name: file.name, status: 'missing' });
+          continue;
+        }
+
+        const buf = await sharp(filePath)
+          .resize({ width: thumbMax, height: thumbMax, fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 75 })
+          .toBuffer();
+        const hashKey = row.hash || row.md5 || row.quick_hash;
+        if (!hashKey) {
+          failed++;
+          results.push({ id: file.id, name: file.name, status: 'no-hash' });
+          continue;
+        }
+        await db.saveThumbnail(hashKey, row.size, 'image', buf, 'image/jpeg');
+        generated++;
+        results.push({ id: file.id, name: file.name, status: 'generated', bytes: buf.length });
+      } catch (err) {
+        failed++;
+        results.push({ id: file.id, name: file.name, status: 'error', error: err.message });
+      }
+    }
+
+    res.json({
+      folderId: listed.folderId,
+      path: listed.path,
+      total: listed.files.length,
+      generated,
+      skipped,
+      failed,
+      maxSize: thumbMax,
+      results
+    });
+  } catch (err) {
+    console.error('thumbs/folder error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

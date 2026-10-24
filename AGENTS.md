@@ -66,4 +66,5 @@
   ```
   GGUF: https://huggingface.co/ggml-org/embeddinggemma-2-GGUF — use Vulkan/CUDA as appropriate. If the embed server is down, APIs return **503** with a clear message.
 - Face tables (`faces_v2`, etc.) are separate; EmbeddingGemma does not do face detection.
+- **DB thumbnails for VLM:** `thumbnail_cache` (file_hash+file_size+media_type). Describe/Ask default `useThumbnail: true` loads cache JPEG (or generates+caches via same 400px pipeline as `/images/:id/thumb`) then optionally downscales further by size preset. Warm a folder: `POST /api/thumbs/folder`. Review embeddings: `/embeddings?folderId=` or `?path=` (also linked from `/tree`). List API: `GET /api/embed/folder?folderId=`.
 

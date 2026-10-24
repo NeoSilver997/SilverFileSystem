@@ -119,6 +119,7 @@
     <div class="header">
         <a href="/" class="back">Dashboard</a>
         <a href="/usage-chart" class="back" id="usageChartLink" title="Open usage treemap">Usage Chart</a>
+        <a href="/embeddings" class="back" id="embeddingsLink" title="Review folder embeddings">Embeddings</a>
         <h1>📁 Folder Tree</h1>
         <div style="margin-left:auto; display:flex; gap:0.5rem; align-items:center;">
             <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.85rem; cursor:pointer; color:rgba(255,255,255,0.8);">
@@ -170,15 +171,45 @@
     <div id="describeModal" class="modal-overlay" onclick="if(event.target===this)closeDescribeModal()">
         <div class="modal-box" style="width:560px; max-height:80vh; overflow:auto;">
             <h3 id="describeTitle">Describe</h3>
-            <pre id="describeBody" style="white-space:pre-wrap; background:#111; padding:0.75rem; border-radius:8px; font-size:0.85rem; max-height:50vh; overflow:auto;"></pre>
+            <label style="display:block; margin:0.5rem 0 0.25rem;">VLM image size (smaller = faster)</label>
+            <select id="describeSize" style="width:100%; margin-bottom:0.5rem;">
+                <option value="tiny">Tiny 256px</option>
+                <option value="small" selected>Small 384px (default)</option>
+                <option value="medium">Medium 512px</option>
+                <option value="large">Large 768px</option>
+                <option value="xl">XL 1024px</option>
+            </select>
+            <label style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.75rem; font-size:0.85rem;">
+                <input type="checkbox" id="describeUseThumb" checked />
+                Prefer DB thumbnail (faster) / 優先用資料庫縮圖
+            </label>
+            <label style="display:block; margin:0.25rem 0;">Mode</label>
+            <select id="describeMode" style="width:100%; margin-bottom:0.75rem;">
+                <option value="fast" selected>Fast</option>
+                <option value="detail">Detail</option>
+            </select>
+            <pre id="describeBody" style="white-space:pre-wrap; background:#111; padding:0.75rem; border-radius:8px; font-size:0.85rem; max-height:40vh; overflow:auto;">Pick size then Run.</pre>
             <div class="btn-row">
                 <button onclick="closeDescribeModal()">Close</button>
+                <button class="primary" onclick="runDescribeImage()">Run Describe</button>
             </div>
         </div>
     </div>
     <div id="askModal" class="modal-overlay" onclick="if(event.target===this)closeAskModal()">
         <div class="modal-box" style="width:560px; max-height:85vh; display:flex; flex-direction:column;">
             <h3 id="askTitle">Ask about image</h3>
+            <label style="display:block; margin:0.25rem 0;">VLM image size (smaller = faster)</label>
+            <select id="askSize" style="width:100%; margin-bottom:0.5rem;">
+                <option value="tiny">Tiny 256px</option>
+                <option value="small" selected>Small 384px (default)</option>
+                <option value="medium">Medium 512px</option>
+                <option value="large">Large 768px</option>
+                <option value="xl">XL 1024px</option>
+            </select>
+            <label style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.5rem; font-size:0.85rem;">
+                <input type="checkbox" id="askUseThumb" checked />
+                Prefer DB thumbnail (faster) / 優先用資料庫縮圖
+            </label>
             <div id="askChat" style="flex:1; min-height:180px; max-height:45vh; overflow:auto; background:#111; padding:0.75rem; border-radius:8px; font-size:0.85rem; margin-bottom:0.75rem;"></div>
             <label>Question</label>
             <textarea id="askQuestion" placeholder="What is in this image?"></textarea>
@@ -214,6 +245,13 @@
             a.href = currentPath
                 ? '/usage-chart?path=' + encodeURIComponent(currentPath)
                 : '/usage-chart';
+            const e = document.getElementById('embeddingsLink');
+            if (e) {
+                const q = [];
+                if (currentId) q.push('folderId=' + encodeURIComponent(currentId));
+                if (currentPath) q.push('path=' + encodeURIComponent(currentPath));
+                e.href = q.length ? ('/embeddings?' + q.join('&')) : '/embeddings';
+            }
         }
 
         function updateButtons() {
@@ -761,25 +799,47 @@
             embedFolder(contextItem.path, contextItem.id);
         }
 
-        async function contextDescribeImage() {
+        let describeTargetPath = null;
+
+        function getSavedVlmSize() {
+            try { return localStorage.getItem('vlmImageSize') || 'small'; } catch { return 'small'; }
+        }
+        function setSavedVlmSize(v) {
+            try { localStorage.setItem('vlmImageSize', v); } catch {}
+        }
+
+        function contextDescribeImage() {
             if (!contextItem || contextItem.isFolder) return;
             if (!isImageItem(contextItem)) {
                 alert('Select an image file');
                 return;
             }
-            const filePath = filePathOf(contextItem);
+            describeTargetPath = filePathOf(contextItem);
+            document.getElementById('describeTitle').textContent = 'Describe: ' + (contextItem.name || '');
+            document.getElementById('describeBody').textContent = 'Pick size then Run.';
+            const sz = getSavedVlmSize();
+            const sel = document.getElementById('describeSize');
+            if (sel) sel.value = sz;
+            document.getElementById('describeModal').classList.add('show');
+        }
+
+        async function runDescribeImage() {
+            if (!describeTargetPath) return;
+            const size = document.getElementById('describeSize')?.value || 'small';
+            const mode = document.getElementById('describeMode')?.value || 'fast';
+            setSavedVlmSize(size);
             showLoading();
             try {
                 const res = await authFetch('/api/vlm/describe', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filePath, mode: 'fast' })
+                    body: JSON.stringify({ filePath: describeTargetPath, mode, size, useThumbnail: !!document.getElementById('describeUseThumb')?.checked })
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
-                document.getElementById('describeTitle').textContent = 'Describe: ' + (contextItem.name || '');
-                document.getElementById('describeBody').textContent = JSON.stringify(data.classification, null, 2);
-                document.getElementById('describeModal').classList.add('show');
+                const info = data.imageInfo ? ('\n\n[resized ' + (data.imageInfo.width||'?') + 'x' + (data.imageInfo.height||'?') +
+                    ' max=' + (data.imageInfo.maxWidth||size) + ' bytes=' + (data.imageInfo.processedSize||'?') + ']') : '';
+                document.getElementById('describeBody').textContent = JSON.stringify(data.classification, null, 2) + info;
                 showToast('Saved to photo_classifications');
             } catch (err) {
                 alert('Describe failed: ' + err.message);
@@ -803,6 +863,8 @@
             document.getElementById('askTitle').textContent = 'Ask: ' + (contextItem.name || '');
             document.getElementById('askChat').innerHTML = '<div style="opacity:0.5;">Ask anything about this image.</div>';
             document.getElementById('askQuestion').value = '';
+            const askSel = document.getElementById('askSize');
+            if (askSel) askSel.value = getSavedVlmSize();
             document.getElementById('askModal').classList.add('show');
         }
 
@@ -833,11 +895,19 @@
                 const res = await authFetch('/api/vlm/ask', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filePath: askTargetPath, question: q, history: askHistory })
+                    body: JSON.stringify({
+                        filePath: askTargetPath,
+                        question: q,
+                        history: askHistory,
+                        size: (document.getElementById('askSize')?.value || getSavedVlmSize()),
+                        useThumbnail: !!document.getElementById('askUseThumb')?.checked
+                    })
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
-                appendAskChat('assistant', data.answer || '');
+                setSavedVlmSize(document.getElementById('askSize')?.value || 'small');
+                const meta = data.imageInfo ? (' [' + (data.imageInfo.width||'?') + 'x' + (data.imageInfo.height||'?') + ']') : '';
+                appendAskChat('assistant', (data.answer || '') + meta);
                 askHistory.push({ role: 'user', content: q });
                 askHistory.push({ role: 'assistant', content: data.answer || '' });
             } catch (err) {

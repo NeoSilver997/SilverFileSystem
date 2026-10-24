@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Embedding Review · SilverFileSystem</title>
+  <style>
+    :root { --bg:#0f1115; --card:#1a1f2b; --text:#e8eaed; --muted:#9aa0a6; --accent:#9b59b6; --ok:#2ecc71; --bad:#e74c3c; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, "Segoe UI", sans-serif; background:var(--bg); color:var(--text); }
+    header { display:flex; flex-wrap:wrap; gap:0.75rem; align-items:center; padding:1rem 1.25rem; border-bottom:1px solid #2a3142; background:#12161f; position:sticky; top:0; z-index:5; }
+    header h1 { font-size:1.1rem; margin:0; font-weight:600; }
+    header a { color:#8ab4f8; text-decoration:none; margin-right:0.75rem; }
+    input, select, button { background:#222938; color:var(--text); border:1px solid #3a4358; border-radius:6px; padding:0.45rem 0.7rem; }
+    button { cursor:pointer; background:rgba(155,89,182,0.35); border-color:rgba(155,89,182,0.6); }
+    button:hover { filter:brightness(1.1); }
+    .meta { color:var(--muted); font-size:0.85rem; }
+    main { padding:1rem 1.25rem 2rem; }
+    table { width:100%; border-collapse:collapse; background:var(--card); border-radius:10px; overflow:hidden; }
+    th, td { padding:0.55rem 0.7rem; border-bottom:1px solid #2a3142; text-align:left; font-size:0.9rem; vertical-align:middle; }
+    th { background:#151a24; color:var(--muted); font-weight:600; position:sticky; top:64px; }
+    tr:hover td { background:#1f2633; }
+    .thumb { width:56px; height:56px; object-fit:cover; border-radius:6px; background:#111; }
+    .badge { display:inline-block; padding:0.15rem 0.45rem; border-radius:999px; font-size:0.75rem; }
+    .badge.ok { background:rgba(46,204,113,0.2); color:var(--ok); }
+    .badge.miss { background:rgba(231,76,60,0.2); color:var(--bad); }
+    .path { font-family: ui-monospace, Consolas, monospace; font-size:0.8rem; color:var(--muted); word-break:break-all; }
+    #status { margin:0.75rem 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/tree">← Tree</a>
+    <a href="/dashboard.html">Dashboard</a>
+    <h1>🧬 Embedding 檢視 / Embedding Review</h1>
+    <input id="folderPath" style="min-width:320px; flex:1;" placeholder="Folder path e.g. D:\Phone\16G\DCIM\103OLYMP" />
+    <input id="folderId" style="width:110px;" placeholder="folderId" />
+    <select id="modelFilter">
+      <option value="">All models</option>
+      <option value="embeddinggemma-2">embeddinggemma-2</option>
+    </select>
+    <button onclick="loadEmbeddings()">Load</button>
+    <button onclick="warmThumbs()" title="Generate DB thumbnails for this folder">Warm thumbs</button>
+  </header>
+  <main>
+    <div id="status" class="meta">Open from /tree with ?path= or ?folderId=, or paste a path and Load.</div>
+    <div class="path" id="folderLabel"></div>
+    <table>
+      <thead>
+        <tr>
+          <th>Thumb</th>
+          <th>Filename</th>
+          <th>Model</th>
+          <th>Dims</th>
+          <th>Updated</th>
+          <th>DB Thumb</th>
+          <th>Size</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </main>
+  <script src="/auth.js"></script>
+  <script>
+    function qs(name) {
+      return new URLSearchParams(location.search).get(name);
+    }
+    function fmtBytes(n) {
+      if (n == null) return '—';
+      if (n < 1024) return n + ' B';
+      if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+      return (n/1048576).toFixed(2) + ' MB';
+    }
+    function fmtTime(v) {
+      if (!v) return '—';
+      try { return new Date(v).toLocaleString('zh-HK', { hour12: false }); } catch { return String(v); }
+    }
+    async function api(url, opts) {
+      const r = await fetch(url, { credentials: 'include', ...opts, headers: { 'Content-Type': 'application/json', ...(opts && opts.headers || {}) } });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+      return data;
+    }
+    async function loadEmbeddings() {
+      const status = document.getElementById('status');
+      const tbody = document.getElementById('tbody');
+      tbody.innerHTML = '';
+      const folderId = document.getElementById('folderId').value.trim() || qs('folderId') || qs('id');
+      const folderPath = document.getElementById('folderPath').value.trim() || qs('path') || qs('folderPath');
+      const model = document.getElementById('modelFilter').value;
+      if (!folderId && !folderPath) {
+        status.textContent = '請提供 folderId 或 folder path / Provide folderId or path';
+        return;
+      }
+      if (folderPath) document.getElementById('folderPath').value = folderPath;
+      if (folderId) document.getElementById('folderId').value = folderId;
+      status.textContent = 'Loading…';
+      try {
+        const params = new URLSearchParams();
+        if (folderId) params.set('folderId', folderId);
+        if (folderPath) params.set('folderPath', folderPath);
+        if (model) params.set('model', model);
+        const data = await api('/api/embed/folder?' + params.toString());
+        document.getElementById('folderLabel').textContent = '#' + data.folderId + '  ' + (data.path || '');
+        status.textContent = 'Indexed ' + data.indexed + ' / ' + data.total + ' images';
+        for (const row of data.embeddings || []) {
+          const emb = row.embedding;
+          const tr = document.createElement('tr');
+          const thumbUrl = '/images/' + row.fileId + '/thumb';
+          tr.innerHTML =
+            '<td><img class="thumb" src="' + thumbUrl + '" alt="" loading="lazy" onerror="this.style.opacity=0.2" /></td>' +
+            '<td><div>' + (row.name || '') + '</div><div class="path">id=' + row.fileId + '</div></td>' +
+            '<td>' + (emb ? emb.model : '<span class="badge miss">missing</span>') + '</td>' +
+            '<td>' + (emb ? emb.dims : '—') + '</td>' +
+            '<td>' + (emb ? fmtTime(emb.updatedAt) : '—') + '</td>' +
+            '<td>' + (row.hasThumbnail ? '<span class="badge ok">yes</span>' : '<span class="badge miss">no</span>') + '</td>' +
+            '<td>' + fmtBytes(row.size) + '</td>';
+          tbody.appendChild(tr);
+        }
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+      }
+    }
+    async function warmThumbs() {
+      const status = document.getElementById('status');
+      const folderId = document.getElementById('folderId').value.trim() || qs('folderId');
+      const folderPath = document.getElementById('folderPath').value.trim() || qs('path');
+      if (!folderId && !folderPath) { status.textContent = 'Need folder first'; return; }
+      status.textContent = 'Warming thumbnail_cache…';
+      try {
+        const data = await api('/api/thumbs/folder', {
+          method: 'POST',
+          body: JSON.stringify({ folderId: folderId || undefined, folderPath: folderPath || undefined, force: false })
+        });
+        status.textContent = 'Thumbs: generated=' + data.generated + ' skipped=' + data.skipped + ' failed=' + data.failed;
+        await loadEmbeddings();
+      } catch (err) {
+        status.textContent = 'Warm failed: ' + err.message;
+      }
+    }
+    (function init() {
+      const p = qs('path') || qs('folderPath');
+      const id = qs('folderId') || qs('id');
+      if (p) document.getElementById('folderPath').value = p;
+      if (id) document.getElementById('folderId').value = id;
+      if (p || id) loadEmbeddings();
+    })();
+  </script>
+</body>
+</html>
