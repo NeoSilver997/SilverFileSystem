@@ -18,6 +18,7 @@ import { PhotoLibraryGenerator } from '../lib/photo-ui.js';
 import { MusicPlayerGenerator } from '../lib/music-ui.js';
 import { MoviePlayerGenerator } from '../lib/movie-ui.js';
 import { formatBytes, truncatePath, loadConfig } from '../lib/utils.js';
+import { shouldSkipMissingDeletion } from '../lib/drive-online.js';
 import fs from 'fs/promises';
 
 const program = new Command();
@@ -957,10 +958,15 @@ program
           spinner.text = `Processing ${processed}/${files.length} - Updated: ${updated}, Errors: ${errors} (${hashMethod})`;
         } catch (err) {
           if (err.code === 'ENOENT') {
-            deleted++;
-            await db.archiveDeletedFiles([{ id: file.id, name: file.path?.split(/[/\\]/).pop(), path: file.path }], 'update-hashes');
-            await db.deleteFile(file.id);
-            console.warn(chalk.red(`\nDeleted (not found): ${file.path}`));
+            if (shouldSkipMissingDeletion(file.path)) {
+              errors++;
+              console.warn(chalk.yellow(`\nSkipped delete (drive offline): ${file.path}`));
+            } else {
+              deleted++;
+              await db.archiveDeletedFiles([{ id: file.id, name: file.path?.split(/[/\\]/).pop(), path: file.path }], 'update-hashes');
+              await db.deleteFile(file.id);
+              console.warn(chalk.red(`\nDeleted (not found): ${file.path}`));
+            }
           } else {
             errors++;
             console.warn(chalk.yellow(`\nWarning: ${file.path}: ${err.message}`));

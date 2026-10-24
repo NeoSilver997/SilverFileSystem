@@ -11,6 +11,7 @@ import morgan from 'morgan';
 import { DatabaseManager } from './lib/database.js';
 import { AuthManager, authMiddleware, adminMiddleware, requirePhotoPermission, requireMusicPermission, requireVideoPermission, clearPermissionsCache } from './lib/auth.js';
 import { loadConfig } from './lib/utils.js';
+import { isDriveRootAccessibleAsync, partitionByDriveOnline, shouldSkipMissingDeletion } from './lib/drive-online.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
@@ -1280,13 +1281,21 @@ app.post('/api/folder-tree/check-deleted', requireAuthWrapper, async (req, res) 
 
     if (files.length === 0) return res.json({ total: 0, missing: 0, removed: 0, files: [], foldersChecked: folderIds.length });
 
+    // Attach full path; skip volumes whose drive root is offline (e.g. mapped P: NAS).
+    const withPaths = files.map(f => ({ ...f, path: f.folder_path + '\\' + f.name }));
+    const { online: reachableFiles, skippedOffline } = await partitionByDriveOnline(withPaths, {
+      log: console.warn,
+      timeoutMs: 3000
+    });
+    const skippedOfflineCount = skippedOffline.length;
+
     const BATCH = 100;
     const missing = [];
 
-    for (let i = 0; i < files.length; i += BATCH) {
-      const batch = files.slice(i, i + BATCH);
+    for (let i = 0; i < reachableFiles.length; i += BATCH) {
+      const batch = reachableFiles.slice(i, i + BATCH);
       const checks = batch.map(f => {
-        const fullPath = f.folder_path + '\\' + f.name;
+        const fullPath = f.path;
         return new Promise(resolve => {
           const timer = setTimeout(() => resolve({ ...f, exists: false, path: fullPath }), 2000);
           fs.access(fullPath, fs.constants.F_OK, err => {
@@ -1326,6 +1335,7 @@ app.post('/api/folder-tree/check-deleted', requireAuthWrapper, async (req, res) 
       missing: missing.length,
       removed,
       archived,
+      skippedOffline: typeof skippedOfflineCount === 'number' ? skippedOfflineCount : 0,
       foldersChecked: folderIds.length,
       files: missing.slice(0, 100).map(f => ({ id: f.id, name: f.name, path: f.path }))
     });
@@ -1400,18 +1410,25 @@ async function rescanFolderOneLevel(folderId) {
   }
 
   if (missing.length > 0) {
-    try {
-      await db.archiveDeletedFiles(missing.map(f => ({
-        id: f.id, name: f.name, path: folderPath + '\\' + f.name, size: f.size, hash: null, extension: null
-      })), 'tree-rescan');
-    } catch (_) {}
-    const DEL_BATCH = 500;
-    for (let i = 0; i < missing.length; i += DEL_BATCH) {
-      const batch = missing.slice(i, i + DEL_BATCH);
-      const ids = batch.map(f => f.id);
-      const ph = ids.map(() => '?').join(',');
-      await db.connection.query(`DELETE FROM scanned_files WHERE id IN (${ph})`, ids);
-      removed += batch.length;
+    // Defense in depth: if drive went offline after readdir, do not invent deletions.
+    // Motivating case: mapped P: NAS. General: any X:\ whose root is unreachable.
+    const driveOk = await isDriveRootAccessibleAsync(folderPath, 3000);
+    if (!driveOk) {
+      console.warn('[drive-online] Skipping tree-rescan deletions; drive offline for ' + folderPath);
+    } else {
+      try {
+        await db.archiveDeletedFiles(missing.map(f => ({
+          id: f.id, name: f.name, path: folderPath + '\\' + f.name, size: f.size, hash: null, extension: null
+        })), 'tree-rescan');
+      } catch (_) {}
+      const DEL_BATCH = 500;
+      for (let i = 0; i < missing.length; i += DEL_BATCH) {
+        const batch = missing.slice(i, i + DEL_BATCH);
+        const ids = batch.map(f => f.id);
+        const ph = ids.map(() => '?').join(',');
+        await db.connection.query(`DELETE FROM scanned_files WHERE id IN (${ph})`, ids);
+        removed += batch.length;
+      }
     }
   }
 
@@ -2125,11 +2142,19 @@ app.post('/api/mark-deleted', requireAuthWrapper, async (req, res) => {
 
     let deleted = 0;
     let kept = 0;
+    let skippedOffline = 0;
     const missingIds = [];
 
+    const { online: reachableFiles, skippedOffline: offlineFiles } = await partitionByDriveOnline(files, {
+      log: console.warn,
+      timeoutMs: 3000
+    });
+    skippedOffline = offlineFiles.length;
+    kept += offlineFiles.length; // keep DB rows when drive offline
+
     const BATCH = 100;
-    for (let i = 0; i < files.length; i += BATCH) {
-      const batch = files.slice(i, i + BATCH);
+    for (let i = 0; i < reachableFiles.length; i += BATCH) {
+      const batch = reachableFiles.slice(i, i + BATCH);
       const checks = batch.map(file => 
         new Promise((resolve) => {
           const timer = setTimeout(() => resolve(false), 2000);
@@ -2165,7 +2190,7 @@ app.post('/api/mark-deleted', requireAuthWrapper, async (req, res) => {
     musicCache = null;
     moviesCache = null;
 
-    res.json({ deleted, kept, total: files.length });
+    res.json({ deleted, kept, skippedOffline, total: files.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

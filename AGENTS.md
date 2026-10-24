@@ -75,3 +75,8 @@
 - `POST /api/embed/folder`, `POST /api/embed/classify-folder`, `POST /api/thumbs/folder` return **202** `{ jobId, status, reviewUrl }`.
 - Progress: `GET /api/jobs/:jobId` (percent, message, done/total). List: `GET /api/jobs`. Cancel: `POST /api/jobs/:id/cancel`.
 - UI: progress bar on `/embeddings` and `/tree` Embed; **result review** at `/jobs?id=` (counts, errors, per-file summary). Store: `data/job-queue.json`.
+
+## Offline drives vs deleted files
+- Motivating case: mapped **P:** (NAS) often goes offline. If `P:\` (or any `X:\`) is unreachable, do **not** mark `scanned_files` deleted / remove rows — `fs.access` would fail for every path on that volume.
+- Guarded helpers: `lib/drive-online.js` (`isDriveRootAccessibleAsync`, `partitionByDriveOnline`, `shouldSkipMissingDeletion`).
+- Call sites: `POST /api/folder-tree/check-deleted`, `POST /api/mark-deleted`, `rescanFolderOneLevel` (tree rescan), CLI hash update ENOENT cleanup.
