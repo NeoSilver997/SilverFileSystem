@@ -540,8 +540,9 @@ program
       
       // Build query to get files without media metadata
       let query = `
-        SELECT sf.id, sf.path, sf.name, sf.extension
+        SELECT sf.id, CONCAT(TRIM(TRAILING CHAR(92) FROM COALESCE(ft.folder_id,'')), CHAR(92), sf.name) AS path, sf.name, sf.extension
         FROM scanned_files sf
+        JOIN folder_tree ft ON ft.id = sf.folder_id_int
         WHERE sf.extension IN (
           'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp', 'heic', 'heif',
           'mp3', 'flac', 'wav', 'aac', 'm4a', 'ogg', 'wma', 'opus',

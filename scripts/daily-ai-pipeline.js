@@ -19,6 +19,7 @@ import { EmbeddingClient, ensureEmbeddingServer, stopEmbeddingServer } from '../
 import { EmbedClassifier } from '../lib/embed-classifier.js';
 import { partitionByDriveOnline } from '../lib/drive-online.js';
 import { loadConfig } from '../lib/utils.js';
+import { ensureDateSourceColumn, extractPhotoMetaForFiles } from '../lib/photo-meta-extract.js';
 import { rescanFolderRecursive } from '../lib/folder-rescan.js';
 import { isDriveRootAccessibleAsync } from '../lib/drive-online.js';
 
@@ -150,7 +151,7 @@ try {
   // Latest images by mtime (fetch extra so offline-drive rows can be dropped)
   const flt = buildImageFilterSql(conn);
   const selectSql = `
-    SELECT sf.id, sf.name, sf.size, sf.hash, sf.md5, sf.quick_hash, sf.mtime, ${flt.kindSql} AS kind,
+    SELECT sf.id, sf.name, sf.size, sf.hash, sf.md5, sf.quick_hash, sf.mtime, sf.ctime, ${flt.kindSql} AS kind,
            CONCAT(TRIM(TRAILING CHAR(92) FROM COALESCE(ft.folder_id,'')), CHAR(92), sf.name) AS path
     FROM scanned_files sf
     JOIN folder_tree ft ON ft.id = sf.folder_id_int
@@ -181,6 +182,19 @@ try {
     }
     return out;
   };
+
+  // ---- Step 0b: EXIF / photo_metadata (date fallback: created -> mtime) ----
+  {
+    const hasMeta = await inList('SELECT DISTINCT file_id FROM photo_metadata WHERE file_id IN (__IDS__)');
+    const needMeta = files.filter(f => !hasMeta.has(f.id));
+    summary.exif = { need: needMeta.length };
+    log('Step 0b exif: need', { need: needMeta.length });
+    if (!DRY && needMeta.length) {
+      await ensureDateSourceColumn(conn);
+      Object.assign(summary.exif, await extractPhotoMetaForFiles(db, needMeta, { concurrency: 8, onFail: (s, f, e) => fail('exif-' + s, f, e) }));
+      log('Step 0b exif done', summary.exif);
+    }
+  }
 
   // ---- Step 1: thumbnails ----
   const needThumb = [];
@@ -280,3 +294,4 @@ try {
   try { await db?.close(); } catch {}
 }
 process.exit(summary.error ? 1 : 0);
+
