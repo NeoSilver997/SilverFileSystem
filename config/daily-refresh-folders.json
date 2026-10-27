@@ -1,0 +1,9 @@
+{
+  "_comment": "Folders rescanned (read-only, recursive) before the daily AI pipeline. Offline drives are skipped; files missing on disk are never removed from DB.",
+  "folders": [
+    "H:\\silverchan\\Photos\\MobileBackup\\Xiaomi 14T Pro\\DCIM\\Camera\\2026",
+    "H:\\JennyNg\\Photos\\MobileBackup\\iPhone\\2026",
+    "C:\\AI_Server\\ComfyUI_windows_portable_nvidia",
+    "C:\\Users\\HKC-USER\\ComfyUI-Shared\\models"
+  ]
+}
