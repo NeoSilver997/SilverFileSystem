@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Photo Library - SilverFileSystem</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">function saveMinSize(){ const e=document.getElementById('minSizeKB'); localStorage.setItem('photosMinSizeKB', e ? e.value : '200'); }
+</script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f0f; color: #e0e0e0; }
@@ -141,7 +142,7 @@
             </select>
         </div>
         <label class="dup-toggle"><input type="checkbox" id="hideOffline" checked onchange="loadPhotos()"> Hide Offline</label>
-                <label class="dup-toggle"><input type="checkbox" id="hideSmall" checked onchange="localStorage.setItem('photosHideSmall', this.checked?'1':'0'); loadPhotos()"> Hide &lt; 10 KB</label>
+                <label class="dup-toggle"><input type="checkbox" id="minSizeOn" checked onchange="localStorage.setItem('photosMinSizeOn', this.checked?'1':'0'); loadPhotos()"> Hide &lt;</label><input type="number" id="minSizeKB" min="0" step="10" value="200" style="width:70px" onkeydown="if(event.key==='Enter'){clearTimeout(window._msT);saveMinSize();loadPhotos();}" oninput="clearTimeout(window._msT);window._msT=setTimeout(function(){saveMinSize();loadPhotos();},600)"> KB
         <label class="dup-toggle"><input type="checkbox" id="hideDuplicates" checked onchange="loadPhotos()"> Hide Duplicates</label>
         <button onclick="deleteAllDuplicates()" style="padding:0.4rem 0.8rem;background:rgba(231,76,60,0.2);color:#e74c3c;border:1px solid rgba(231,76,60,0.4);border-radius:4px;cursor:pointer;font-size:0.8rem;">🗑 Delete All Duplicates</button>
         <div class="view-toggle">
@@ -168,7 +169,8 @@
         </div>
     </div>
 
-    <script src="/auth.js"></script>
+    <script src="/auth.js">function saveMinSize(){ const e=document.getElementById('minSizeKB'); localStorage.setItem('photosMinSizeKB', e ? e.value : '200'); }
+</script>
     <script>
         let allPhotosData = [];
         let allPhotos = [];
@@ -547,6 +549,7 @@
         loadTagOptions();
         loadPhotos();
         loadFaceFilter();
-    </script>
+    function saveMinSize(){ const e=document.getElementById('minSizeKB'); localStorage.setItem('photosMinSizeKB', e ? e.value : '200'); }
+</script>
 </body>
 </html>
