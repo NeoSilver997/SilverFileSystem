@@ -5,8 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Photo Library - SilverFileSystem</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">function saveMinSize(){ const e=document.getElementById('minSizeKB'); localStorage.setItem('photosMinSizeKB', e ? e.value : '200'); }
-</script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f0f; color: #e0e0e0; }
@@ -169,8 +168,7 @@
         </div>
     </div>
 
-    <script src="/auth.js">function saveMinSize(){ const e=document.getElementById('minSizeKB'); localStorage.setItem('photosMinSizeKB', e ? e.value : '200'); }
-</script>
+    <script src="/auth.js"></script>
     <script>
         let allPhotosData = [];
         let allPhotos = [];
@@ -225,9 +223,9 @@
                 if (embedF !== '') params.append('hasEmbedding', embedF);
                 const hideOffline = document.getElementById('hideOffline').checked;
                 params.append('hideOffline', hideOffline ? '1' : '0');
-                const hideSmallEl = document.getElementById('hideSmall');
-                if (hideSmallEl && !hideSmallEl.dataset.init) { hideSmallEl.checked = localStorage.getItem('photosHideSmall') !== '0'; hideSmallEl.dataset.init = '1'; }
-                if (hideSmallEl && hideSmallEl.checked) params.append('minSize', '10240');
+const minOnEl = document.getElementById('minSizeOn'), minKbEl = document.getElementById('minSizeKB');
+if (minOnEl && !minOnEl.dataset.init) { localStorage.removeItem('photosHideSmall'); minOnEl.checked = localStorage.getItem('photosMinSizeOn') !== '0'; const sv = localStorage.getItem('photosMinSizeKB'); if (sv !== null && sv !== '') minKbEl.value = sv; minOnEl.dataset.init = '1'; }
+if (minOnEl && minOnEl.checked) { const kb = parseFloat(minKbEl.value); if (isFinite(kb) && kb > 0) params.append('minSize', String(Math.round(kb * 1024))); }
 
                 const res = await authFetch('/api/photos?'+params);
                 const data = await res.json();
