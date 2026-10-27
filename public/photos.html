@@ -141,6 +141,7 @@
             </select>
         </div>
         <label class="dup-toggle"><input type="checkbox" id="hideOffline" checked onchange="loadPhotos()"> Hide Offline</label>
+                <label class="dup-toggle"><input type="checkbox" id="hideSmall" checked onchange="localStorage.setItem('photosHideSmall', this.checked?'1':'0'); loadPhotos()"> Hide &lt; 10 KB</label>
         <label class="dup-toggle"><input type="checkbox" id="hideDuplicates" checked onchange="loadPhotos()"> Hide Duplicates</label>
         <button onclick="deleteAllDuplicates()" style="padding:0.4rem 0.8rem;background:rgba(231,76,60,0.2);color:#e74c3c;border:1px solid rgba(231,76,60,0.4);border-radius:4px;cursor:pointer;font-size:0.8rem;">🗑 Delete All Duplicates</button>
         <div class="view-toggle">
@@ -222,6 +223,9 @@
                 if (embedF !== '') params.append('hasEmbedding', embedF);
                 const hideOffline = document.getElementById('hideOffline').checked;
                 params.append('hideOffline', hideOffline ? '1' : '0');
+                const hideSmallEl = document.getElementById('hideSmall');
+                if (hideSmallEl && !hideSmallEl.dataset.init) { hideSmallEl.checked = localStorage.getItem('photosHideSmall') !== '0'; hideSmallEl.dataset.init = '1'; }
+                if (hideSmallEl && hideSmallEl.checked) params.append('minSize', '10240');
 
                 const res = await authFetch('/api/photos?'+params);
                 const data = await res.json();

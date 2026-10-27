@@ -2796,7 +2796,8 @@ app.get('/api/file-type-breakdown', async (req, res) => {
 // Get all photos with optional search and filters
 app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
-    const { search, filter, camera, model, year, month, days, face, tag, hideOffline, hasEmbedding, embedQuery } = req.query;
+    const { search, filter, camera, model, year, month, days, face, tag, hideOffline, hasEmbedding, embedQuery, minSize } = req.query;
+    const minSizeBytes = Math.max(0, parseInt(minSize) || 0);
     const hideOfflineFiles = !(hideOffline === '0' || hideOffline === 'false');
     let embedSearchMeta = null;
     
@@ -2925,6 +2926,14 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
       });
     }
     
+    // Hide small images (minSize bytes)
+    let smallSkipped = 0;
+    if (minSizeBytes > 0) {
+      const before = photos.length;
+      photos = photos.filter(p => (Number(p.size) || 0) >= minSizeBytes);
+      smallSkipped = before - photos.length;
+    }
+
     // Hide files on offline drive roots (default on). Toggle with hideOffline=0
     let offlineSkipped = 0;
     if (hideOfflineFiles) {
@@ -3039,6 +3048,7 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
         withGPS
       },
       offlineSkipped,
+      smallSkipped,
       embedSearch: embedSearchMeta || undefined,
       filters: {
         cameras: allCameras,
