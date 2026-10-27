@@ -1596,7 +1596,10 @@ program
 // Rebuild folder tree command
 program
   .command('rebuild-folder-tree')
-  .description('Rebuild the folder_tree table from scanned_files')
+  .description('Refresh folder_tree from scanned_files (incremental by default: only changed folders + ancestors)')
+  .option('--full', 'Full rebuild of the whole folder_tree (slow, old behaviour)')
+  .option('--path <folder...>', 'Only refresh these folder(s) and their subfolders + ancestors')
+  .option('--since <datetime>', 'Treat files updated since this DB time (YYYY-MM-DD HH:MM:SS) as changed')
   .option('--db', 'Use database')
   .option('--db-host <host>', 'Database host')
   .option('--db-port <port>', 'Database port')
@@ -1604,6 +1607,7 @@ program
   .option('--db-password <password>', 'Database password')
   .option('--db-name <name>', 'Database name')
   .action(async (options) => {
+    options.db = true; // this command always needs the DB
     await initDatabase(options);
     
     if (!dbManager) {
@@ -1611,10 +1615,30 @@ program
       process.exit(1);
     }
     
-    const spinner = ora('Rebuilding folder tree...').start();
+    const { incrementalRebuildFolderTree, dbNow, setLastRebuild } = await import('../lib/folder-tree-incremental.js');
+    if (!options.full) {
+      const sp = ora('Refreshing changed folders...').start();
+      try {
+        const r = await incrementalRebuildFolderTree(dbManager.connection, { paths: options.path, since: options.since });
+        if (!r.needFull) {
+          sp.succeed(`Incremental refresh done: ${r.changed} changed folders, ${r.touched} folders recalculated (incl. ancestors) in ${(r.ms/1000).toFixed(1)}s` + (r.since ? ` [since ${r.since}]` : ''));
+          await dbManager.close();
+          return;
+        }
+        sp.warn('No previous rebuild timestamp found - running a full rebuild once (use --path for a quick partial refresh).');
+      } catch (err) {
+        sp.fail('Incremental refresh failed');
+        console.error(chalk.red(`Error: ${err.message}`));
+        await closeDatabase();
+        process.exit(1);
+      }
+    }
+    const spinner = ora('Rebuilding folder tree (full)...').start();
     
     try {
+      const startedAt = await dbNow(dbManager.connection);
       await dbManager.rebuildFolderTree();
+      await setLastRebuild(dbManager.connection, startedAt);
       spinner.succeed('Folder tree rebuilt successfully!');
       
       const [count] = await dbManager.connection.query('SELECT COUNT(*) as c FROM folder_tree');
