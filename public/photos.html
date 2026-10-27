@@ -142,6 +142,7 @@
         </div>
         <label class="dup-toggle"><input type="checkbox" id="hideOffline" checked onchange="loadPhotos()"> Hide Offline</label>
                 <label class="dup-toggle"><input type="checkbox" id="minSizeOn" checked onchange="localStorage.setItem('photosMinSizeOn', this.checked?'1':'0'); loadPhotos()"> Hide &lt;</label><input type="number" id="minSizeKB" min="0" step="10" value="200" style="width:70px" onkeydown="if(event.key==='Enter'){clearTimeout(window._msT);saveMinSize();loadPhotos();}" oninput="clearTimeout(window._msT);window._msT=setTimeout(function(){saveMinSize();loadPhotos();},600)"> KB
+        <span style="position:relative;display:inline-block;"><button id="hiddenFoldersBtn" onclick="toggleHiddenFoldersPanel(event)" style="padding:0.4rem 0.8rem;background:#2a2a2a;color:#ddd;border:1px solid #444;border-radius:4px;cursor:pointer;font-size:0.8rem;">Hidden folders (0)</button><div id="hiddenFoldersPanel" style="display:none;position:absolute;z-index:2000;top:110%;left:0;min-width:360px;max-width:600px;max-height:360px;overflow:auto;background:#1a1a1a;border:1px solid #444;border-radius:6px;padding:0.5rem;box-shadow:0 4px 16px rgba(0,0,0,0.6);"></div></span>
         <label class="dup-toggle"><input type="checkbox" id="hideDuplicates" checked onchange="loadPhotos()"> Hide Duplicates</label>
         <button onclick="deleteAllDuplicates()" style="padding:0.4rem 0.8rem;background:rgba(231,76,60,0.2);color:#e74c3c;border:1px solid rgba(231,76,60,0.4);border-radius:4px;cursor:pointer;font-size:0.8rem;">🗑 Delete All Duplicates</button>
         <div class="view-toggle">
@@ -227,6 +228,8 @@ const minOnEl = document.getElementById('minSizeOn'), minKbEl = document.getElem
 if (minOnEl && !minOnEl.dataset.init) { localStorage.removeItem('photosHideSmall'); minOnEl.checked = localStorage.getItem('photosMinSizeOn') !== '0'; const sv = localStorage.getItem('photosMinSizeKB'); if (sv !== null && sv !== '') minKbEl.value = sv; minOnEl.dataset.init = '1'; }
 if (minOnEl && minOnEl.checked) { const kb = parseFloat(minKbEl.value); if (isFinite(kb) && kb > 0) params.append('minSize', String(Math.round(kb * 1024))); }
 
+                const hf = getHiddenFolders(); updateHiddenFoldersBtn();
+                if (hf.length) params.append('excludeFolders', JSON.stringify(hf));
                 const res = await authFetch('/api/photos?'+params);
                 const data = await res.json();
                 if (data.error) throw new Error(data.error);
@@ -259,7 +262,7 @@ if (minOnEl && minOnEl.checked) { const kb = parseFloat(minKbEl.value); if (isFi
 
                 const hideCount = allPhotosData.length - allPhotos.length;
                 const offlineN = data.offlineSkipped || 0;
-                document.getElementById('hiddenCount').textContent = hideCount.toLocaleString() + (offlineN ? ` (+${offlineN.toLocaleString()} offline)` : '');
+                document.getElementById('hiddenCount').textContent = hideCount.toLocaleString() + (offlineN ? ` (+${offlineN.toLocaleString()} offline)` : '') + ((data.folderSkipped||0) ? ` (+${data.folderSkipped.toLocaleString()} folder)` : '');
 
                 if (currentView === 'map') { renderMapView(); } else { renderGrid(true); }
             } catch (err) {
@@ -289,6 +292,7 @@ if (minOnEl && minOnEl.checked) { const kb = parseFloat(minKbEl.value); if (isFi
                             ${photo.latitude?`<span class="photo-badge">📍 GPS</span>`:''}
                             ${photo.hasEmbedding?`<span class="photo-badge" style="background:rgba(46,204,113,0.2);color:#2ecc71;">Embed${photo.embedScore!=null?' '+Number(photo.embedScore).toFixed(2):''}</span>`:''}
                             ${(photo.tags&&photo.tags.length)?photo.tags.map(t=>`<span class="photo-badge" style="background:rgba(102,126,234,0.25);color:#aab6ff;">🏷 ${t.label}${t.score!=null?' '+Number(t.score).toFixed(2):''}</span>`).join(''):(photo.category?`<span class="photo-badge" style="background:rgba(102,126,234,0.25);color:#aab6ff;">🏷 ${photo.category}${photo.category2?' · '+photo.category2:''}</span>`:'')}
+                            <button onclick="event.stopPropagation();hideFolderOf(${gi})" title="隱藏此資料夾" style="margin-top:0.3rem;padding:0.15rem 0.4rem;background:rgba(255,255,255,0.08);color:#bbb;border:1px solid #444;border-radius:3px;cursor:pointer;font-size:0.7rem;">隱藏此資料夾</button>
                             ${photo.is_duplicate?`<span class="photo-badge" style="background:rgba(231,76,60,0.2);color:#e74c3c;">⚠ Dup</span>`:''}
                         </div>
                     </div>
@@ -309,6 +313,32 @@ if (minOnEl && minOnEl.checked) { const kb = parseFloat(minKbEl.value); if (isFi
                 </div>`;
             }
         }
+
+        function getHiddenFolders() { try { const a = JSON.parse(localStorage.getItem('photosHiddenFolders')||'[]'); return Array.isArray(a) ? a.filter(x => typeof x === 'string' && x) : []; } catch (e) { return []; } }
+        function setHiddenFolders(a) { localStorage.setItem('photosHiddenFolders', JSON.stringify(a)); updateHiddenFoldersBtn(); }
+        function folderOfPath(p) { const s = String(p||''); const i = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/')); return i > 0 ? s.slice(0, i) : ''; }
+        function escHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+        function hideFolderOf(idx) {
+            const photo = allPhotos[idx]; if (!photo) return;
+            const folder = folderOfPath(photo.path);
+            if (!folder) { alert('搵唔到呢張相嘅資料夾路徑'); return; }
+            if (!confirm('隱藏呢個資料夾（包括子資料夾）嘅所有相？\n' + folder)) return;
+            const a = getHiddenFolders();
+            if (!a.some(x => x.toLowerCase() === folder.toLowerCase())) a.push(folder);
+            setHiddenFolders(a);
+            if (document.getElementById('photoModal').classList.contains('active')) closeModal();
+            loadPhotos();
+        }
+        function updateHiddenFoldersBtn() { const b = document.getElementById('hiddenFoldersBtn'); if (b) b.textContent = 'Hidden folders (' + getHiddenFolders().length + ')'; renderHiddenFoldersPanel(); }
+        function renderHiddenFoldersPanel() {
+            const p = document.getElementById('hiddenFoldersPanel'); if (!p) return;
+            const a = getHiddenFolders();
+            p.innerHTML = a.length ? a.map((f, i) => '<div style="display:flex;gap:0.4rem;align-items:center;padding:0.2rem 0;border-bottom:1px solid #2a2a2a;"><span style="flex:1;font-size:0.75rem;color:#ccc;word-break:break-all;">' + escHtml(f) + '</span><button onclick="unhideFolder(' + i + ')" style="padding:0.1rem 0.4rem;font-size:0.7rem;cursor:pointer;">顯示返</button></div>').join('') + '<div style="text-align:right;margin-top:0.4rem;"><button onclick="clearHiddenFolders()" style="padding:0.2rem 0.6rem;font-size:0.75rem;cursor:pointer;">全部清除</button></div>' : '<div style="color:#888;font-size:0.8rem;">冇隱藏資料夾</div>';
+        }
+        function toggleHiddenFoldersPanel(ev) { if (ev) ev.stopPropagation(); const p = document.getElementById('hiddenFoldersPanel'); renderHiddenFoldersPanel(); p.style.display = p.style.display === 'none' ? 'block' : 'none'; }
+        function unhideFolder(i) { const a = getHiddenFolders(); a.splice(i, 1); setHiddenFolders(a); loadPhotos(); }
+        function clearHiddenFolders() { if (!confirm('清除所有隱藏資料夾？')) return; setHiddenFolders([]); loadPhotos(); }
+        document.addEventListener('click', function (e) { const p = document.getElementById('hiddenFoldersPanel'); if (p && p.style.display !== 'none' && !p.contains(e.target) && e.target.id !== 'hiddenFoldersBtn') p.style.display = 'none'; });
 
         function goPage(p) { const tp=Math.ceil(allPhotos.length/ITEMS_PER_PAGE); if(p>=1&&p<=tp){currentPage=p;renderGrid(false);window.scrollTo({top:0,behavior:'smooth'});} }
 
@@ -389,6 +419,7 @@ if (minOnEl && minOnEl.checked) { const kb = parseFloat(minKbEl.value); if (isFi
 
             document.getElementById('modalSidebar').innerHTML = `
                 <h3>Photo Details</h3>
+                <button onclick="hideFolderOf(currentModalIndex)" style="margin-bottom:0.5rem;padding:0.3rem 0.6rem;background:rgba(255,255,255,0.08);color:#ddd;border:1px solid #555;border-radius:4px;cursor:pointer;">隱藏此資料夾</button>
                 <div class="modal-meta-row"><span class="label">Name</span><span class="value" title="${photo.path||''}">${photo.name}</span></div>
                 <div class="modal-meta-row"><span class="label">Dimensions</span><span class="value">${photo.width||0} × ${photo.height||0}</span></div>
                 <div class="modal-meta-row"><span class="label">Size</span><span class="value">${formatBytes(photo.size)}</span></div>

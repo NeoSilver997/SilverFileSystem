@@ -2934,6 +2934,26 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
       smallSkipped = before - photos.length;
     }
 
+    // Hide user-chosen folders (excludeFolders: JSON array or repeated/comma-free param)
+    let folderSkipped = 0;
+    {
+      let ex = req.query.excludeFolders;
+      let list = [];
+      if (Array.isArray(ex)) list = ex;
+      else if (typeof ex === 'string' && ex) { try { const j = JSON.parse(ex); list = Array.isArray(j) ? j : [ex]; } catch { list = [ex]; } }
+      const norm = (x) => String(x || '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+      const prefixes = list.map(norm).filter(Boolean).slice(0, 500);
+      if (prefixes.length) {
+        const before = photos.length;
+        photos = photos.filter(p => {
+          const fp = norm(p.path);
+          const dir = fp.includes('\\') ? fp.slice(0, fp.lastIndexOf('\\')) : fp;
+          return !prefixes.some(pre => dir === pre || dir.startsWith(pre + '\\'));
+        });
+        folderSkipped = before - photos.length;
+      }
+    }
+
     // Hide files on offline drive roots (default on). Toggle with hideOffline=0
     let offlineSkipped = 0;
     if (hideOfflineFiles) {
@@ -3049,6 +3069,7 @@ app.get('/api/photos', requireAuthWrapper, requirePhotoPermission, async (req, r
       },
       offlineSkipped,
       smallSkipped,
+      folderSkipped,
       embedSearch: embedSearchMeta || undefined,
       filters: {
         cameras: allCameras,
