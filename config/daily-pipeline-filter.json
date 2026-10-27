@@ -1,0 +1,8 @@
+{
+  "comment": "Daily AI pipeline image filter. Use --all-images to bypass camera/screenshot rules.",
+  "useExifCamera": true,
+  "cameraPathKeywords": ["DCIM", "Camera", "MobileBackup"],
+  "cameraNameRegex": "^(IMG|PXL|DSC|DSCN|DSCF|MVIMG)_?[0-9]|^[0-9]{8}_[0-9]{6}",
+  "screenshotKeywords": ["Screenshot", "螢幕截圖", "Screen Shot", "截屏"],
+  "maxFutureDays": 1
+}

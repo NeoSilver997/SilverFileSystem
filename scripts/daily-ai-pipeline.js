@@ -4,7 +4,7 @@
  * Idempotent: each step only runs for files missing that step.
  * Read-only on user files (never moves / deletes / marks deleted). Offline drive roots skipped.
  *
- * Usage: node scripts/daily-ai-pipeline.js [--limit 10000] [--dry-run]
+ * Usage: node scripts/daily-ai-pipeline.js [--limit 10000] [--dry-run] [--no-rescan] [--all-images] [--print-sql]
  */
 import fs from 'fs';
 import os from 'os';
@@ -33,7 +33,28 @@ const LIMIT = Math.max(1, parseInt(argVal('--limit', '10000'), 10) || 10000);
 const DRY = argv.includes('--dry-run');
 const NO_RESCAN = argv.includes('--no-rescan');
 const THUMB_MAX = 400;
-const IMG_EXTS = ['jpg','jpeg','png','gif','bmp','webp','heic','heif','avif','tif','tiff'];
+const IMG_EXTS = ['jpg','jpeg','png','webp','heic','heif','avif'];
+const ALL_IMAGES = argv.includes('--all-images');
+
+// Camera / screenshot filter (config/daily-pipeline-filter.json)
+function buildImageFilterSql(conn) {
+  let cfg = {};
+  try { cfg = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'config', 'daily-pipeline-filter.json'), 'utf8').replace(/^\uFEFF/, '')); } catch { cfg = {}; }
+  const q = (v) => conn.escape(v);
+  const like = (col, kw) => `${col} LIKE ${q('%' + kw + '%')}`;
+  const fullPath = "CONCAT(COALESCE(ft.folder_id,''), CHAR(92), sf.name)";
+  const shot = (cfg.screenshotKeywords || []).map(k => like(fullPath, k));
+  const cam = (cfg.cameraPathKeywords || []).map(k => like('ft.folder_id', k));
+  if (cfg.cameraNameRegex) cam.push(`sf.name REGEXP ${q(cfg.cameraNameRegex)}`);
+  if (cfg.useExifCamera !== false) cam.push("EXISTS (SELECT 1 FROM photo_metadata pm WHERE pm.file_id = sf.id AND COALESCE(pm.camera_model, pm.camera_make, '') <> '')");
+  const shotSql = shot.length ? '(' + shot.join(' OR ') + ')' : '0';
+  const camSql = cam.length ? '(' + cam.join(' OR ') + ')' : '0';
+  const days = Number.isFinite(+cfg.maxFutureDays) ? +cfg.maxFutureDays : 1;
+  return {
+    kindSql: `CASE WHEN ${shotSql} THEN 'screenshot' WHEN ${camSql} THEN 'camera' ELSE 'other' END`,
+    whereSql: (ALL_IMAGES ? '' : `AND (${shotSql} OR ${camSql})`) + ` AND sf.mtime <= NOW() + INTERVAL ${days} DAY`,
+  };
+}
 
 // ---- logging ----
 const now = new Date();
@@ -127,17 +148,24 @@ try {
   }
 
   // Latest images by mtime (fetch extra so offline-drive rows can be dropped)
-  const [rows] = await conn.query(`
-    SELECT sf.id, sf.name, sf.size, sf.hash, sf.md5, sf.quick_hash, sf.mtime,
+  const flt = buildImageFilterSql(conn);
+  const selectSql = `
+    SELECT sf.id, sf.name, sf.size, sf.hash, sf.md5, sf.quick_hash, sf.mtime, ${flt.kindSql} AS kind,
            CONCAT(TRIM(TRAILING CHAR(92) FROM COALESCE(ft.folder_id,'')), CHAR(92), sf.name) AS path
     FROM scanned_files sf
     JOIN folder_tree ft ON ft.id = sf.folder_id_int
     WHERE LOWER(COALESCE(sf.extension,'')) IN (${IMG_EXTS.map(e => `'${e}'`).join(',')})
+      ${flt.whereSql}
     ORDER BY sf.mtime DESC, sf.id DESC
-    LIMIT ?`, [LIMIT * 2]);
+    LIMIT ${LIMIT * 2}`;
+  if (argv.includes('--print-sql')) console.log(selectSql);
+  const [rows] = await conn.query(selectSql);
   const { online, skippedOffline } = await partitionByDriveOnline(rows, { log: (m) => log(m) });
   const files = online.slice(0, LIMIT);
   summary.selected = files.length;
+  summary.kinds = files.reduce((a, f) => (a[f.kind] = (a[f.kind] || 0) + 1, a), {});
+  summary.samplePaths = files.filter((_, i) => i % Math.max(1, Math.floor(files.length / 5)) === 0).slice(0, 5).map(f => f.path);
+  summary.newest = files[0]?.mtime; summary.oldest = files[files.length - 1]?.mtime;
   summary.skippedOffline = skippedOffline.length;
   log('Selected files', { selected: files.length, offlineSkipped: skippedOffline.length,
     newest: files[0]?.mtime, oldest: files[files.length - 1]?.mtime });
