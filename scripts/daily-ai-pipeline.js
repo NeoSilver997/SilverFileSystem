@@ -4,7 +4,7 @@
  * Idempotent: each step only runs for files missing that step.
  * Read-only on user files (never moves / deletes / marks deleted). Offline drive roots skipped.
  *
- * Usage: node scripts/daily-ai-pipeline.js [--limit 10000] [--dry-run] [--no-rescan] [--all-images] [--print-sql]
+ * Usage: node scripts/daily-ai-pipeline.js [--limit 10000] [--dry-run] [--no-rescan] [--all-images] [--print-sql] [--path-prefix H:\\] [--no-skip-recycle]
  */
 import fs from 'fs';
 import { spawnSync } from 'child_process';
@@ -23,6 +23,7 @@ import { loadConfig } from '../lib/utils.js';
 import { ensureDateSourceColumn, extractPhotoMetaForFiles } from '../lib/photo-meta-extract.js';
 import { rescanFolderRecursive } from '../lib/folder-rescan.js';
 import { isDriveRootAccessibleAsync } from '../lib/drive-online.js';
+import { buildExtractPathFilters } from '../lib/extract-photo-meta-job.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 process.chdir(ROOT);
@@ -37,6 +38,18 @@ const NO_RESCAN = argv.includes('--no-rescan');
 const THUMB_MAX = 400;
 const IMG_EXTS = ['jpg','jpeg','png','webp','heic','heif','avif'];
 const ALL_IMAGES = argv.includes('--all-images');
+const PATH_PREFIX_RAW = argVal('--path-prefix', '') || null;
+const SKIP_RECYCLE = !argv.includes('--no-skip-recycle');
+const pathFilter = buildExtractPathFilters({ pathPrefix: PATH_PREFIX_RAW, skipRecycle: SKIP_RECYCLE });
+const PATH_PREFIX = pathFilter.pathPrefix;
+
+function folderUnderPrefix(folder, prefix) {
+  if (!prefix) return true;
+  const f = String(folder || '').replace(/\//g, '\\').replace(/\\+$/, '');
+  const fl = f.toLowerCase();
+  const pl = String(prefix).toLowerCase();
+  return fl === pl || fl.startsWith(pl + '\\');
+}
 
 // Camera / screenshot filter (config/daily-pipeline-filter.json)
 function buildImageFilterSql(conn) {
@@ -116,7 +129,7 @@ function bufToFloats(raw, dims) {
 }
 
 const t0 = Date.now();
-const summary = { limit: LIMIT, dryRun: DRY, rescan: [], selected: 0, skippedOffline: 0,
+const summary = { limit: LIMIT, dryRun: DRY, pathPrefix: PATH_PREFIX, skipRecycle: pathFilter.skipRecycle, rescan: [], selected: 0, skippedOffline: 0,
   thumb: { need: 0, ok: 0, fail: 0, missingFile: 0 },
   missingReport: null,
   embed: { need: 0, ok: 0, fail: 0, noThumb: 0 },
@@ -125,7 +138,7 @@ const fail = (stage, f, err) => { if (summary.failSamples.length < 20) summary.f
 
 let db;
 try {
-  log(`Start daily AI pipeline limit=${LIMIT} dryRun=${DRY}`);
+  log(`Start daily AI pipeline limit=${LIMIT} dryRun=${DRY} pathPrefix=${PATH_PREFIX || 'ALL'} skipRecycle=${pathFilter.skipRecycle}`);
   const config = loadConfig();
   db = new DatabaseManager(config.database);
   await db.connect();
@@ -137,6 +150,11 @@ try {
   let folders = [];
   try { folders = JSON.parse(fs.readFileSync(cfgPath, 'utf8')).folders || []; } catch (e) { log('No/invalid config/daily-refresh-folders.json', { error: e.message }); }
   if (NO_RESCAN) folders = [];
+  if (PATH_PREFIX) {
+    const before = folders.length;
+    folders = folders.filter((f) => folderUnderPrefix(f, PATH_PREFIX));
+    log('Rescan folders filtered by pathPrefix', { pathPrefix: PATH_PREFIX, before, after: folders.length });
+  }
   for (const folder of folders) {
     const t = Date.now();
     if (!(await isDriveRootAccessibleAsync(folder, 3000))) { log('Rescan skip (drive offline)', { folder }); summary.rescan.push({ folder, skipped: 'drive offline' }); continue; }
@@ -152,6 +170,7 @@ try {
 
   // Latest images by mtime (fetch extra so offline-drive rows can be dropped)
   const flt = buildImageFilterSql(conn);
+  const pathSqlEsc = (() => { let i = 0; const a = pathFilter.args; return pathFilter.sql.replace(/\?/g, () => conn.escape(a[i++])); })();
   const selectSql = `
     SELECT sf.id, sf.name, sf.size, sf.hash, sf.md5, sf.quick_hash, sf.mtime, sf.ctime, ${flt.kindSql} AS kind,
            CONCAT(TRIM(TRAILING CHAR(92) FROM COALESCE(ft.folder_id,'')), CHAR(92), sf.name) AS path
@@ -159,9 +178,10 @@ try {
     JOIN folder_tree ft ON ft.id = sf.folder_id_int
     WHERE LOWER(COALESCE(sf.extension,'')) IN (${IMG_EXTS.map(e => `'${e}'`).join(',')})
       ${flt.whereSql}
+      ${pathSqlEsc}
     ORDER BY sf.mtime DESC, sf.id DESC
     LIMIT ${LIMIT * 2}`;
-  if (argv.includes('--print-sql')) console.log(selectSql);
+  if (argv.includes('--print-sql')) { console.log(selectSql); console.log('args', pathFilter.args); }
   const [rows] = await conn.query(selectSql);
   const { online, skippedOffline } = await partitionByDriveOnline(rows, { log: (m) => log(m) });
   const files = online.slice(0, LIMIT);

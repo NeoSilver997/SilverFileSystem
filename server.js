@@ -3671,7 +3671,10 @@ app.post('/api/daily-pipeline', requireAuthWrapper, requirePhotoPermission, asyn
       stages: body.stages ?? body.stage,
       noRescan: !!body.noRescan || !!body.no_rescan,
       allImages: !!body.allImages || !!body.all_images,
-      dryRun: !!body.dryRun || !!body.dry_run
+      dryRun: !!body.dryRun || !!body.dry_run,
+      pathPrefix: body.pathPrefix || body.path_prefix || null,
+      skipRecycle: body.skipRecycle !== false && body.skip_recycle !== false,
+      skipFolders: Array.isArray(body.skipFolders) ? body.skipFolders : (Array.isArray(body.skip_folders) ? body.skip_folders : undefined)
     };
     const stagesLabel = Array.isArray(params.stages)
       ? params.stages.join('+')
@@ -3684,7 +3687,9 @@ app.post('/api/daily-pipeline', requireAuthWrapper, requirePhotoPermission, asyn
         stages: stagesLabel,
         limit: params.limit || 10000,
         offset: params.offset || 0,
-        batchSize: params.batchSize || null
+        batchSize: params.batchSize || null,
+        pathPrefix: params.pathPrefix,
+        skipRecycle: params.skipRecycle
       },
       params,
       createdBy: req.user?.username || req.user?.id || null
