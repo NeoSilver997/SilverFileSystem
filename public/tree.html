@@ -338,6 +338,67 @@
             bc.innerHTML = html;
         }
 
+        // URL hash routing for browser Back/Forward (e.g. #id=123 or #path=C%3A%5CAI_Server)
+        let suppressHashChange = false;
+        let applyingHash = false;
+
+        function buildFolderHash(id, folderPath) {
+            if (id != null && id !== '') return '#id=' + encodeURIComponent(String(id));
+            if (folderPath) return '#path=' + encodeURIComponent(folderPath);
+            return '';
+        }
+
+        function parseFolderHash(hash) {
+            const raw = (hash || '').replace(/^#/, '');
+            if (!raw) return { kind: 'root' };
+            // Support #id=123, #path=..., #folderId=123, and #/C:/foo
+            if (raw.startsWith('/')) {
+                const p = decodeURIComponent(raw.slice(1));
+                return p ? { kind: 'path', value: p } : { kind: 'root' };
+            }
+            if (raw.includes('=')) {
+                const params = new URLSearchParams(raw);
+                const id = params.get('id') || params.get('folderId');
+                const p = params.get('path');
+                if (id != null && id !== '' && !isNaN(parseInt(id, 10))) {
+                    return { kind: 'id', value: parseInt(id, 10) };
+                }
+                if (p) return { kind: 'path', value: p };
+                if (id) return { kind: 'path', value: id };
+            }
+            if (/^\d+$/.test(raw)) return { kind: 'id', value: parseInt(raw, 10) };
+            try {
+                return { kind: 'path', value: decodeURIComponent(raw) };
+            } catch (_) {
+                return { kind: 'path', value: raw };
+            }
+        }
+
+        function syncHashFromState() {
+            const desired = buildFolderHash(currentId, currentPath);
+            const cur = location.hash || '';
+            if (cur === desired) return;
+            if (!desired && (!cur || cur === '#')) return;
+            suppressHashChange = true;
+            if (!desired) {
+                const url = location.pathname + location.search;
+                window.history.replaceState(null, '', url);
+            } else {
+                location.hash = desired;
+            }
+            setTimeout(() => { suppressHashChange = false; }, 0);
+        }
+
+        function applyHashNavigation() {
+            if (suppressHashChange) return;
+            const target = parseFolderHash(location.hash);
+            applyingHash = true;
+            let arg = '';
+            if (target.kind === 'id') arg = target.value;
+            else if (target.kind === 'path') arg = target.value;
+            loadTree(arg).finally(() => { applyingHash = false; });
+        }
+
         async function loadTree(pathOrId) {
             showLoading();
             try {
@@ -359,6 +420,7 @@
                 updateButtons();
                 updateUsageChartLink();
                 renderTree();
+                if (!applyingHash) syncHashFromState();
             } catch (err) {
                 document.getElementById('treeContent').innerHTML = `<div class="empty">Error: ${err.message}</div>`;
             }
@@ -1150,20 +1212,35 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
 
-        // Load on start — check URL for ?id= or ?path= parameter
-        const urlParams = new URLSearchParams(window.location.search);
-        const urlId = urlParams.get('id');
-        const urlPath = urlParams.get('path');
-        if (urlId && !isNaN(parseInt(urlId))) {
-            loadTree(parseInt(urlId));
-        } else if (urlPath) {
-            loadTree(urlPath);
-        } else if (urlId) {
-            // id is actually a path (from folder links)
-            loadTree(urlId);
-        } else {
-            loadTree('');
-        }
+        // Prefer #hash (Back/Forward), then ?id= / ?path= query
+        window.addEventListener('hashchange', applyHashNavigation);
+
+        (function bootFromLocation() {
+            const fromHash = parseFolderHash(location.hash);
+            if (fromHash.kind === 'id') {
+                applyingHash = true;
+                loadTree(fromHash.value).finally(() => { applyingHash = false; });
+                return;
+            }
+            if (fromHash.kind === 'path') {
+                applyingHash = true;
+                loadTree(fromHash.value).finally(() => { applyingHash = false; });
+                return;
+            }
+            const urlParams = new URLSearchParams(window.location.search);
+            const urlId = urlParams.get('id');
+            const urlPath = urlParams.get('path');
+            if (urlId && !isNaN(parseInt(urlId))) {
+                loadTree(parseInt(urlId));
+            } else if (urlPath) {
+                loadTree(urlPath);
+            } else if (urlId) {
+                // id is actually a path (from folder links)
+                loadTree(urlId);
+            } else {
+                loadTree('');
+            }
+        })();
     </script>
 </body>
 </html>
