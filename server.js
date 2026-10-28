@@ -1602,8 +1602,20 @@ app.get('/jobs', (req, res) => {
 
 app.get('/api/jobs', requireAuthWrapper, requirePhotoPermission, (req, res) => {
   try {
-    const { status, type, limit } = req.query || {};
-    res.json({ jobs: listJobs({ status, type, limit: parseInt(limit, 10) || 100 }) });
+    const { status, type, limit, maxAgeDays, includeOlder } = req.query || {};
+    const showOlder = includeOlder === '1' || includeOlder === 'true';
+    // Default: hide finished jobs older than 3 days (active jobs always shown)
+    const age = maxAgeDays === undefined || maxAgeDays === '' ? 3 : parseInt(maxAgeDays, 10);
+    res.json({
+      jobs: listJobs({
+        status,
+        type,
+        limit: parseInt(limit, 10) || 100,
+        maxAgeDays: Number.isFinite(age) ? age : 3,
+        includeOlder: showOlder
+      }),
+      filter: { maxAgeDays: Number.isFinite(age) ? age : 3, includeOlder: showOlder }
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -3111,6 +3123,7 @@ import { FileWatcher } from './lib/file-watcher.js';
 import { EmbeddingClient } from './lib/embedding-client.js';
 import { EmbedClassifier, EMBED_CATEGORY_OTHER } from './lib/embed-classifier.js';
 import { createJob, update as updateJob, get as getJob, getRaw as getJobRaw, list as listJobs, fail as failJob, complete as completeJob, cancel as cancelJob, isCancelled as isJobCancelled, setRunner as setJobRunner } from './lib/job-progress.js';
+import { runExtractPhotoMetaJob } from './lib/extract-photo-meta-job.js';
 
 const vlmConfig = {
   lmstudioUrl: process.env.LMSTUDIO_URL || process.env.VLM_URL || 'http://127.0.0.1:8080',
@@ -3618,7 +3631,43 @@ setJobRunner(async (job) => {
     return payload;
   }
 
+  if (type === 'extract-photo-meta') {
+    return runExtractPhotoMetaJob({
+      db,
+      jobId,
+      params,
+      updateJob,
+      isCancelled: isJobCancelled,
+      completeJob
+    });
+  }
+
   throw new Error('Unknown job type: ' + type);
+});
+
+
+// Backfill photo_metadata (EXIF + created/mtime fallback) for all missing images — durable job
+app.post('/api/photo-meta/extract', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const params = {
+      batch: body.batch,
+      concurrency: body.concurrency,
+      limit: body.limit,
+      reset: !!body.reset,
+      cursor: body.cursor || null
+    };
+    const jobId = createJob({
+      type: 'extract-photo-meta',
+      total: 0,
+      meta: { kind: 'extract-photo-meta', reset: params.reset },
+      params,
+      createdBy: req.user?.username || req.user?.id || null
+    });
+    res.status(202).json({ jobId, status: 'queued', type: 'extract-photo-meta', reviewUrl: '/jobs?id=' + jobId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Non-recursive: index images in one selected folder into file_embeddings

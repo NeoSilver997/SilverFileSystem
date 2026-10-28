@@ -7,6 +7,7 @@
  * Usage: node scripts/daily-ai-pipeline.js [--limit 10000] [--dry-run] [--no-rescan] [--all-images] [--print-sql]
  */
 import fs from 'fs';
+import { spawnSync } from 'child_process';
 import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
@@ -117,6 +118,7 @@ function bufToFloats(raw, dims) {
 const t0 = Date.now();
 const summary = { limit: LIMIT, dryRun: DRY, rescan: [], selected: 0, skippedOffline: 0,
   thumb: { need: 0, ok: 0, fail: 0, missingFile: 0 },
+  missingReport: null,
   embed: { need: 0, ok: 0, fail: 0, noThumb: 0 },
   classify: { need: 0, ok: 0, fail: 0 }, failSamples: [] };
 const fail = (stage, f, err) => { if (summary.failSamples.length < 20) summary.failSamples.push({ stage, id: f.id, name: f.name, error: String(err?.message || err).slice(0, 200) }); };
@@ -284,6 +286,26 @@ try {
         } catch (e) { summary.classify.fail++; fail('classify', { id: r.file_id }, e); }
       }
     }
+  }
+
+  // ---- Step 4: daily missing-files report (read-only; offline drives skipped) ----
+  try {
+    log('Step 4 missing-report: start');
+    const r = spawnSync(process.execPath, ['scripts/daily-missing-report.js', '--sample', '200'], {
+      cwd: ROOT, encoding: 'utf8', env: process.env, timeout: 30 * 60 * 1000
+    });
+    const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    summary.missingReport = {
+      exitCode: r.status,
+      log: `logs/daily-missing-${day}.log`,
+      json: `logs/daily-missing-${day}.json`,
+      stderr: (r.stderr || '').slice(0, 500) || undefined
+    };
+    if (r.status !== 0) log('Step 4 missing-report failed', { status: r.status, err: (r.stderr || r.stdout || '').slice(0, 300) });
+    else log('Step 4 missing-report done', summary.missingReport);
+  } catch (e) {
+    summary.missingReport = { error: String(e?.message || e) };
+    log('Step 4 missing-report error', summary.missingReport);
   }
 } catch (e) {
   if (!e.benign) { summary.error = String(e?.message || e); log('ERROR', { error: summary.error }); }

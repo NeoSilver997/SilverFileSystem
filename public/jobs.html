@@ -50,6 +50,9 @@
       <option value="error">Error</option>
       <option value="cancelled">Cancelled</option>
     </select>
+    <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem;color:var(--muted);cursor:pointer">
+      <input type="checkbox" id="showOlder" /> Show older than 3 days
+    </label>
     <button onclick="loadList()">Refresh</button>
   </header>
   <main>
@@ -85,8 +88,11 @@
 
     async function loadList() {
       const status = document.getElementById('statusFilter').value;
-      const params = new URLSearchParams({ limit: '80' });
+      const showOlder = document.getElementById('showOlder')?.checked;
+      const params = new URLSearchParams({ limit: '80', maxAgeDays: '3' });
       if (status) params.set('status', status);
+      if (showOlder) params.set('includeOlder', '1');
+      else params.set('includeOlder', '0');
       try {
         const data = await api('/api/jobs?' + params.toString());
         const el = document.getElementById('list');
@@ -118,6 +124,14 @@
       if (r.skipped != null) chips.push('skipped=' + r.skipped);
       if (r.failed != null) chips.push('failed=' + r.failed);
       if (r.missingEmbed != null) chips.push('missingEmbed=' + r.missingEmbed);
+      if (r.totals) {
+        if (r.totals.exif != null) chips.push('exif=' + r.totals.exif);
+        if (r.totals.created != null) chips.push('created=' + r.totals.created);
+        if (r.totals.missingFile != null) chips.push('missingFile=' + r.totals.missingFile);
+        if (r.totals.offline != null) chips.push('offline=' + r.totals.offline);
+      }
+      if (r.doneThisRun != null) chips.push('doneThisRun=' + r.doneThisRun);
+      if (r.remainingAtStart != null) chips.push('remainingAtStart=' + r.remainingAtStart);
       if (r.categoryCounts) {
         Object.entries(r.categoryCounts).forEach(([k, v]) => chips.push(k + '=' + v));
       }
@@ -201,6 +215,7 @@
     }
 
     document.getElementById('statusFilter').addEventListener('change', loadList);
+    document.getElementById('showOlder').addEventListener('change', loadList);
     (async function init() {
       await loadList();
       const id = qs('id');
