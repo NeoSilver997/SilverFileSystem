@@ -3655,12 +3655,15 @@ app.post('/api/photo-meta/extract', requireAuthWrapper, requirePhotoPermission, 
       concurrency: body.concurrency,
       limit: body.limit,
       reset: !!body.reset,
-      cursor: body.cursor || null
+      cursor: body.cursor || null,
+      pathPrefix: body.pathPrefix || body.path_prefix || null,
+      skipRecycle: body.skipRecycle !== false && body.skip_recycle !== false,
+      skipFolders: Array.isArray(body.skipFolders) ? body.skipFolders : (Array.isArray(body.skip_folders) ? body.skip_folders : undefined)
     };
     const jobId = createJob({
       type: 'extract-photo-meta',
       total: 0,
-      meta: { kind: 'extract-photo-meta', reset: params.reset },
+      meta: { kind: 'extract-photo-meta', reset: params.reset, pathPrefix: params.pathPrefix, skipRecycle: params.skipRecycle },
       params,
       createdBy: req.user?.username || req.user?.id || null
     });
