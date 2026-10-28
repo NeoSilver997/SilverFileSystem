@@ -3124,6 +3124,7 @@ import { EmbeddingClient } from './lib/embedding-client.js';
 import { EmbedClassifier, EMBED_CATEGORY_OTHER } from './lib/embed-classifier.js';
 import { createJob, update as updateJob, get as getJob, getRaw as getJobRaw, list as listJobs, fail as failJob, complete as completeJob, cancel as cancelJob, isCancelled as isJobCancelled, setRunner as setJobRunner } from './lib/job-progress.js';
 import { runExtractPhotoMetaJob } from './lib/extract-photo-meta-job.js';
+import { runDailyPipelineJob } from './lib/daily-pipeline-job.js';
 
 const vlmConfig = {
   lmstudioUrl: process.env.LMSTUDIO_URL || process.env.VLM_URL || 'http://127.0.0.1:8080',
@@ -3642,11 +3643,63 @@ setJobRunner(async (job) => {
     });
   }
 
+  if (type === 'daily-pipeline') {
+    return runDailyPipelineJob({
+      db,
+      jobId,
+      params,
+      updateJob,
+      isCancelled: isJobCancelled,
+      completeJob
+    });
+  }
+
   throw new Error('Unknown job type: ' + type);
 });
 
 
 // Backfill photo_metadata (EXIF + created/mtime fallback) for all missing images — durable job
+
+// Daily AI pipeline as durable /jobs queue work (rescan → exif → thumb → embed → classify)
+app.post('/api/daily-pipeline', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const params = {
+      limit: body.limit,
+      offset: body.offset,
+      batchSize: body.batchSize ?? body.batch_size,
+      stages: body.stages ?? body.stage,
+      noRescan: !!body.noRescan || !!body.no_rescan,
+      allImages: !!body.allImages || !!body.all_images,
+      dryRun: !!body.dryRun || !!body.dry_run
+    };
+    const stagesLabel = Array.isArray(params.stages)
+      ? params.stages.join('+')
+      : (params.stages || 'all');
+    const jobId = createJob({
+      type: 'daily-pipeline',
+      total: 0,
+      meta: {
+        kind: 'daily-pipeline',
+        stages: stagesLabel,
+        limit: params.limit || 10000,
+        offset: params.offset || 0,
+        batchSize: params.batchSize || null
+      },
+      params,
+      createdBy: req.user?.username || req.user?.id || null
+    });
+    res.status(202).json({
+      jobId,
+      status: 'queued',
+      type: 'daily-pipeline',
+      reviewUrl: '/jobs?id=' + jobId
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/photo-meta/extract', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
   try {
     const body = req.body || {};
