@@ -3125,6 +3125,7 @@ import { EmbedClassifier, EMBED_CATEGORY_OTHER } from './lib/embed-classifier.js
 import { createJob, update as updateJob, get as getJob, getRaw as getJobRaw, list as listJobs, fail as failJob, complete as completeJob, cancel as cancelJob, isCancelled as isJobCancelled, setRunner as setJobRunner } from './lib/job-progress.js';
 import { runExtractPhotoMetaJob } from './lib/extract-photo-meta-job.js';
 import { runDailyPipelineJob } from './lib/daily-pipeline-job.js';
+import { enqueueSplitBatches, SPLIT_TYPES, buildSplitParams } from './lib/pipeline-batch-enqueue.js';
 
 const vlmConfig = {
   lmstudioUrl: process.env.LMSTUDIO_URL || process.env.VLM_URL || 'http://127.0.0.1:8080',
@@ -3643,6 +3644,20 @@ setJobRunner(async (job) => {
     });
   }
 
+  if (type === 'thumb-hash' || type === 'embed' || type === 'classify') {
+    const forced = type === 'thumb-hash' ? ['thumb'] : [type];
+    const splitParams = { ...(job.params || {}), stages: forced, noRescan: true };
+    if (splitParams.needOnly == null) splitParams.needOnly = true;
+    return runDailyPipelineJob({
+      db,
+      jobId,
+      params: splitParams,
+      updateJob,
+      isCancelled: isJobCancelled,
+      completeJob
+    });
+  }
+
   if (type === 'daily-pipeline') {
     return runDailyPipelineJob({
       db,
@@ -3700,6 +3715,78 @@ app.post('/api/daily-pipeline', requireAuthWrapper, requirePhotoPermission, asyn
       type: 'daily-pipeline',
       reviewUrl: '/jobs?id=' + jobId
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// Split pipeline: enqueue up to N parallel thumb-hash / embed / classify batches (~500 imgs each)
+app.post('/api/pipeline/enqueue-batches', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const types = Array.isArray(body.types) && body.types.length
+      ? body.types
+      : Object.keys(SPLIT_TYPES);
+    const result = enqueueSplitBatches({
+      pathPrefix: body.pathPrefix || body.path_prefix || null,
+      types,
+      batchSize: body.batchSize ?? body.batch_size ?? 500,
+      maxJobsPerType: body.maxJobsPerType ?? body.max_jobs_per_type ?? 10,
+      startOffset: body.startOffset ?? body.start_offset ?? 0,
+      allImages: body.allImages !== false && body.all_images !== false,
+      skipRecycle: body.skipRecycle !== false && body.skip_recycle !== false,
+      needOnly: body.needOnly !== false && body.need_only !== false,
+      dryRun: !!body.dryRun || !!body.dry_run,
+      createdBy: req.user?.username || req.user?.id || 'api'
+    });
+    res.status(202).json({
+      ok: true,
+      ...result,
+      reviewUrls: result.submitted.map((x) => x.reviewUrl)
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Single split job (thumb-hash | embed | classify)
+app.post('/api/pipeline/split-job', requireAuthWrapper, requirePhotoPermission, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const type = body.type || body.jobType;
+    if (!SPLIT_TYPES[type]) {
+      return res.status(400).json({ error: 'type must be one of: ' + Object.keys(SPLIT_TYPES).join(', ') });
+    }
+    const params = buildSplitParams({
+      type,
+      pathPrefix: body.pathPrefix || body.path_prefix || null,
+      offset: body.offset || 0,
+      batchSize: body.batchSize ?? body.batch_size ?? 500,
+      allImages: body.allImages !== false && body.all_images !== false,
+      skipRecycle: body.skipRecycle !== false && body.skip_recycle !== false,
+      needOnly: body.needOnly !== false && body.need_only !== false,
+      dryRun: !!body.dryRun || !!body.dry_run
+    });
+    const jobId = createJob({
+      type,
+      total: params.batchSize || 500,
+      meta: {
+        kind: type,
+        stages: SPLIT_TYPES[type].stages.join('+'),
+        label: SPLIT_TYPES[type].label,
+        limit: params.limit,
+        offset: params.offset,
+        batchSize: params.batchSize,
+        pathPrefix: params.pathPrefix,
+        skipRecycle: params.skipRecycle,
+        needOnly: params.needOnly,
+        allImages: params.allImages
+      },
+      params,
+      createdBy: req.user?.username || req.user?.id || null
+    });
+    res.status(202).json({ jobId, status: 'queued', type, reviewUrl: '/jobs?id=' + jobId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
