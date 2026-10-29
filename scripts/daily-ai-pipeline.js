@@ -13,8 +13,8 @@ import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import sharp from 'sharp';
-import heicConvert from 'heic-convert';
+import { makeThumb as makeThumbSmart } from '../lib/make-thumb.js';
+import { ensureMediaSkipTable, loadSkippedFileIds, markMediaSkip, isCorruptThumbError } from '../lib/media-skip.js';
 import { DatabaseManager } from '../lib/database.js';
 import { EmbeddingClient, ensureEmbeddingServer, stopEmbeddingServer } from '../lib/embedding-client.js';
 import { EmbedClassifier } from '../lib/embed-classifier.js';
@@ -112,14 +112,7 @@ function computeQuickHash(filePath) {
 }
 
 async function makeThumb(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  let input = filePath;
-  if (ext === '.heic' || ext === '.heif') {
-    input = Buffer.from(await heicConvert({ buffer: fs.readFileSync(filePath), format: 'JPEG', quality: 0.9 }));
-  }
-  return sharp(input, { failOn: 'none' }).rotate()
-    .resize({ width: THUMB_MAX, height: THUMB_MAX, fit: 'inside', withoutEnlargement: true })
-    .jpeg({ quality: 75 }).toBuffer();
+  return makeThumbSmart(filePath, { max: THUMB_MAX, quality: 75 });
 }
 
 function bufToFloats(raw, dims) {
@@ -130,7 +123,8 @@ function bufToFloats(raw, dims) {
 
 const t0 = Date.now();
 const summary = { limit: LIMIT, dryRun: DRY, pathPrefix: PATH_PREFIX, skipRecycle: pathFilter.skipRecycle, rescan: [], selected: 0, skippedOffline: 0,
-  thumb: { need: 0, ok: 0, fail: 0, missingFile: 0 },
+  thumb: { need: 0, ok: 0, fail: 0, missingFile: 0, skipped: 0 },
+  skippedBlacklist: 0,
   missingReport: null,
   embed: { need: 0, ok: 0, fail: 0, noThumb: 0 },
   classify: { need: 0, ok: 0, fail: 0 }, failSamples: [] };
@@ -184,7 +178,7 @@ try {
   if (argv.includes('--print-sql')) { console.log(selectSql); console.log('args', pathFilter.args); }
   const [rows] = await conn.query(selectSql);
   const { online, skippedOffline } = await partitionByDriveOnline(rows, { log: (m) => log(m) });
-  const files = online.slice(0, LIMIT);
+  let files = online.slice(0, LIMIT);
   summary.selected = files.length;
   summary.kinds = files.reduce((a, f) => (a[f.kind] = (a[f.kind] || 0) + 1, a), {});
   summary.samplePaths = files.filter((_, i) => i % Math.max(1, Math.floor(files.length / 5)) === 0).slice(0, 5).map(f => f.path);
@@ -218,6 +212,17 @@ try {
     }
   }
 
+  await ensureMediaSkipTable(conn);
+  {
+    const ids0 = files.map((f) => f.id);
+    const skippedSet = await loadSkippedFileIds(conn, ids0);
+    if (skippedSet.size) {
+      const before = files.length;
+      files = files.filter((f) => !skippedSet.has(f.id));
+      summary.skippedBlacklist = before - files.length;
+      summary.selected = files.length;
+    }
+  }
   // ---- Step 1: thumbnails ----
   const needThumb = [];
   for (const f of files) {
@@ -231,7 +236,12 @@ try {
     for (const f of needThumb) {
       i++;
       try {
-        if (!fs.existsSync(f.path)) { summary.thumb.missingFile++; continue; } // do NOT mark deleted
+        if (!fs.existsSync(f.path)) {
+          summary.thumb.missingFile++;
+          await markMediaSkip(conn, { fileId: f.id, reason: 'missing_on_disk', stage: 'thumb', error: 'file not found on disk', pathSnapshot: f.path, nameSnapshot: f.name });
+          summary.thumb.skipped++;
+          continue;
+        } // do NOT mark deleted
         let key = f.hash || f.md5 || f.quick_hash;
         if (!key) {
           key = computeQuickHash(f.path);
@@ -242,7 +252,14 @@ try {
         const buf = await makeThumb(f.path);
         await db.saveThumbnail(key, f.size, 'image', buf, 'image/jpeg');
         summary.thumb.ok++;
-      } catch (e) { summary.thumb.fail++; fail('thumb', f, e); }
+      } catch (e) {
+          summary.thumb.fail++;
+          fail('thumb', f, e);
+          if (isCorruptThumbError(e)) {
+            await markMediaSkip(conn, { fileId: f.id, reason: 'corrupt', stage: 'thumb', error: String(e?.message || e).slice(0, 512), pathSnapshot: f.path, nameSnapshot: f.name });
+            summary.thumb.skipped++;
+          }
+        }
       if (i % 500 === 0) log('thumb progress', { done: i, total: needThumb.length, ok: summary.thumb.ok, fail: summary.thumb.fail });
     }
   }
